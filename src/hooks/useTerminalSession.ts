@@ -30,6 +30,9 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
 
   const idRef = useRef<string | null>(null);
   const startingRef = useRef(false);
+  const mountedRef = useRef(true);
+  /** バックエンド側でセッションが既に終了しているか（二重closeの防止）。 */
+  const endedRef = useRef(false);
   const onDataRef = useRef(onData);
   const earlyData = useRef(new Map<string, Uint8Array[]>());
   const earlyClosed = useRef(new Map<string, string | null>());
@@ -39,8 +42,23 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
   }, [onData]);
 
   const applyClosed = useCallback((reason: string | null) => {
+    endedRef.current = true;
     setStatus(reason ? "error" : "closed");
     setError(reason);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const id = idRef.current;
+      if (id && !endedRef.current) {
+        endedRef.current = true;
+        closeSession(id).catch((e: unknown) =>
+          console.error(`セッション ${id} の終了に失敗しました:`, e),
+        );
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -89,7 +107,13 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
       startingRef.current = true;
       try {
         const id = await startSession(request);
+        if (!mountedRef.current) {
+          // 接続中にタブが閉じられた場合、確立したセッションを残さない。
+          await closeSession(id);
+          return;
+        }
         idRef.current = id;
+        endedRef.current = false;
         setSessionId(id);
         setStatus("connected");
         for (const chunk of earlyData.current.get(id) ?? []) {
@@ -121,6 +145,7 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
   const close = useCallback(async () => {
     const id = idRef.current;
     if (!id) return;
+    endedRef.current = true;
     await closeSession(id);
     setStatus("closed");
   }, []);

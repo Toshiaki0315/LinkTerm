@@ -42,7 +42,7 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 
 ## Phase 7: UI / UX 開発 (React + shadcn/ui)
 
-- [ ] `xterm.js` コンポーネント実装（**Keep-Aliveによる状態保持を徹底**）。
-- [ ] タブ管理UI（ShadcnのTabsコンポーネント応用）の実装。
-- [ ] 接続先設定ダイアログ（React Hook Form + Zod）の実装。
+- [x] `xterm.js` コンポーネント実装（**Keep-Aliveによる状態保持を徹底**）。
+- [x] タブ管理UI（ShadcnのTabsコンポーネント応用）の実装。
+- [x] 接続先設定ダイアログ（React Hook Form + Zod）の実装。
 - [ ] アプリケーション全体のエンドツーエンド（統合）動作確認。

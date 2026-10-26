@@ -197,4 +197,43 @@ describe("useTerminalSession", () => {
       expect(unlistenClosed).toHaveBeenCalled();
     });
   });
+
+  it("アンマウント時に接続中のセッションを閉じる", async () => {
+    api.startSession.mockResolvedValue("s1");
+    const { result, unmount } = await setup();
+    await act(async () => {
+      await result.current.start(LOCAL);
+    });
+    unmount();
+    expect(api.closeSession).toHaveBeenCalledWith("s1");
+  });
+
+  it("start 完了前にアンマウントされたら、確立したセッションを閉じる", async () => {
+    let resolve!: (id: string) => void;
+    api.startSession.mockReturnValue(new Promise<string>((r) => (resolve = r)));
+    const { result, unmount } = await setup();
+    let p!: Promise<void>;
+    act(() => {
+      p = result.current.start(LOCAL);
+    });
+    unmount();
+    await act(async () => {
+      resolve("late");
+      await p;
+    });
+    expect(api.closeSession).toHaveBeenCalledWith("late");
+  });
+
+  it("close 済みのセッションはアンマウントで二重に閉じない", async () => {
+    api.startSession.mockResolvedValue("s1");
+    const { result, unmount } = await setup();
+    await act(async () => {
+      await result.current.start(LOCAL);
+    });
+    await act(async () => {
+      await result.current.close();
+    });
+    unmount();
+    expect(api.closeSession).toHaveBeenCalledTimes(1);
+  });
 });
