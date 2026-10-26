@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const xterm = vi.hoisted(() => {
   const instances: Array<
-    Record<string, ReturnType<typeof vi.fn>> & { cols: number; rows: number }
+    Record<string, ReturnType<typeof vi.fn>> & {
+      cols: number;
+      rows: number;
+      options: Record<string, unknown>;
+    }
   > = [];
   const handlers: {
     data?: (d: string) => void;
@@ -30,7 +34,9 @@ vi.mock("@xterm/xterm", () => ({
       xterm.handlers.resize = cb;
       return { dispose: vi.fn() };
     });
-    constructor() {
+    options: Record<string, unknown>;
+    constructor(options: Record<string, unknown> = {}) {
+      this.options = { ...options };
       xterm.instances.push(this as never);
     }
   },
@@ -118,5 +124,97 @@ describe("TerminalView", () => {
     );
     unmount();
     expect(xterm.instances[0].dispose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("外観の設定", () => {
+    const appearance = {
+      fontFamily: "Osaka-Mono, monospace",
+      fontSize: 18,
+      scrollback: 777,
+      cursorBlink: false,
+    };
+
+    it("指定した外観で xterm を生成する", () => {
+      render(
+        <TerminalView
+          active
+          appearance={appearance}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances[0].options).toMatchObject({
+        fontFamily: "Osaka-Mono, monospace",
+        fontSize: 18,
+        scrollback: 777,
+        cursorBlink: false,
+      });
+    });
+
+    it("指定がなければ既定の外観を使う", () => {
+      render(<TerminalView active onInput={() => {}} onResize={() => {}} />);
+      expect(xterm.instances[0].options).toMatchObject({
+        fontSize: 13,
+        scrollback: 10000,
+        cursorBlink: true,
+      });
+    });
+
+    it("外観が変わったら作り直さずに反映し、サイズを再計算する", () => {
+      const { rerender } = render(
+        <TerminalView
+          active
+          appearance={appearance}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      fit.mockClear();
+      rerender(
+        <TerminalView
+          active
+          appearance={{
+            ...appearance,
+            fontFamily: "Menlo",
+            fontSize: 24,
+            scrollback: 5,
+            cursorBlink: true,
+          }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances).toHaveLength(1);
+      expect(xterm.instances[0].options).toMatchObject({
+        fontFamily: "Menlo",
+        fontSize: 24,
+        scrollback: 5,
+        cursorBlink: true,
+      });
+      expect(fit).toHaveBeenCalled();
+    });
+
+    it("外観が同じなら xterm のオプションに触れない", () => {
+      const { rerender } = render(
+        <TerminalView
+          active
+          appearance={appearance}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const before = { ...xterm.instances[0].options };
+      fit.mockClear();
+      rerender(
+        <TerminalView
+          active
+          appearance={{ ...appearance }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances[0].options).toEqual(before);
+      expect(fit).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import {
   ConnectionDialog,
   type SubmitOptions,
@@ -7,22 +14,33 @@ import { HostKeyDialog } from "./components/HostKeyDialog";
 import { TabBar } from "./components/TabBar";
 import { TerminalWorkspace } from "./components/TerminalWorkspace";
 import type { SessionStatus } from "./hooks/useTerminalSession";
+import { SettingsDialog } from "./components/SettingsDialog";
 import {
+  connectionSchema,
   connectionTitle,
   type ConnectionValues,
 } from "./lib/connection-schema";
+import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
 import { shortcutFor } from "./lib/shortcuts";
 import { initialTabsState, tabsReducer } from "./lib/tabs";
 import {
   deleteProfile,
+  getSettings,
   listProfiles,
   onHostKeyRequest,
+  onOpenSettings,
   pendingHostKeyRequests,
   respondHostKey,
   saveProfile,
+  saveSettings,
   type HostKeyRequest,
   type SavedProfile,
 } from "./lib/terminal-api";
+
+/** 接続ダイアログへ渡す入力済みの値（秘密情報は含めない）。 */
+type DialogInitialValues = ComponentProps<
+  typeof ConnectionDialog
+>["initialValues"];
 
 const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -30,7 +48,7 @@ function App() {
   const [state, dispatch] = useReducer(tabsReducer, initialTabsState);
   /** 接続ダイアログの状態。`replaceTabId` があれば、送信時にそのタブを置き換える（再入力して再接続）。 */
   const [dialog, setDialog] = useState<{
-    initialValues?: ConnectionValues;
+    initialValues?: DialogInitialValues;
     replaceTabId?: string;
   } | null>(null);
   const dialogOpen = dialog !== null;
@@ -46,19 +64,103 @@ function App() {
     }
   }, []);
 
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const startupDone = useRef(false);
+
+  /** タブを追加する。 */
+  const openTab = useCallback((values: ConnectionValues) => {
+    dispatch({
+      type: "add",
+      tab: {
+        id: crypto.randomUUID(),
+        title: connectionTitle(values),
+        values,
+      },
+    });
+  }, []);
+
   useEffect(() => {
+    // 設定と保存済みの接続を読み込み、起動時に開くターミナルを開く（1回だけ）。
     let cancelled = false;
-    listProfiles()
-      .then((list) => !cancelled && setProfiles(list))
-      .catch(
-        (e: unknown) =>
-          !cancelled &&
-          setNotice(`保存済みの接続を読み込めません: ${describe(e)}`),
-      );
+    (async () => {
+      const [settingsResult, profilesResult] = await Promise.allSettled([
+        getSettings(),
+        listProfiles(),
+      ]);
+      if (cancelled) return;
+      const notices: string[] = [];
+      let loadedSettings = DEFAULT_SETTINGS;
+      if (settingsResult.status === "fulfilled") {
+        loadedSettings = settingsResult.value;
+        setSettings(loadedSettings);
+      } else {
+        notices.push(
+          `設定を読み込めません: ${describe(settingsResult.reason)}`,
+        );
+      }
+      let loadedProfiles: SavedProfile[] = [];
+      if (profilesResult.status === "fulfilled") {
+        loadedProfiles = profilesResult.value;
+        setProfiles(loadedProfiles);
+      } else {
+        notices.push(
+          `保存済みの接続を読み込めません: ${describe(profilesResult.reason)}`,
+        );
+      }
+
+      if (!startupDone.current) {
+        startupDone.current = true;
+        const { startup } = loadedSettings;
+        if (startup.kind === "local") {
+          openTab(connectionSchema.parse({ type: "local" }));
+        } else if (startup.kind === "profile") {
+          const profile = loadedProfiles.find(
+            (p) => p.id === startup.profileId,
+          );
+          const raw = profile?.values;
+          if (!profile || !raw) {
+            notices.push("起動時に開く保存済みの接続が見つかりません");
+          } else if (raw.type === "ssh" && raw.authKind === "password") {
+            // パスワードは保存していないため、検証の前に、入力用の接続ダイアログを開く。
+            setDialog({ initialValues: raw as DialogInitialValues });
+          } else {
+            const parsed = connectionSchema.safeParse(raw);
+            if (parsed.success) {
+              openTab(parsed.data);
+            } else {
+              notices.push(
+                `起動時に開く保存済みの接続「${profile.name}」の内容が不正です`,
+              );
+            }
+          }
+        }
+      }
+      if (notices.length > 0) setNotice(notices.join(" / "));
+    })();
     return () => {
       cancelled = true;
     };
+  }, [openTab]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    onOpenSettings(() => setSettingsOpen(true))
+      .then((un) => (disposed ? un() : (unlisten = un)))
+      .catch((e: unknown) =>
+        console.error("設定メニューの購読に失敗しました:", e),
+      );
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
+
+  const onSaveSettings = useCallback(async (next: Settings) => {
+    setSettings(await saveSettings(next));
+  }, []);
+
   const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([]);
   /** 応答済みの要求ID。イベントと問い合わせの両方で届いた要求を二重に出さないために使う。 */
   const handledRequests = useRef(new Set<string>());
@@ -95,7 +197,7 @@ function App() {
     };
   }, []);
 
-  const modalOpen = dialogOpen || hostKeyQueue.length > 0;
+  const modalOpen = dialogOpen || settingsOpen || hostKeyQueue.length > 0;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // ダイアログ表示中は入力を妨げない。
@@ -130,14 +232,7 @@ function App() {
       if (dialog?.replaceTabId) {
         dispatch({ type: "close", id: dialog.replaceTabId });
       }
-      dispatch({
-        type: "add",
-        tab: {
-          id: crypto.randomUUID(),
-          title: connectionTitle(values),
-          values,
-        },
-      });
+      openTab(values);
       if (options?.saveAs) {
         saveProfile(options.saveAs)
           .then(reloadProfiles)
@@ -146,7 +241,7 @@ function App() {
           );
       }
     },
-    [dialog, reloadProfiles],
+    [dialog, openTab, reloadProfiles],
   );
 
   const onDeleteProfile = useCallback(
@@ -215,6 +310,7 @@ function App() {
         onStatusChange={onStatusChange}
         onSecretsConsumed={onSecretsConsumed}
         onEditAndReconnect={onEditAndReconnect}
+        appearance={settings}
       />
       <ConnectionDialog
         open={dialogOpen}
@@ -223,6 +319,13 @@ function App() {
         onSubmit={addTab}
         profiles={profiles}
         onDeleteProfile={onDeleteProfile}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        settings={settings}
+        profiles={profiles}
+        onSave={onSaveSettings}
       />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
     </div>

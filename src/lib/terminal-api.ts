@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Settings } from "./settings";
 
 export type NewlineTx = "Cr" | "Lf" | "CrLf";
 export type NewlineRx = "Raw" | "LfToCrLf" | "CrToCrLf";
@@ -125,6 +126,15 @@ export const listSerialPorts = () => invoke<string[]>("list_serial_ports");
 
 export const respondHostKey = (requestId: string, approved: boolean) =>
   invoke<void>("respond_host_key", { requestId, approved });
+
+export const getSettings = () => invoke<Settings>("get_settings");
+
+export const saveSettings = (settings: Settings) =>
+  invoke<Settings>("save_settings", { settings });
+
+/** メニューバーの「設定…」（⌘,）が選ばれた。 */
+export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
+  listen<null>("menu-open-settings", () => cb());
 
 export const listProfiles = () => invoke<SavedProfile[]>("list_profiles");
 

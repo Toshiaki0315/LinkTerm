@@ -8,6 +8,9 @@ const api = vi.hoisted(() => ({
   pendingHostKeyRequests: vi.fn(),
   listSerialPorts: vi.fn(),
   listProfiles: vi.fn(),
+  getSettings: vi.fn(),
+  saveSettings: vi.fn(),
+  onOpenSettings: vi.fn(),
   saveProfile: vi.fn(),
   deleteProfile: vi.fn(),
 }));
@@ -15,14 +18,20 @@ vi.mock("./lib/terminal-api", () => api);
 vi.mock("./components/TerminalTab", () => ({
   TerminalTab: ({
     tabId,
+    appearance,
     onEditAndReconnect,
     onSecretsConsumed,
   }: {
     tabId: string;
+    appearance?: { fontSize: number; fontFamily: string };
     onEditAndReconnect: (id: string) => void;
     onSecretsConsumed: (id: string) => void;
   }) => (
-    <div data-testid={`term-${tabId}`}>
+    <div
+      data-testid={`term-${tabId}`}
+      data-font-size={appearance?.fontSize}
+      data-font-family={appearance?.fontFamily}
+    >
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
       <button onClick={() => onSecretsConsumed(tabId)}>consume</button>
     </div>
@@ -30,6 +39,13 @@ vi.mock("./components/TerminalTab", () => ({
 }));
 
 import App from "./App";
+import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
+
+let openSettingsFromMenu: () => void;
+const withStartup = (startup: Settings["startup"]): Settings => ({
+  ...DEFAULT_SETTINGS,
+  startup,
+});
 
 let emitHostKey: (r: {
   requestId: string;
@@ -48,6 +64,12 @@ beforeEach(() => {
   api.pendingHostKeyRequests.mockResolvedValue([]);
   api.listSerialPorts.mockResolvedValue([]);
   api.listProfiles.mockResolvedValue([]);
+  api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
+  api.saveSettings.mockImplementation(async (s) => s);
+  api.onOpenSettings.mockImplementation(async (cb) => {
+    openSettingsFromMenu = cb;
+    return () => {};
+  });
   api.saveProfile.mockResolvedValue({ id: "new", name: "n", values: {} });
   api.deleteProfile.mockResolvedValue(true);
 });
@@ -320,5 +342,168 @@ describe("App", () => {
       screen.getByRole("button", { name: "この保存済み接続を削除" }),
     );
     await waitFor(() => expect(api.deleteProfile).toHaveBeenCalledWith("p1"));
+  });
+
+  describe("設定", () => {
+    it("メニューの「設定…」でダイアログが開き、現在の設定が表示される", async () => {
+      api.getSettings.mockResolvedValue({ ...DEFAULT_SETTINGS, fontSize: 17 });
+      render(<App />);
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      expect(await screen.findByLabelText("フォントサイズ")).toHaveValue(17);
+    });
+
+    it("保存した設定を保存APIへ渡し、開いているターミナルへ即時反映する", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      const term = await screen.findByTestId(/^term-/);
+      expect(term).toHaveAttribute("data-font-size", "13");
+
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      const size = await screen.findByLabelText("フォントサイズ");
+      await user.clear(size);
+      await user.type(size, "24");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+      expect(api.saveSettings.mock.calls[0][0]).toMatchObject({ fontSize: 24 });
+      await waitFor(() =>
+        expect(screen.getByTestId(/^term-/)).toHaveAttribute(
+          "data-font-size",
+          "24",
+        ),
+      );
+    });
+
+    it("保存に失敗したら理由を表示し、ターミナルの設定は変えない", async () => {
+      api.saveSettings.mockRejectedValue("書き込めません");
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      await user.click(await screen.findByRole("button", { name: "保存" }));
+      expect(await screen.findByText(/書き込めません/)).toBeInTheDocument();
+      expect(screen.getByTestId(/^term-/)).toHaveAttribute(
+        "data-font-size",
+        "13",
+      );
+    });
+
+    it("設定ダイアログ表示中は ⌘T / ⌘W を受け付けない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      await screen.findByLabelText("フォントサイズ");
+      await user.keyboard("{Meta>}t{/Meta}");
+      expect(
+        screen.queryByRole("button", { name: "接続" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("設定を読み込めなかったら理由を表示し、既定値で動く", async () => {
+      api.getSettings.mockRejectedValue("設定ファイルが壊れています");
+      render(<App />);
+      expect(
+        await screen.findByText(/設定ファイルが壊れています/),
+      ).toBeInTheDocument();
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    });
+  });
+
+  describe("起動時に開くターミナル", () => {
+    it("「何も開かない」ならタブを作らない", async () => {
+      api.getSettings.mockResolvedValue(withStartup({ kind: "none" }));
+      render(<App />);
+      await waitFor(() => expect(api.listProfiles).toHaveBeenCalled());
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    });
+
+    it("ローカルシェルを開く", async () => {
+      api.getSettings.mockResolvedValue(withStartup({ kind: "local" }));
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(screen.getAllByRole("tab")[0]).toHaveTextContent("Local");
+    });
+
+    it("保存済みの接続を開く", async () => {
+      api.getSettings.mockResolvedValue(
+        withStartup({ kind: "profile", profileId: "p1" }),
+      );
+      api.listProfiles.mockResolvedValue([
+        {
+          id: "p1",
+          name: "ルーター",
+          values: {
+            type: "telnet",
+            encoding: "UTF-8",
+            host: "192.168.0.1",
+            port: 23,
+            txNewline: "Cr",
+            rxNewline: "Raw",
+          },
+        },
+      ]);
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(screen.getAllByRole("tab")[0]).toHaveTextContent(
+        "telnet://192.168.0.1:23",
+      );
+    });
+
+    it("パスワード認証のSSHは、パスワードを保存していないので入力用のダイアログを開く", async () => {
+      api.getSettings.mockResolvedValue(
+        withStartup({ kind: "profile", profileId: "p1" }),
+      );
+      api.listProfiles.mockResolvedValue([
+        {
+          id: "p1",
+          name: "本番",
+          values: {
+            type: "ssh",
+            encoding: "UTF-8",
+            host: "prod.example.com",
+            port: 22,
+            username: "alice",
+            authKind: "password",
+            remember: false,
+            keyPath: "",
+          },
+        },
+      ]);
+      render(<App />);
+      expect(await screen.findByLabelText("ホスト")).toHaveValue(
+        "prod.example.com",
+      );
+      expect(screen.getByLabelText("パスワード")).toHaveValue("");
+      expect(screen.queryAllByRole("tab", { hidden: true })).toHaveLength(0);
+    });
+
+    it("指定した保存済みの接続が見つからなければ、通知する", async () => {
+      api.getSettings.mockResolvedValue(
+        withStartup({ kind: "profile", profileId: "gone" }),
+      );
+      render(<App />);
+      expect(
+        await screen.findByText(/起動時に開く保存済みの接続が見つかりません/),
+      ).toBeInTheDocument();
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    });
+
+    it("起動時の処理は1回だけ（設定を保存しても新しいタブは開かない）", async () => {
+      api.getSettings.mockResolvedValue(withStartup({ kind: "local" }));
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      await user.click(await screen.findByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+      expect(screen.getAllByRole("tab", { hidden: true })).toHaveLength(1);
+    });
   });
 });

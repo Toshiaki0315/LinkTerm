@@ -15,6 +15,9 @@ import {
   defaultLogPath,
   onLogError,
   pendingHostKeyRequests,
+  getSettings,
+  onOpenSettings,
+  saveSettings,
   deleteProfile,
   listProfiles,
   saveProfile,
@@ -190,5 +193,36 @@ describe("接続プロファイル", () => {
       ["save_profile", { id: "p1", name: "n2", values: { type: "local" } }],
       ["delete_profile", { id: "p1" }],
     ]);
+  });
+});
+
+describe("設定", () => {
+  it("get / save", async () => {
+    const settings = {
+      fontFamily: "Menlo",
+      fontSize: 14,
+      scrollback: 1000,
+      cursorBlink: false,
+      startup: { kind: "local" },
+    };
+    invoke.mockResolvedValueOnce(settings);
+    await expect(getSettings()).resolves.toEqual(settings);
+    invoke.mockResolvedValueOnce(settings);
+    await expect(saveSettings(settings as never)).resolves.toEqual(settings);
+    expect(invoke.mock.calls).toEqual([
+      ["get_settings"],
+      ["save_settings", { settings }],
+    ]);
+  });
+
+  it("メニューの「設定…」イベントを受け取る", async () => {
+    listen.mockImplementation(async (_name, handler) => {
+      handler({ payload: null });
+      return () => {};
+    });
+    const cb = vi.fn();
+    await onOpenSettings(cb);
+    expect(listen.mock.calls[0][0]).toBe("menu-open-settings");
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 });

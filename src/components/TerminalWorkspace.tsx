@@ -1,5 +1,6 @@
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Tab } from "../lib/tabs";
+import type { Appearance } from "../lib/settings";
 import { cn } from "../lib/utils";
 import { TerminalTab } from "./TerminalTab";
 
@@ -9,6 +10,7 @@ interface Props {
   onStatusChange: (id: string, status: SessionStatus) => void;
   onSecretsConsumed: (id: string) => void;
   onEditAndReconnect: (id: string) => void;
+  appearance?: Appearance;
 }
 
 /** 非アクティブなタブもアンマウントせず `hidden` で隠す（セッションと表示内容を保持）。 */
@@ -18,6 +20,7 @@ export function TerminalWorkspace({
   onStatusChange,
   onSecretsConsumed,
   onEditAndReconnect,
+  appearance,
 }: Props) {
   if (tabs.length === 0) {
     return (
@@ -44,6 +47,7 @@ export function TerminalWorkspace({
             onStatusChange={onStatusChange}
             onSecretsConsumed={onSecretsConsumed}
             onEditAndReconnect={onEditAndReconnect}
+            appearance={appearance}
           />
         </div>
       ))}

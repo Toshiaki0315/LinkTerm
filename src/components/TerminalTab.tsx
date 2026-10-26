@@ -4,6 +4,7 @@ import {
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
+import type { Appearance } from "../lib/settings";
 import { LogControl } from "./LogControl";
 import { Button } from "./ui/button";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
@@ -19,6 +20,7 @@ interface Props {
   onSecretsConsumed: (id: string) => void;
   /** 保持していない秘密情報の再入力が必要な再接続。 */
   onEditAndReconnect: (id: string) => void;
+  appearance?: Appearance;
 }
 
 /** 1タブ = 1セッション。xterm とセッションをここで結び付ける。 */
@@ -30,6 +32,7 @@ export function TerminalTab({
   onStatusChange,
   onSecretsConsumed,
   onEditAndReconnect,
+  appearance,
 }: Props) {
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
@@ -101,6 +104,7 @@ export function TerminalTab({
       <TerminalView
         ref={termRef}
         active={active}
+        appearance={appearance}
         onInput={onInput}
         onResize={onResize}
       />
