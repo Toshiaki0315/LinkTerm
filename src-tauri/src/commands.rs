@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use crate::manager::{EventSink, ManagerError, SessionManager};
 use crate::session::{
-    CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
+    Codec, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
     LocalShellSession, RxNewline, SerialConfig, SerialSession, SshAuth, SshConfig, SshSession,
     TelnetConfig, TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline,
     list_ports,
@@ -159,6 +159,14 @@ fn size(cols: u16, rows: u16) -> CommandResult<TerminalSize> {
     Ok(TerminalSize::new(cols, rows)?)
 }
 
+/// 未指定ならUTF-8。
+fn codec_for(label: Option<&str>) -> CommandResult<Codec> {
+    Ok(match label {
+        None => Codec::utf8(),
+        Some(l) => Codec::new(l)?,
+    })
+}
+
 fn credential_account(username: &str, host: &str, port: u16) -> String {
     format!("{username}@{host}:{port}")
 }
@@ -180,6 +188,7 @@ fn login_shell() -> String {
 pub struct StartLocalShell {
     cols: u16,
     rows: u16,
+    encoding: Option<String>,
 }
 
 #[tauri::command]
@@ -187,12 +196,13 @@ pub async fn start_local_shell(
     state: State<'_, AppState>,
     req: StartLocalShell,
 ) -> CommandResult<String> {
+    let codec = codec_for(req.encoding.as_deref())?;
     let session = LocalShellSession::spawn(LocalShellConfig {
         program: login_shell(),
         args: vec!["-l".into()],
         size: size(req.cols, req.rows)?,
     })?;
-    Ok(state.manager.start(Box::new(session)).await)
+    Ok(state.manager.start(Box::new(session), codec).await)
 }
 
 #[derive(Deserialize)]
@@ -221,10 +231,12 @@ pub struct StartSsh {
     auth: SshAuthRequest,
     cols: u16,
     rows: u16,
+    encoding: Option<String>,
 }
 
 #[tauri::command]
 pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResult<String> {
+    let codec = codec_for(req.encoding.as_deref())?;
     let account = credential_account(&req.username, &req.host, req.port);
     let mut remember: Option<Zeroizing<String>> = None;
     let auth = match req.auth {
@@ -268,7 +280,7 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
     if let Some(password) = remember {
         state.credentials.save(&account, &password)?;
     }
-    Ok(state.manager.start(Box::new(session)).await)
+    Ok(state.manager.start(Box::new(session), codec).await)
 }
 
 #[derive(Deserialize)]
@@ -278,6 +290,7 @@ pub struct StartTelnet {
     port: u16,
     cols: u16,
     rows: u16,
+    encoding: Option<String>,
     #[serde(default)]
     tx_newline: TxNewline,
     #[serde(default)]
@@ -286,6 +299,7 @@ pub struct StartTelnet {
 
 #[tauri::command]
 pub async fn start_telnet(state: State<'_, AppState>, req: StartTelnet) -> CommandResult<String> {
+    let codec = codec_for(req.encoding.as_deref())?;
     let session = TelnetSession::connect(TelnetConfig {
         host: req.host,
         port: req.port,
@@ -296,16 +310,18 @@ pub async fn start_telnet(state: State<'_, AppState>, req: StartTelnet) -> Comma
         connect_timeout: CONNECT_TIMEOUT,
     })
     .await?;
-    Ok(state.manager.start(Box::new(session)).await)
+    Ok(state.manager.start(Box::new(session), codec).await)
 }
 
 #[tauri::command]
 pub async fn start_serial(
     state: State<'_, AppState>,
     config: SerialConfig,
+    encoding: Option<String>,
 ) -> CommandResult<String> {
+    let codec = codec_for(encoding.as_deref())?;
     let session: Box<dyn TerminalSession> = Box::new(SerialSession::open(&config)?);
-    Ok(state.manager.start(session).await)
+    Ok(state.manager.start(session, codec).await)
 }
 
 #[tauri::command]
@@ -319,7 +335,7 @@ pub async fn terminal_write(
     id: String,
     data: String,
 ) -> CommandResult<()> {
-    Ok(state.manager.write(&id, data.into_bytes()).await?)
+    Ok(state.manager.write(&id, &data).await?)
 }
 
 #[tauri::command]
@@ -371,6 +387,13 @@ mod tests {
     #[test]
     fn login_shell_is_an_absolute_path() {
         assert!(login_shell().starts_with('/'));
+    }
+
+    #[test]
+    fn codec_for_defaults_to_utf8_and_validates_label() {
+        assert_eq!(codec_for(None).unwrap().name(), "UTF-8");
+        assert_eq!(codec_for(Some("Shift_JIS")).unwrap().name(), "Shift_JIS");
+        assert!(codec_for(Some("bogus")).is_err());
     }
 
     #[test]

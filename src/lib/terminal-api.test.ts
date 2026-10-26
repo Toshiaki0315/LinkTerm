@@ -70,8 +70,11 @@ describe("startSession", () => {
       stop_bits: "One",
       flow_control: "None",
     } as const;
-    await startSession({ type: "serial", config });
-    expect(invoke).toHaveBeenCalledWith("start_serial", { config });
+    await startSession({ type: "serial", config, encoding: "EUC-JP" });
+    expect(invoke).toHaveBeenCalledWith("start_serial", {
+      config,
+      encoding: "EUC-JP",
+    });
   });
 });
 

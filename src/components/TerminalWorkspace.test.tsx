@@ -20,7 +20,7 @@ import { TerminalWorkspace } from "./TerminalWorkspace";
 const tab = (id: string): Tab => ({
   id,
   title: id,
-  values: { type: "local" },
+  values: { type: "local", encoding: "UTF-8" },
   status: "connected",
 });
 

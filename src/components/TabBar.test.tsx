@@ -7,7 +7,7 @@ import { TabBar } from "./TabBar";
 const tab = (id: string, status: Tab["status"] = "connected"): Tab => ({
   id,
   title: `title-${id}`,
-  values: { type: "local" },
+  values: { type: "local", encoding: "UTF-8" },
   status,
 });
 

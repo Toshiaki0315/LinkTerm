@@ -20,7 +20,7 @@ export interface SerialConfig {
 }
 
 export type StartRequest =
-  | { type: "local"; cols: number; rows: number }
+  | { type: "local"; cols: number; rows: number; encoding?: string }
   | {
       type: "ssh";
       host: string;
@@ -29,6 +29,7 @@ export type StartRequest =
       auth: SshAuthRequest;
       cols: number;
       rows: number;
+      encoding?: string;
     }
   | {
       type: "telnet";
@@ -36,10 +37,11 @@ export type StartRequest =
       port: number;
       cols: number;
       rows: number;
+      encoding?: string;
       txNewline?: NewlineTx;
       rxNewline?: NewlineRx;
     }
-  | { type: "serial"; config: SerialConfig };
+  | { type: "serial"; config: SerialConfig; encoding?: string };
 
 export interface HostKeyRequest {
   requestId: string;
@@ -68,8 +70,8 @@ export function decodeBase64(b64: string): Uint8Array {
 export async function startSession(req: StartRequest): Promise<string> {
   switch (req.type) {
     case "local": {
-      const { cols, rows } = req;
-      return invoke<string>("start_local_shell", { req: { cols, rows } });
+      const { type: _type, ...rest } = req;
+      return invoke<string>("start_local_shell", { req: rest });
     }
     case "ssh": {
       const { type: _type, ...rest } = req;
@@ -80,7 +82,10 @@ export async function startSession(req: StartRequest): Promise<string> {
       return invoke<string>("start_telnet", { req: rest });
     }
     case "serial":
-      return invoke<string>("start_serial", { config: req.config });
+      return invoke<string>("start_serial", {
+        config: req.config,
+        encoding: req.encoding,
+      });
   }
 }
 

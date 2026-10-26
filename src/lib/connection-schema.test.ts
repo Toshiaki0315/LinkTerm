@@ -92,6 +92,19 @@ describe("connectionSchema", () => {
     ).toBe(true);
   });
 
+  it("エンコーディングは既定でUTF-8、未対応の値は拒否", () => {
+    expect(connectionSchema.parse({ type: "local" })).toEqual({
+      type: "local",
+      encoding: "UTF-8",
+    });
+    expect(
+      connectionSchema.safeParse({ type: "local", encoding: "EBCDIC" }).success,
+    ).toBe(false);
+    expect(
+      connectionSchema.safeParse({ type: "local", encoding: "EUC-JP" }).success,
+    ).toBe(true);
+  });
+
   it("未知の type は拒否", () => {
     expect(connectionSchema.safeParse({ type: "ftp" }).success).toBe(false);
   });
@@ -99,8 +112,11 @@ describe("connectionSchema", () => {
 
 describe("toStartRequest", () => {
   it("local", () => {
-    expect(toStartRequest({ type: "local" }, SIZE)).toEqual({
+    expect(
+      toStartRequest(connectionSchema.parse({ type: "local" }), SIZE),
+    ).toEqual({
       type: "local",
+      encoding: "UTF-8",
       ...SIZE,
     });
   });
@@ -112,6 +128,7 @@ describe("toStartRequest", () => {
       host: "example.com",
       port: 22,
       username: "alice",
+      encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
     });
@@ -153,6 +170,7 @@ describe("toStartRequest", () => {
       port: 23,
       txNewline: "CrLf",
       rxNewline: "LfToCrLf",
+      encoding: "UTF-8",
       ...SIZE,
     });
   });
@@ -167,6 +185,7 @@ describe("toStartRequest", () => {
       parity: "Even",
       stopBits: "Two",
       flowControl: "Hardware",
+      encoding: "Shift_JIS",
     });
     expect(toStartRequest(v, SIZE)).toEqual({
       type: "serial",
@@ -178,13 +197,16 @@ describe("toStartRequest", () => {
         stop_bits: "Two",
         flow_control: "Hardware",
       },
+      encoding: "Shift_JIS",
     });
   });
 });
 
 describe("connectionTitle", () => {
   it("接続種別ごとのタブ名", () => {
-    expect(connectionTitle({ type: "local" })).toBe("Local");
+    expect(connectionTitle(connectionSchema.parse({ type: "local" }))).toBe(
+      "Local",
+    );
     expect(connectionTitle(connectionSchema.parse(ssh()))).toBe(
       "alice@example.com",
     );

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initialTabsState, tabsReducer, type TabsState } from "./tabs";
 
-const local = { type: "local" } as const;
+const local = { type: "local", encoding: "UTF-8" } as const;
 const add = (s: TabsState, id: string) =>
   tabsReducer(s, { type: "add", tab: { id, title: id, values: local } });
 

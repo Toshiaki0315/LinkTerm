@@ -1,5 +1,6 @@
 //! 全プロトコル共通のターミナルセッション抽象。
 
+mod codec;
 mod credentials;
 mod error;
 mod known_hosts;
@@ -11,6 +12,7 @@ mod serial;
 mod ssh;
 pub mod telnet;
 
+pub use codec::{Codec, SUPPORTED_ENCODINGS};
 pub use credentials::{CredentialError, CredentialStore, InMemoryStore, KeychainStore};
 pub use error::TerminalError;
 pub use known_hosts::{

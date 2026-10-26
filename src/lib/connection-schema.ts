@@ -6,8 +6,19 @@ export interface TerminalSize {
   rows: number;
 }
 
+export const ENCODINGS = [
+  "UTF-8",
+  "Shift_JIS",
+  "EUC-JP",
+  "GBK",
+  "Big5",
+  "EUC-KR",
+  "windows-1252",
+] as const;
+
 export const defaultConnectionValues = {
   type: "local",
+  encoding: "UTF-8",
   host: "",
   port: 22,
   username: "",
@@ -35,11 +46,14 @@ const port = z
 const required = (label: string) =>
   z.string().trim().min(1, `${label}を入力してください`);
 
-const local = z.object({ type: z.literal("local") });
+const encoding = z.enum(ENCODINGS).default("UTF-8");
+
+const local = z.object({ type: z.literal("local"), encoding });
 
 const ssh = z
   .object({
     type: z.literal("ssh"),
+    encoding,
     host: required("ホスト"),
     port,
     username: required("ユーザー名"),
@@ -68,6 +82,7 @@ const ssh = z
 
 const telnet = z.object({
   type: z.literal("telnet"),
+  encoding,
   host: required("ホスト"),
   port,
   txNewline: z.enum(["Cr", "Lf", "CrLf"]),
@@ -76,6 +91,7 @@ const telnet = z.object({
 
 const serial = z.object({
   type: z.literal("serial"),
+  encoding,
   serialPort: required("ポート"),
   baudRate: z
     .number("ボーレートを入力してください")
@@ -102,13 +118,14 @@ export function toStartRequest(
 ): StartRequest {
   switch (v.type) {
     case "local":
-      return { type: "local", ...size };
+      return { type: "local", encoding: v.encoding, ...size };
     case "ssh": {
       const base = {
         type: "ssh" as const,
         host: v.host,
         port: v.port,
         username: v.username,
+        encoding: v.encoding,
         ...size,
       };
       switch (v.authKind) {
@@ -144,6 +161,7 @@ export function toStartRequest(
         port: v.port,
         txNewline: v.txNewline,
         rxNewline: v.rxNewline,
+        encoding: v.encoding,
         ...size,
       };
     case "serial":
@@ -157,6 +175,7 @@ export function toStartRequest(
           stop_bits: v.stopBits,
           flow_control: v.flowControl,
         },
+        encoding: v.encoding,
       };
   }
 }

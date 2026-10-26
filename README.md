@@ -8,6 +8,7 @@ macOS向けのモダンなマルチプロトコルターミナルエミュレー
 - **マルチプロトコル対応**: Local Shell (PTY), SSH, Telnet, Serial 通信を統合管理
 - **モダン & 軽量**: Tauri v2 + Rust + React + Vite + Tailwind CSS (shadcn/ui) + xterm.js
 - **セキュア**: 認証情報（SSHキー・パスワード）はmacOS Keychainで安全に管理
+- **文字コード対応**: UTF-8 / Shift_JIS / EUC-JP / GBK / Big5 / EUC-KR / windows-1252 を接続ごとに選択
 - **高品質設計**: TDDに基づく開発プロセス、厳密なエラーハンドリング、接続切断への強い耐性
 
 ## 開発環境のセットアップ
@@ -23,4 +24,13 @@ macOS向けのモダンなマルチプロトコルターミナルエミュレー
 ```bash
 npm install
 npm run tauri dev
+```
+
+### 開発コマンド
+
+```bash
+npm test            # フロントエンドのテスト (Vitest)
+npm run lint        # ESLint
+npm run typecheck   # TypeScript 型チェック
+cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 ```

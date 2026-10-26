@@ -25,7 +25,10 @@ describe("ConnectionDialog", () => {
     const { user, onSubmit, onOpenChange } = setup();
     await user.click(screen.getByRole("button", { name: "接続" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(onSubmit.mock.calls[0][0]).toEqual({ type: "local" });
+    expect(onSubmit.mock.calls[0][0]).toEqual({
+      type: "local",
+      encoding: "UTF-8",
+    });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -75,6 +78,21 @@ describe("ConnectionDialog", () => {
     expect(screen.getByLabelText("パスフレーズ")).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
     expect(screen.queryByLabelText("秘密鍵のパス")).not.toBeInTheDocument();
+  });
+
+  it("エンコーディングを選択できる（既定はUTF-8）", async () => {
+    const { user, onSubmit } = setup();
+    expect(screen.getByLabelText("エンコーディング")).toHaveValue("UTF-8");
+    await user.selectOptions(
+      screen.getByLabelText("エンコーディング"),
+      "Shift_JIS",
+    );
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      type: "local",
+      encoding: "Shift_JIS",
+    });
   });
 
   it("パスワード欄はマスクされる", async () => {

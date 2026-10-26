@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm, type FieldErrors, type Resolver } from "react-hook-form";
+import {
+  useForm,
+  useWatch,
+  type FieldErrors,
+  type Resolver,
+} from "react-hook-form";
 import {
   connectionSchema,
   defaultConnectionValues,
+  ENCODINGS,
   type ConnectionValues,
 } from "../lib/connection-schema";
 import { listSerialPorts } from "../lib/terminal-api";
@@ -20,6 +26,7 @@ import { Label } from "./ui/label";
 /** フォーム上は全項目を平坦に保持し、種別ごとの検証・切り出しは Zod が行う。 */
 interface FormValues {
   type: ConnectionValues["type"];
+  encoding: (typeof ENCODINGS)[number];
   host: string;
   port: number;
   username: string;
@@ -84,7 +91,7 @@ export function ConnectionDialog({
   const {
     register,
     handleSubmit,
-    watch,
+    control,
     setValue,
     getValues,
     formState: { errors },
@@ -96,10 +103,16 @@ export function ConnectionDialog({
     >,
     defaultValues: { ...defaultConnectionValues },
   });
-  const type = watch("type");
-  const authKind = watch("authKind");
-  const [ports, setPorts] = useState<string[]>([]);
-  const [portsError, setPortsError] = useState<string | null>(null);
+  const type = useWatch({ control, name: "type" });
+  const authKind = useWatch({ control, name: "authKind" });
+  const [portList, setPortList] = useState<{
+    ports: string[];
+    error: string | null;
+  }>({
+    ports: [],
+    error: null,
+  });
+  const { ports, error: portsError } = portList;
 
   useEffect(() => {
     // 種別に応じた既定ポートへ切り替える（ユーザーが変更済みの値は維持する）。
@@ -111,13 +124,15 @@ export function ConnectionDialog({
   useEffect(() => {
     if (!open || type !== "serial") return;
     let cancelled = false;
-    setPortsError(null);
     loadSerialPorts()
-      .then((list) => !cancelled && setPorts(list))
+      .then((ports) => !cancelled && setPortList({ ports, error: null }))
       .catch(
         (e: unknown) =>
           !cancelled &&
-          setPortsError(`ポート一覧を取得できません: ${String(e)}`),
+          setPortList({
+            ports: [],
+            error: `ポート一覧を取得できません: ${String(e)}`,
+          }),
       );
     return () => {
       cancelled = true;
@@ -144,6 +159,18 @@ export function ConnectionDialog({
                 <option value="ssh">SSH</option>
                 <option value="telnet">Telnet</option>
                 <option value="serial">シリアル</option>
+              </Select>
+            )}
+          </Field>
+
+          <Field label="エンコーディング">
+            {(id) => (
+              <Select id={id} {...register("encoding")}>
+                {ENCODINGS.map((e) => (
+                  <option key={e} value={e}>
+                    {e}
+                  </option>
+                ))}
               </Select>
             )}
           </Field>
