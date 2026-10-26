@@ -1,9 +1,11 @@
 pub mod approvals;
+pub mod atomic_file;
 pub mod commands;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
 pub mod session;
+pub mod settings;
 
 use tauri::Manager;
 
@@ -11,6 +13,7 @@ use tauri::Manager;
 pub fn run() {
     let app = tauri::Builder::default()
         .menu(menu::build)
+        .on_menu_event(menu::handle_event)
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let state = commands::AppState::new(app.handle())?;
@@ -34,6 +37,8 @@ pub fn run() {
             commands::list_profiles,
             commands::save_profile,
             commands::delete_profile,
+            commands::get_settings,
+            commands::save_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

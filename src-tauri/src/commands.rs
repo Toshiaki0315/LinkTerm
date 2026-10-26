@@ -20,6 +20,7 @@ use crate::session::{
     SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession, TerminalError, TerminalSession,
     TerminalSize, TxNewline, list_ports,
 };
+use crate::settings::{Settings, SettingsError, SettingsStore};
 
 pub const EVENT_DATA: &str = "terminal-data";
 pub const EVENT_CLOSED: &str = "terminal-closed";
@@ -45,6 +46,8 @@ pub enum CommandError {
     Log(#[from] LogError),
     #[error(transparent)]
     Profile(#[from] ProfileError),
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -136,6 +139,7 @@ pub struct AppState {
     approvals: Arc<ApprovalBook>,
     log_paths: LogPathReserver,
     profiles: ProfileStore,
+    settings: SettingsStore,
 }
 
 impl AppState {
@@ -153,6 +157,7 @@ impl AppState {
             approvals,
             log_paths: LogPathReserver::default(),
             profiles: ProfileStore::new(dir.join("profiles.json")),
+            settings: SettingsStore::new(dir.join("settings.json")),
         })
     }
 }
@@ -463,6 +468,17 @@ pub async fn respond_host_key(
             "承認要求 {request_id} は存在しないか期限切れです"
         )))
     }
+}
+
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> CommandResult<Settings> {
+    Ok(state.settings.load()?)
+}
+
+/// 設定を検証して保存し、保存した値を返す。
+#[tauri::command]
+pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> CommandResult<Settings> {
+    Ok(state.settings.save(settings)?)
 }
 
 #[tauri::command]

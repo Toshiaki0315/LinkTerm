@@ -4,7 +4,6 @@
 //! （パスワードは Keychain 連携で別管理）。値の形はフロントエンドの接続フォームと同じ JSON で、
 //! ここでは中身を解釈せずに秘密情報のキーだけを取り除く。
 
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -106,35 +105,12 @@ impl ProfileStore {
         }
     }
 
-    /// 一時ファイル（0600）へ書いてから置き換える。途中で失敗しても元のファイルは壊れない。
     fn write(&self, profiles: &[Profile]) -> Result<(), ProfileError> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| io_error(format!("{} の作成", dir.display()), e))?;
-        }
         let text = serde_json::to_string_pretty(profiles)
             .map_err(|e| io_error("シリアライズ", std::io::Error::other(e)))?;
-        let tmp = self.path.with_extension(format!(
-            "tmp-{}-{}",
-            std::process::id(),
-            self.counter.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = (|| -> std::io::Result<()> {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            file.write_all(text.as_bytes())?;
-            file.sync_all()?;
-            std::fs::rename(&tmp, &self.path)
-        })()
-        .map_err(|e| io_error(format!("{} の書き込み", self.path.display()), e));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        result
+        let unique = self.counter.fetch_add(1, Ordering::Relaxed);
+        crate::atomic_file::write_private(&self.path, text.as_bytes(), unique)
+            .map_err(|e| io_error(format!("{} の書き込み", self.path.display()), e))
     }
 
     fn new_id(&self) -> String {
