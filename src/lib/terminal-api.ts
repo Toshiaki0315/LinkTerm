@@ -50,6 +50,13 @@ export interface LogConfig {
   append: boolean;
 }
 
+export interface SavedProfile {
+  id: string;
+  name: string;
+  /** 接続フォームの値（パスワード類は含まれない）。 */
+  values: Record<string, unknown>;
+}
+
 export interface HostKeyRequest {
   requestId: string;
   host: string;
@@ -118,6 +125,22 @@ export const listSerialPorts = () => invoke<string[]>("list_serial_ports");
 
 export const respondHostKey = (requestId: string, approved: boolean) =>
   invoke<void>("respond_host_key", { requestId, approved });
+
+export const listProfiles = () => invoke<SavedProfile[]>("list_profiles");
+
+export const saveProfile = (profile: {
+  id?: string;
+  name: string;
+  values: Record<string, unknown>;
+}) =>
+  invoke<SavedProfile>("save_profile", {
+    id: profile.id ?? null,
+    name: profile.name,
+    values: profile.values,
+  });
+
+export const deleteProfile = (id: string) =>
+  invoke<boolean>("delete_profile", { id });
 
 export const pendingHostKeyRequests = () =>
   invoke<HostKeyRequest[]>("pending_host_key_requests");

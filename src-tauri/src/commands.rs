@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::manager::{EventSink, ManagerError, SessionManager};
+use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::session::{
     Codec, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
     LocalShellSession, LogConfig, LogError, RxNewline, SerialConfig, SerialSession, SessionLogger,
@@ -42,6 +43,8 @@ pub enum CommandError {
     Invalid(String),
     #[error(transparent)]
     Log(#[from] LogError),
+    #[error(transparent)]
+    Profile(#[from] ProfileError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -132,6 +135,7 @@ pub struct AppState {
     approver: Arc<TauriApprover>,
     approvals: Arc<ApprovalBook>,
     log_paths: LogPathReserver,
+    profiles: ProfileStore,
 }
 
 impl AppState {
@@ -148,6 +152,7 @@ impl AppState {
             }),
             approvals,
             log_paths: LogPathReserver::default(),
+            profiles: ProfileStore::new(dir.join("profiles.json")),
         })
     }
 }
@@ -458,6 +463,27 @@ pub async fn respond_host_key(
             "承認要求 {request_id} は存在しないか期限切れです"
         )))
     }
+}
+
+#[tauri::command]
+pub fn list_profiles(state: State<'_, AppState>) -> CommandResult<Vec<Profile>> {
+    Ok(state.profiles.list()?)
+}
+
+/// 接続プロファイルを保存する（`id` があれば更新）。パスワード類は保存されない。
+#[tauri::command]
+pub fn save_profile(
+    state: State<'_, AppState>,
+    id: Option<String>,
+    name: String,
+    values: serde_json::Value,
+) -> CommandResult<Profile> {
+    Ok(state.profiles.save(id.as_deref(), &name, values)?)
+}
+
+#[tauri::command]
+pub fn delete_profile(state: State<'_, AppState>, id: String) -> CommandResult<bool> {
+    Ok(state.profiles.delete(&id)?)
 }
 
 /// 未応答のホスト鍵承認要求。フロントが購読を始める前に出た要求を取り込むために使う。

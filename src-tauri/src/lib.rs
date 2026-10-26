@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod commands;
 pub mod manager;
 pub mod menu;
+pub mod profiles;
 pub mod session;
 
 use tauri::Manager;
@@ -30,6 +31,9 @@ pub fn run() {
             commands::stop_session_log,
             commands::respond_host_key,
             commands::pending_host_key_requests,
+            commands::list_profiles,
+            commands::save_profile,
+            commands::delete_profile,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

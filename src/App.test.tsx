@@ -7,6 +7,9 @@ const api = vi.hoisted(() => ({
   respondHostKey: vi.fn(),
   pendingHostKeyRequests: vi.fn(),
   listSerialPorts: vi.fn(),
+  listProfiles: vi.fn(),
+  saveProfile: vi.fn(),
+  deleteProfile: vi.fn(),
 }));
 vi.mock("./lib/terminal-api", () => api);
 vi.mock("./components/TerminalTab", () => ({
@@ -44,6 +47,9 @@ beforeEach(() => {
   api.respondHostKey.mockResolvedValue(undefined);
   api.pendingHostKeyRequests.mockResolvedValue([]);
   api.listSerialPorts.mockResolvedValue([]);
+  api.listProfiles.mockResolvedValue([]);
+  api.saveProfile.mockResolvedValue({ id: "new", name: "n", values: {} });
+  api.deleteProfile.mockResolvedValue(true);
 });
 
 describe("App", () => {
@@ -232,5 +238,87 @@ describe("App", () => {
     expect(screen.getAllByRole("tab")[0]).toHaveTextContent(
       "alice@example.com",
     );
+  });
+
+  it("保存済みの接続を読み込んで一覧に出し、選んで接続できる", async () => {
+    api.listProfiles.mockResolvedValue([
+      {
+        id: "p1",
+        name: "ルーター",
+        values: {
+          type: "telnet",
+          encoding: "UTF-8",
+          host: "192.168.0.1",
+          port: 23,
+          txNewline: "Cr",
+          rxNewline: "Raw",
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.selectOptions(
+      await screen.findByLabelText("保存済みの接続"),
+      "p1",
+    );
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getAllByRole("tab")[0]).toHaveTextContent(
+      "telnet://192.168.0.1:23",
+    );
+  });
+
+  it("接続しながら保存すると保存APIを呼び、次回の一覧に反映する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.click(await screen.findByLabelText("この接続を保存する"));
+    await user.type(screen.getByLabelText("保存名"), "手元のシェル");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalled());
+    expect(api.saveProfile).toHaveBeenCalledWith({
+      id: undefined,
+      name: "手元のシェル",
+      values: expect.objectContaining({ type: "local" }),
+    });
+    await waitFor(() =>
+      expect(api.listProfiles.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+  });
+
+  it("保存に失敗したら理由を表示する（接続自体は続ける）", async () => {
+    api.saveProfile.mockRejectedValue("ディスクがいっぱいです");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.click(await screen.findByLabelText("この接続を保存する"));
+    await user.type(screen.getByLabelText("保存名"), "x");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    expect(
+      await screen.findByText(/ディスクがいっぱいです/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+
+  it("保存済みの接続を削除して一覧を更新する", async () => {
+    api.listProfiles.mockResolvedValueOnce([
+      {
+        id: "p1",
+        name: "古い接続",
+        values: { type: "local", encoding: "UTF-8" },
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.selectOptions(
+      await screen.findByLabelText("保存済みの接続"),
+      "p1",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "この保存済み接続を削除" }),
+    );
+    await waitFor(() => expect(api.deleteProfile).toHaveBeenCalledWith("p1"));
   });
 });

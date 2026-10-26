@@ -218,4 +218,146 @@ describe("ConnectionDialog", () => {
       password: "new-pw",
     });
   });
+
+  describe("保存済みの接続", () => {
+    const profiles = [
+      {
+        id: "p1",
+        name: "本番サーバー",
+        values: {
+          type: "ssh",
+          encoding: "UTF-8",
+          host: "prod.example.com",
+          port: 2200,
+          username: "alice",
+          authKind: "keychain",
+        },
+      },
+      {
+        id: "p2",
+        name: "ルーター",
+        values: {
+          type: "telnet",
+          encoding: "Shift_JIS",
+          host: "192.168.0.1",
+          port: 23,
+          txNewline: "CrLf",
+          rxNewline: "LfToCrLf",
+        },
+      },
+    ];
+
+    function setupWithProfiles() {
+      const onSubmit = vi.fn();
+      const onDeleteProfile = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={vi.fn()}
+          onSubmit={onSubmit}
+          profiles={profiles}
+          onDeleteProfile={onDeleteProfile}
+          loadSerialPorts={vi.fn().mockResolvedValue([])}
+        />,
+      );
+      return { onSubmit, onDeleteProfile, user };
+    }
+
+    it("保存済みがなければ選択欄を出さない", () => {
+      setup();
+      expect(screen.queryByLabelText("保存済みの接続")).not.toBeInTheDocument();
+    });
+
+    it("選ぶとフォームに読み込まれる（パスワード欄は空）", async () => {
+      const { user } = setupWithProfiles();
+      await user.selectOptions(screen.getByLabelText("保存済みの接続"), "p1");
+      expect(screen.getByLabelText("接続種別")).toHaveValue("ssh");
+      expect(screen.getByLabelText("ホスト")).toHaveValue("prod.example.com");
+      expect(screen.getByLabelText("ポート")).toHaveValue(2200);
+      expect(screen.getByLabelText("ユーザー名")).toHaveValue("alice");
+      expect(screen.getByLabelText("認証方式")).toHaveValue("keychain");
+      await user.selectOptions(screen.getByLabelText("保存済みの接続"), "p2");
+      expect(screen.getByLabelText("接続種別")).toHaveValue("telnet");
+      expect(screen.getByLabelText("エンコーディング")).toHaveValue(
+        "Shift_JIS",
+      );
+      expect(screen.getByLabelText("送信改行")).toHaveValue("CrLf");
+      expect(screen.getByLabelText("受信改行")).toHaveValue("LfToCrLf");
+    });
+
+    it("読み込んだ接続はそのまま接続でき、保存はしない", async () => {
+      const { user, onSubmit } = setupWithProfiles();
+      await user.selectOptions(screen.getByLabelText("保存済みの接続"), "p2");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        type: "telnet",
+        host: "192.168.0.1",
+      });
+      expect(onSubmit.mock.calls[0][1]).toBeUndefined();
+    });
+
+    it("「この接続を保存する」で名前つきの新規保存を依頼する（秘密情報は含めない）", async () => {
+      const { user, onSubmit } = setupWithProfiles();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "new.example.com");
+      await user.type(screen.getByLabelText("ユーザー名"), "bob");
+      await user.type(screen.getByLabelText("パスワード"), "top-secret");
+      await user.click(screen.getByLabelText("この接続を保存する"));
+      await user.type(screen.getByLabelText("保存名"), "新しいサーバー");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      const options = onSubmit.mock.calls[0][1];
+      expect(options.saveAs.name).toBe("新しいサーバー");
+      expect(options.saveAs.id).toBeUndefined();
+      expect(options.saveAs.values).toMatchObject({
+        type: "ssh",
+        host: "new.example.com",
+        username: "bob",
+      });
+      expect(options.saveAs.values).not.toHaveProperty("password");
+      expect(options.saveAs.values).not.toHaveProperty("passphrase");
+      // 接続自体にはパスワードを渡す
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        password: "top-secret",
+      });
+    });
+
+    it("保存済みを選んで保存すると、その接続を上書き更新する", async () => {
+      const { user, onSubmit } = setupWithProfiles();
+      await user.selectOptions(screen.getByLabelText("保存済みの接続"), "p1");
+      await user.click(screen.getByLabelText("この接続を保存する"));
+      expect(screen.getByLabelText("保存名")).toHaveValue("本番サーバー");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][1].saveAs).toMatchObject({
+        id: "p1",
+        name: "本番サーバー",
+      });
+    });
+
+    it("保存名が空ならエラーで送信しない", async () => {
+      const { user, onSubmit } = setupWithProfiles();
+      await user.click(screen.getByLabelText("この接続を保存する"));
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText("保存名を入力してください"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("選択中の接続を削除できる", async () => {
+      const { user, onDeleteProfile } = setupWithProfiles();
+      expect(
+        screen.queryByRole("button", { name: "この保存済み接続を削除" }),
+      ).not.toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText("保存済みの接続"), "p1");
+      await user.click(
+        screen.getByRole("button", { name: "この保存済み接続を削除" }),
+      );
+      expect(onDeleteProfile).toHaveBeenCalledWith("p1");
+      expect(screen.getByLabelText("保存済みの接続")).toHaveValue("");
+    });
+  });
 });

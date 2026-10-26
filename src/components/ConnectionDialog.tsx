@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   useForm,
@@ -12,7 +13,7 @@ import {
   ENCODINGS,
   type ConnectionValues,
 } from "../lib/connection-schema";
-import { listSerialPorts } from "../lib/terminal-api";
+import { listSerialPorts, type SavedProfile } from "../lib/terminal-api";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -25,6 +26,10 @@ import { Label } from "./ui/label";
 
 /** フォーム上は全項目を平坦に保持し、種別ごとの検証・切り出しは Zod が行う。 */
 interface FormValues {
+  /** 保存済みの接続の選択・保存の指定。接続設定そのものではないため Zod の検証対象外。 */
+  profileId: string;
+  saveProfile: boolean;
+  profileName: string;
   type: ConnectionValues["type"];
   encoding: (typeof ENCODINGS)[number];
   host: string;
@@ -50,8 +55,25 @@ interface Props {
   /** 開いたときの入力済みの値（再接続・保存済み接続の呼び出し用）。秘密情報は含めない。 */
   initialValues?: Partial<FormValues>;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: ConnectionValues) => void;
+  onSubmit: (values: ConnectionValues, options?: SubmitOptions) => void;
   loadSerialPorts?: () => Promise<string[]>;
+  profiles?: SavedProfile[];
+  onDeleteProfile?: (id: string) => void;
+}
+
+/** 接続と同時に保存する場合の指定。`values` にパスワード類は含まれない。 */
+export interface SubmitOptions {
+  saveAs?: { id?: string; name: string; values: Record<string, unknown> };
+}
+
+const EXTRA_DEFAULTS = { profileId: "", saveProfile: false, profileName: "" };
+
+/** 保存・表示に使う値から秘密情報を取り除く。 */
+function withoutSecrets(values: ConnectionValues): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...values };
+  delete rest.password;
+  delete rest.passphrase;
+  return rest;
 }
 
 const BAUD_RATES = [
@@ -90,6 +112,8 @@ export function ConnectionDialog({
   onOpenChange,
   onSubmit,
   loadSerialPorts = listSerialPorts,
+  profiles = [],
+  onDeleteProfile,
 }: Props) {
   const {
     register,
@@ -98,6 +122,7 @@ export function ConnectionDialog({
     setValue,
     getValues,
     reset,
+    setError,
     formState: { errors },
   } = useForm<FormValues, unknown, ConnectionValues>({
     resolver: zodResolver(connectionSchema) as unknown as Resolver<
@@ -105,7 +130,7 @@ export function ConnectionDialog({
       unknown,
       ConnectionValues
     >,
-    defaultValues: { ...defaultConnectionValues },
+    defaultValues: { ...defaultConnectionValues, ...EXTRA_DEFAULTS },
   });
   const type = useWatch({ control, name: "type" });
   const authKind = useWatch({ control, name: "authKind" });
@@ -120,7 +145,11 @@ export function ConnectionDialog({
 
   useEffect(() => {
     // 閉じたら入力を破棄し（パスワード等の秘密情報をメモリに残さない）、開くたびに初期状態へ戻す。
-    reset({ ...defaultConnectionValues, ...(open ? initialValues : {}) });
+    reset({
+      ...defaultConnectionValues,
+      ...EXTRA_DEFAULTS,
+      ...(open ? initialValues : {}),
+    });
   }, [open, initialValues, reset]);
 
   useEffect(() => {
@@ -148,8 +177,38 @@ export function ConnectionDialog({
     };
   }, [open, type, loadSerialPorts]);
 
+  const profileId = useWatch({ control, name: "profileId" });
+  const saveProfile = useWatch({ control, name: "saveProfile" });
+  const selectedProfile = profiles.find((p) => p.id === profileId);
+
+  const loadProfile = (id: string) => {
+    const profile = profiles.find((p) => p.id === id);
+    reset({
+      ...defaultConnectionValues,
+      ...EXTRA_DEFAULTS,
+      ...(profile?.values as Partial<FormValues> | undefined),
+      profileId: profile ? id : "",
+    });
+  };
+
   const submit = handleSubmit((values) => {
-    onSubmit(values);
+    const { profileId, saveProfile, profileName } = getValues();
+    let options: SubmitOptions | undefined;
+    if (saveProfile) {
+      const name = profileName.trim();
+      if (name === "") {
+        setError("profileName", { message: "保存名を入力してください" });
+        return;
+      }
+      options = {
+        saveAs: {
+          id: profileId || undefined,
+          name,
+          values: withoutSecrets(values),
+        },
+      };
+    }
+    onSubmit(values, options);
     onOpenChange(false);
   });
 
@@ -161,6 +220,41 @@ export function ConnectionDialog({
           接続先の設定を入力してください
         </DialogDescription>
         <form onSubmit={submit} className="mt-4 grid gap-3" noValidate>
+          {profiles.length > 0 && (
+            <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+              <Field label="保存済みの接続">
+                {(id) => (
+                  <Select
+                    id={id}
+                    {...register("profileId", {
+                      onChange: (e) => loadProfile(e.target.value),
+                    })}
+                  >
+                    <option value="">（新規）</option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              {selectedProfile && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="この保存済み接続を削除"
+                  onClick={() => {
+                    onDeleteProfile?.(selectedProfile.id);
+                    setValue("profileId", "");
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          )}
+
           <Field label="接続種別">
             {(id) => (
               <Select id={id} {...register("type")}>
@@ -367,6 +461,31 @@ export function ConnectionDialog({
                 </Field>
               </div>
             </>
+          )}
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              {...register("saveProfile", {
+                onChange: (e) => {
+                  if (e.target.checked && !getValues("profileName")) {
+                    setValue("profileName", selectedProfile?.name ?? "");
+                  }
+                },
+              })}
+            />
+            この接続を保存する
+          </label>
+          {saveProfile && (
+            <Field label="保存名" error={message(errors, "profileName")}>
+              {(id) => (
+                <Input
+                  id={id}
+                  autoComplete="off"
+                  {...register("profileName")}
+                />
+              )}
+            </Field>
           )}
 
           <div className="mt-2 flex justify-end gap-2">

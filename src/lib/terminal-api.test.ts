@@ -15,6 +15,9 @@ import {
   defaultLogPath,
   onLogError,
   pendingHostKeyRequests,
+  deleteProfile,
+  listProfiles,
+  saveProfile,
   startSessionLog,
   stopSessionLog,
   onTerminalClosed,
@@ -165,5 +168,27 @@ describe("未応答のホスト鍵承認要求", () => {
     invoke.mockResolvedValue([req]);
     await expect(pendingHostKeyRequests()).resolves.toEqual([req]);
     expect(invoke).toHaveBeenCalledWith("pending_host_key_requests");
+  });
+});
+
+describe("接続プロファイル", () => {
+  it("list / save / delete", async () => {
+    const p = { id: "p1", name: "n", values: { type: "local" } };
+    invoke.mockResolvedValueOnce([p]);
+    await expect(listProfiles()).resolves.toEqual([p]);
+    invoke.mockResolvedValueOnce(p);
+    await expect(
+      saveProfile({ name: "n", values: { type: "local" } }),
+    ).resolves.toEqual(p);
+    invoke.mockResolvedValueOnce(p);
+    await saveProfile({ id: "p1", name: "n2", values: { type: "local" } });
+    invoke.mockResolvedValueOnce(true);
+    await expect(deleteProfile("p1")).resolves.toBe(true);
+    expect(invoke.mock.calls).toEqual([
+      ["list_profiles"],
+      ["save_profile", { id: null, name: "n", values: { type: "local" } }],
+      ["save_profile", { id: "p1", name: "n2", values: { type: "local" } }],
+      ["delete_profile", { id: "p1" }],
+    ]);
   });
 });

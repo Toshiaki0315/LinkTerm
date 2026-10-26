@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ConnectionDialog } from "./components/ConnectionDialog";
+import {
+  ConnectionDialog,
+  type SubmitOptions,
+} from "./components/ConnectionDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
 import { TabBar } from "./components/TabBar";
 import { TerminalWorkspace } from "./components/TerminalWorkspace";
@@ -11,11 +14,17 @@ import {
 import { shortcutFor } from "./lib/shortcuts";
 import { initialTabsState, tabsReducer } from "./lib/tabs";
 import {
+  deleteProfile,
+  listProfiles,
   onHostKeyRequest,
   pendingHostKeyRequests,
   respondHostKey,
+  saveProfile,
   type HostKeyRequest,
+  type SavedProfile,
 } from "./lib/terminal-api";
+
+const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function App() {
   const [state, dispatch] = useReducer(tabsReducer, initialTabsState);
@@ -25,6 +34,31 @@ function App() {
     replaceTabId?: string;
   } | null>(null);
   const dialogOpen = dialog !== null;
+  const [profiles, setProfiles] = useState<SavedProfile[]>([]);
+  /** 保存済みの接続の読み込み・保存・削除の失敗をユーザーへ伝える。 */
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const reloadProfiles = useCallback(async () => {
+    try {
+      setProfiles(await listProfiles());
+    } catch (e) {
+      setNotice(`保存済みの接続を読み込めません: ${describe(e)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listProfiles()
+      .then((list) => !cancelled && setProfiles(list))
+      .catch(
+        (e: unknown) =>
+          !cancelled &&
+          setNotice(`保存済みの接続を読み込めません: ${describe(e)}`),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([]);
   /** 応答済みの要求ID。イベントと問い合わせの両方で届いた要求を二重に出さないために使う。 */
   const handledRequests = useRef(new Set<string>());
@@ -92,7 +126,7 @@ function App() {
   }, [modalOpen, state.activeId]);
 
   const addTab = useCallback(
-    (values: ConnectionValues) => {
+    (values: ConnectionValues, options?: SubmitOptions) => {
       if (dialog?.replaceTabId) {
         dispatch({ type: "close", id: dialog.replaceTabId });
       }
@@ -104,8 +138,26 @@ function App() {
           values,
         },
       });
+      if (options?.saveAs) {
+        saveProfile(options.saveAs)
+          .then(reloadProfiles)
+          .catch((e: unknown) =>
+            setNotice(`接続の保存に失敗しました: ${describe(e)}`),
+          );
+      }
     },
-    [dialog],
+    [dialog, reloadProfiles],
+  );
+
+  const onDeleteProfile = useCallback(
+    (id: string) => {
+      deleteProfile(id)
+        .then(reloadProfiles)
+        .catch((e: unknown) =>
+          setNotice(`保存済みの接続を削除できません: ${describe(e)}`),
+        );
+    },
+    [reloadProfiles],
   );
 
   const onSecretsConsumed = useCallback((id: string) => {
@@ -142,6 +194,21 @@ function App() {
         onClose={(id) => dispatch({ type: "close", id })}
         onNew={() => setDialog({})}
       />
+      {notice && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 bg-red-900/80 px-3 py-1 text-sm"
+        >
+          <span>{notice}</span>
+          <button
+            className="underline"
+            aria-label="通知を閉じる"
+            onClick={() => setNotice(null)}
+          >
+            閉じる
+          </button>
+        </div>
+      )}
       <TerminalWorkspace
         tabs={state.tabs}
         activeId={state.activeId}
@@ -154,6 +221,8 @@ function App() {
         initialValues={dialog?.initialValues}
         onOpenChange={(open) => !open && setDialog(null)}
         onSubmit={addTab}
+        profiles={profiles}
+        onDeleteProfile={onDeleteProfile}
       />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
     </div>
