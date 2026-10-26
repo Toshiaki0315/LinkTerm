@@ -1,6 +1,6 @@
 //! セッションログ（Tee分岐）。受信データを表示とは独立にファイルへ記録する。
 
-use std::fs::{OpenOptions, Permissions};
+use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
@@ -126,6 +126,9 @@ pub struct SessionLogger {
     clock: Clock,
     filter: TextFilter,
     at_line_start: bool,
+    /// 上書きモードで未実行の切り詰め。登録が確定するまで既存の内容を残すため遅延させる。
+    pending_truncate: Option<File>,
+    path_display: String,
 }
 
 fn io_error(context: impl Into<String>, source: std::io::Error) -> LogError {
@@ -149,8 +152,6 @@ impl SessionLogger {
         options.create(true).write(true).mode(0o600);
         if config.append {
             options.append(true);
-        } else {
-            options.truncate(true);
         }
         let file = options
             .open(&config.path)
@@ -158,12 +159,24 @@ impl SessionLogger {
         // `mode()` は新規作成時にしか効かないため、既存ファイルの権限も絞る。
         file.set_permissions(Permissions::from_mode(0o600))
             .map_err(|e| io_error(format!("{display} の権限設定"), e))?;
-        Ok(Self::with_writer(
+        // 上書きの場合も、ここでは切り詰めない。`activate` か最初の `record` で実行する。
+        let pending_truncate = if config.append {
+            None
+        } else {
+            Some(
+                file.try_clone()
+                    .map_err(|e| io_error(format!("{display} の複製"), e))?,
+            )
+        };
+        let mut logger = Self::with_writer(
             Box::new(file),
             config.mode,
             config.timestamps,
             Box::new(|| chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
-        ))
+        );
+        logger.pending_truncate = pending_truncate;
+        logger.path_display = display;
+        Ok(logger)
     }
 
     pub fn with_writer(
@@ -179,11 +192,23 @@ impl SessionLogger {
             clock,
             filter: TextFilter::new(),
             at_line_start: true,
+            pending_truncate: None,
+            path_display: String::new(),
         }
+    }
+
+    /// 上書きモードの切り詰めを実行する。登録が確定した時点で呼ぶ（呼ばなくても最初の `record` で実行される）。
+    pub fn activate(&mut self) -> Result<(), LogError> {
+        if let Some(file) = self.pending_truncate.take() {
+            file.set_len(0)
+                .map_err(|e| io_error(format!("{} の切り詰め", self.path_display), e))?;
+        }
+        Ok(())
     }
 
     /// `raw` は文字コード変換前の受信バイト列、`text` は変換後のUTF-8。
     pub fn record(&mut self, raw: &[u8], text: &str) -> Result<(), LogError> {
+        self.activate()?;
         match self.mode {
             LogMode::Raw => self.write(raw),
             LogMode::Text => {
@@ -413,6 +438,58 @@ mod tests {
         text(&mut l, "x");
         drop(l);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overwrite_is_deferred_until_activation() {
+        let dir = temp_dir("deferred");
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old\n").unwrap();
+        // 開いただけで登録されずに破棄された場合、既存ファイルは失われない。
+        let l = SessionLogger::open(&config(path.clone(), false)).unwrap();
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn activation_truncates_and_writes_start_at_the_beginning() {
+        let dir = temp_dir("activate");
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old content that is long\n").unwrap();
+        let mut l = SessionLogger::open(&config(path.clone(), false)).unwrap();
+        l.activate().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        text(&mut l, "new");
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_record_truncates_even_without_explicit_activation() {
+        let dir = temp_dir("lazy");
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old content that is long\n").unwrap();
+        let mut l = SessionLogger::open(&config(path.clone(), false)).unwrap();
+        text(&mut l, "x");
+        text(&mut l, "y");
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "xy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn activation_is_a_noop_for_append_mode() {
+        let dir = temp_dir("activate-append");
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old\n").unwrap();
+        let mut l = SessionLogger::open(&config(path.clone(), true)).unwrap();
+        l.activate().unwrap();
+        text(&mut l, "new\n");
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\nnew\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

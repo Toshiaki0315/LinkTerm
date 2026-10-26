@@ -617,4 +617,34 @@ mod tests {
         manager.close_all().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[tokio::test]
+    async fn overwrite_log_is_truncated_once_registered_with_a_live_session() {
+        let dir = std::env::temp_dir().join(format!("linkterm-bsl-trunc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old content\n").unwrap();
+        let manager = SessionManager::new(Arc::new(NoopSink));
+        let session = LocalShellSession::spawn(LocalShellConfig {
+            program: "/bin/cat".into(),
+            args: vec![],
+            size: TerminalSize::new(80, 24).unwrap(),
+            cwd: None,
+        })
+        .unwrap();
+        let id = manager.start(Box::new(session), Codec::utf8()).await;
+        begin_session_log(&manager, &id, &log_config(path.clone(), false))
+            .await
+            .unwrap();
+        // 出力がなくても、登録が済めば旧内容は消えている。
+        let ok = tokio::time::timeout(Duration::from_secs(5), async {
+            while std::fs::read_to_string(&path).is_ok_and(|t| t.contains("old")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(ok.is_ok(), "登録後も旧内容が残っている");
+        manager.close_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

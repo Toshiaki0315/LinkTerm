@@ -144,17 +144,34 @@ impl SessionManager {
     }
 }
 
+/// ログの登録を確定させる（上書きモードの切り詰めを実行する）。失敗したらログを止めて通知する。
+fn activate_logger(
+    logger: Option<SessionLogger>,
+    id: &str,
+    sink: &dyn EventSink,
+) -> Option<SessionLogger> {
+    let mut logger = logger?;
+    match logger.activate() {
+        Ok(()) => Some(logger),
+        Err(e) => {
+            sink.log_error(id, &e.to_string());
+            None
+        }
+    }
+}
+
 /// 1セッションを所有し、受信とコマンド処理を1タスクで仲介する。
 /// `read()` はキャンセル安全であることを前提とする。
 async fn run_session(
     id: String,
     mut session: Box<dyn TerminalSession>,
     mut codec: Codec,
-    mut logger: Option<SessionLogger>,
+    logger: Option<SessionLogger>,
     mut commands: mpsc::Receiver<Command>,
     sink: Arc<dyn EventSink>,
     sessions: Sessions,
 ) {
+    let mut logger = activate_logger(logger, &id, sink.as_ref());
     let reason = loop {
         tokio::select! {
             read = session.read() => match read {
@@ -181,7 +198,9 @@ async fn run_session(
                         break Some(e.to_string());
                     }
                 }
-                Some(Command::SetLogger(new_logger)) => logger = new_logger,
+                Some(Command::SetLogger(new_logger)) => {
+                    logger = activate_logger(new_logger, &id, sink.as_ref());
+                }
                 Some(Command::Resize(size)) => {
                     if let Err(e) = session.resize(size).await {
                         break Some(e.to_string());
