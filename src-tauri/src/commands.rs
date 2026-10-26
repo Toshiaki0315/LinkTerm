@@ -689,14 +689,8 @@ mod tests {
         begin_session_log(&manager, &id, &log_config(path.clone(), false))
             .await
             .unwrap();
-        // 出力がなくても、登録が済めば旧内容は消えている。
-        let ok = tokio::time::timeout(Duration::from_secs(5), async {
-            while std::fs::read_to_string(&path).is_ok_and(|t| t.contains("old")) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        assert!(ok.is_ok(), "登録後も旧内容が残っている");
+        // 開始コマンドの応答の時点で切り詰め済み（待たずに確認できる）。
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
         manager.close_all().await;
         let _ = std::fs::remove_dir_all(&dir);
     }

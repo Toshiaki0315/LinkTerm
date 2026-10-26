@@ -5,9 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use thiserror::Error;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
-use crate::session::{Codec, SessionLogger, TerminalError, TerminalSession, TerminalSize};
+use crate::session::{
+    Codec, LogError, SessionLogger, TerminalError, TerminalSession, TerminalSize,
+};
 
 #[derive(Debug, Error)]
 pub enum ManagerError {
@@ -15,6 +17,8 @@ pub enum ManagerError {
     UnknownSession(String),
     #[error("セッション操作に失敗しました: {0}")]
     Session(#[from] TerminalError),
+    #[error(transparent)]
+    Log(#[from] LogError),
 }
 
 /// セッションからの通知先。Tauri では `emit` に変換される。
@@ -32,7 +36,8 @@ const COMMAND_CAPACITY: usize = 256;
 
 enum Command {
     Write(String),
-    SetLogger(Option<SessionLogger>),
+    /// 登録の確定（切り詰め）結果を `reply` で呼び出し元へ返す。
+    SetLogger(Option<SessionLogger>, oneshot::Sender<Result<(), LogError>>),
     Resize(TerminalSize),
     Close,
 }
@@ -106,12 +111,20 @@ impl SessionManager {
     }
 
     /// ログの開始・停止（`None`）。既存のログは置き換えられ、閉じられる。
+    ///
+    /// 登録の確定（上書きモードの切り詰め）が済んでから返る。確定に失敗した場合は `Err` を返し、
+    /// 既存のログ（あれば）は維持する。
     pub async fn set_logger(
         &self,
         id: &str,
         logger: Option<SessionLogger>,
     ) -> Result<(), ManagerError> {
-        self.send(id, Command::SetLogger(logger)).await
+        let (reply, ack) = oneshot::channel();
+        self.send(id, Command::SetLogger(logger, reply)).await?;
+        // 応答前にセッションが終了した場合は、登録されなかったものとして扱う。
+        ack.await
+            .map_err(|_| ManagerError::UnknownSession(id.to_owned()))?
+            .map_err(ManagerError::from)
     }
 
     /// セッションを閉じる。以降そのIDへの操作は `UnknownSession` になる。
@@ -198,8 +211,18 @@ async fn run_session(
                         break Some(e.to_string());
                     }
                 }
-                Some(Command::SetLogger(new_logger)) => {
-                    logger = activate_logger(new_logger, &id, sink.as_ref());
+                Some(Command::SetLogger(new_logger, reply)) => {
+                    let result = match new_logger {
+                        None => {
+                            logger = None;
+                            Ok(())
+                        }
+                        Some(mut candidate) => candidate.activate().map(|()| {
+                            logger = Some(candidate);
+                        }),
+                    };
+                    // 呼び出し元が待っていなければ結果は不要。
+                    let _ = reply.send(result);
                 }
                 Some(Command::Resize(size)) => {
                     if let Err(e) = session.resize(size).await {
@@ -603,5 +626,43 @@ mod tests {
             m.set_logger("nope", None).await,
             Err(ManagerError::UnknownSession(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn set_logger_reports_activation_failure_to_the_caller() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        let r = m
+            .set_logger(&id, Some(SessionLogger::with_failing_activation()))
+            .await;
+        assert!(matches!(r, Err(ManagerError::Log(_))), "{r:?}");
+        // 失敗は呼び出し元へ返すので、非同期のログエラーイベントは出さない。
+        assert!(sink.log_errors.lock().unwrap().is_empty());
+        // セッション自体は継続する。
+        m.write(&id, "still").await.unwrap();
+        wait_for(|| sink.received(&id) == b"still").await;
+    }
+
+    #[tokio::test]
+    async fn set_logger_returns_only_after_the_logger_is_active() {
+        let (m, _) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        let dir = std::env::temp_dir().join(format!("linkterm-ack-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.log");
+        std::fs::write(&path, "old\n").unwrap();
+        let logger = SessionLogger::open(&crate::session::LogConfig {
+            path: path.clone(),
+            mode: LogMode::Text,
+            timestamps: false,
+            append: false,
+        })
+        .unwrap();
+        m.set_logger(&id, Some(logger)).await.unwrap();
+        // 応答の時点で切り詰め済み（待たずに確認できる）。
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

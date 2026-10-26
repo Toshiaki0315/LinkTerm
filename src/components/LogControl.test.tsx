@@ -80,4 +80,39 @@ describe("LogControl", () => {
     await user.click(screen.getByRole("button", { name: "ログ記録" }));
     expect(await screen.findByLabelText("保存先")).toHaveValue("");
   });
+
+  it("開始コマンドが失敗したら記録中にせず、理由を表示する", async () => {
+    api.startSessionLog.mockRejectedValue("切り詰めに失敗しました");
+    const user = userEvent.setup();
+    render(<LogControl sessionId="s1" title="t" />);
+    await user.click(screen.getByRole("button", { name: "ログ記録" }));
+    await user.click(await screen.findByRole("button", { name: "記録開始" }));
+    expect(
+      await screen.findByText(/切り詰めに失敗しました/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "ログ記録を停止" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("開始の応答より先に失敗イベントが届いても、記録中表示で上書きしない", async () => {
+    api.startSessionLog.mockImplementation(async () => {
+      emitError("s1", "切り詰めに失敗しました");
+    });
+    const user = userEvent.setup();
+    render(<LogControl sessionId="s1" title="t" />);
+    await user.click(screen.getByRole("button", { name: "ログ記録" }));
+    await user.click(await screen.findByRole("button", { name: "記録開始" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "切り詰めに失敗しました",
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "ログ記録を停止" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("button", { name: "ログ記録" }),
+    ).toBeInTheDocument();
+  });
 });

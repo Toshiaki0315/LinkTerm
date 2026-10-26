@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Circle, Square } from "lucide-react";
 import {
   defaultLogPath,
@@ -24,12 +24,15 @@ export function LogControl({ sessionId, title }: Props) {
   const [logging, setLogging] = useState(false);
   const [dialogPath, setDialogPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 開始コマンドの応答待ちの間に、失敗イベントが届いたか。 */
+  const failedWhileStarting = useRef(false);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     onLogError((id, message) => {
       if (id !== sessionId) return;
+      failedWhileStarting.current = true;
       setLogging(false);
       setError(`ログの書き込みに失敗したため記録を停止しました: ${message}`);
     })
@@ -67,8 +70,10 @@ export function LogControl({ sessionId, title }: Props) {
 
   const start = async (config: LogConfig) => {
     if (!sessionId) throw new Error("セッションが確立していません");
+    failedWhileStarting.current = false;
     await startSessionLog(sessionId, config);
-    setLogging(true);
+    // 応答より先に失敗イベントが届いていたら、停止表示を上書きしない。
+    if (!failedWhileStarting.current) setLogging(true);
   };
 
   return (

@@ -197,6 +197,21 @@ impl SessionLogger {
         }
     }
 
+    /// 切り詰め（`activate`）が必ず失敗するロガー。登録失敗の経路をテストするための補助。
+    #[cfg(test)]
+    pub(crate) fn with_failing_activation() -> Self {
+        let mut logger = Self::with_writer(
+            Box::new(std::io::sink()),
+            LogMode::Text,
+            false,
+            Box::new(String::new),
+        );
+        // 読み取り専用で開いたファイルは `set_len` に失敗する。
+        logger.pending_truncate = Some(File::open("/dev/null").expect("/dev/null を開ける"));
+        logger.path_display = "(test)".into();
+        logger
+    }
+
     /// 上書きモードの切り詰めを実行する。登録が確定した時点で呼ぶ（呼ばなくても最初の `record` で実行される）。
     pub fn activate(&mut self) -> Result<(), LogError> {
         if let Some(file) = self.pending_truncate.take() {
