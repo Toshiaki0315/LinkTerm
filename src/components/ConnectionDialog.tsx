@@ -47,6 +47,8 @@ interface FormValues {
 
 interface Props {
   open: boolean;
+  /** 開いたときの入力済みの値（再接続・保存済み接続の呼び出し用）。秘密情報は含めない。 */
+  initialValues?: Partial<FormValues>;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: ConnectionValues) => void;
   loadSerialPorts?: () => Promise<string[]>;
@@ -84,6 +86,7 @@ const message = (errors: FieldErrors<FormValues>, key: keyof FormValues) =>
 
 export function ConnectionDialog({
   open,
+  initialValues,
   onOpenChange,
   onSubmit,
   loadSerialPorts = listSerialPorts,
@@ -116,9 +119,9 @@ export function ConnectionDialog({
   const { ports, error: portsError } = portList;
 
   useEffect(() => {
-    // 閉じたら入力を破棄する（パスワード等の秘密情報をメモリに残さない）。
-    if (!open) reset({ ...defaultConnectionValues });
-  }, [open, reset]);
+    // 閉じたら入力を破棄し（パスワード等の秘密情報をメモリに残さない）、開くたびに初期状態へ戻す。
+    reset({ ...defaultConnectionValues, ...(open ? initialValues : {}) });
+  }, [open, initialValues, reset]);
 
   useEffect(() => {
     // 種別に応じた既定ポートへ切り替える（ユーザーが変更済みの値は維持する）。

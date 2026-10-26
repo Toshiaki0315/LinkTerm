@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod commands;
 pub mod manager;
+pub mod menu;
 pub mod session;
 
 use tauri::Manager;
@@ -8,6 +9,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .menu(menu::build)
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let state = commands::AppState::new(app.handle())?;

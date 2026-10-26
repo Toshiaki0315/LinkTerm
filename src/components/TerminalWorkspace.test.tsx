@@ -31,6 +31,8 @@ describe("TerminalWorkspace", () => {
         tabs={[tab("a"), tab("b")]}
         activeId="a"
         onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
       />,
     );
     expect(screen.getByTestId("term-a").parentElement).not.toHaveClass(
@@ -43,13 +45,31 @@ describe("TerminalWorkspace", () => {
     mounts.count = 0;
     const tabs = [tab("a"), tab("b")];
     const { rerender } = render(
-      <TerminalWorkspace tabs={tabs} activeId="a" onStatusChange={() => {}} />,
+      <TerminalWorkspace
+        tabs={tabs}
+        activeId="a"
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+      />,
     );
     rerender(
-      <TerminalWorkspace tabs={tabs} activeId="b" onStatusChange={() => {}} />,
+      <TerminalWorkspace
+        tabs={tabs}
+        activeId="b"
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+      />,
     );
     rerender(
-      <TerminalWorkspace tabs={tabs} activeId="a" onStatusChange={() => {}} />,
+      <TerminalWorkspace
+        tabs={tabs}
+        activeId="a"
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+      />,
     );
     expect(mounts.count).toBe(2);
     expect(screen.getByTestId("term-a").parentElement).not.toHaveClass(
@@ -60,7 +80,13 @@ describe("TerminalWorkspace", () => {
 
   it("タブがなければ案内を表示する", () => {
     render(
-      <TerminalWorkspace tabs={[]} activeId={null} onStatusChange={() => {}} />,
+      <TerminalWorkspace
+        tabs={[]}
+        activeId={null}
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+      />,
     );
     expect(screen.getByText(/新しい接続/)).toBeInTheDocument();
   });

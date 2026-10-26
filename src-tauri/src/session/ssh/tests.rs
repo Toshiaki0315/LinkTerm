@@ -425,7 +425,7 @@ async fn abrupt_disconnect_is_reported_as_an_error_not_a_clean_eof() {
     .await
     .expect("タイムアウト");
     assert!(
-        matches!(r, Err(TerminalError::ConnectionFailed(_))),
+        matches!(r, Err(TerminalError::Disconnected(_))),
         "予期しない切断はエラーとして伝わるべき: {r:?}"
     );
 }

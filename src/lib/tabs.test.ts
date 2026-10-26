@@ -59,4 +59,63 @@ describe("tabsReducer", () => {
     });
     expect(same).toBe(s);
   });
+
+  const abc = () => add(add(add(initialTabsState, "a"), "b"), "c");
+
+  it("activateIndex: 番号指定と最後のタブ、範囲外は無視", () => {
+    let s = abc();
+    s = tabsReducer(s, { type: "activateIndex", index: 0 });
+    expect(s.activeId).toBe("a");
+    s = tabsReducer(s, { type: "activateIndex", index: "last" });
+    expect(s.activeId).toBe("c");
+    const same = tabsReducer(s, { type: "activateIndex", index: 7 });
+    expect(same).toBe(s);
+    expect(
+      tabsReducer(initialTabsState, { type: "activateIndex", index: "last" }),
+    ).toBe(initialTabsState);
+  });
+
+  it("activateRelative: 次・前に循環移動する", () => {
+    let s = abc(); // active = c
+    s = tabsReducer(s, { type: "activateRelative", delta: 1 });
+    expect(s.activeId).toBe("a");
+    s = tabsReducer(s, { type: "activateRelative", delta: -1 });
+    expect(s.activeId).toBe("c");
+    s = tabsReducer(s, { type: "activateRelative", delta: -1 });
+    expect(s.activeId).toBe("b");
+    expect(
+      tabsReducer(initialTabsState, { type: "activateRelative", delta: 1 }),
+    ).toBe(initialTabsState);
+  });
+
+  it("scrubSecrets: SSHのパスワードとパスフレーズだけを消す", () => {
+    const sshValues = {
+      type: "ssh",
+      encoding: "UTF-8",
+      host: "h",
+      port: 22,
+      username: "u",
+      authKind: "password",
+      password: "secret",
+      remember: false,
+      keyPath: "/k",
+      passphrase: "pp",
+    } as const;
+    let s = tabsReducer(initialTabsState, {
+      type: "add",
+      tab: { id: "a", title: "a", values: sshValues },
+    });
+    s = tabsReducer(s, { type: "scrubSecrets", id: "a" });
+    expect(s.tabs[0].values).toEqual({
+      ...sshValues,
+      password: "",
+      passphrase: "",
+    });
+  });
+
+  it("scrubSecrets: SSH以外・対象なしは何も変えない", () => {
+    const s = add(initialTabsState, "a");
+    expect(tabsReducer(s, { type: "scrubSecrets", id: "a" })).toBe(s);
+    expect(tabsReducer(s, { type: "scrubSecrets", id: "zzz" })).toBe(s);
+  });
 });

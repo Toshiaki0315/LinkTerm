@@ -262,7 +262,7 @@ async fn pump(
             cmd = commands.recv() => match cmd {
                 Some(Command::Data(data)) => {
                     if let Err(e) = channel.data(&data[..]).await {
-                        break Some(TerminalError::ConnectionFailed(format!("SSH送信に失敗しました: {e}")));
+                        break Some(TerminalError::Disconnected(format!("SSH送信に失敗しました: {e}")));
                     }
                 }
                 Some(Command::Resize(size)) => {
@@ -270,7 +270,7 @@ async fn pump(
                         .window_change(size.cols.into(), size.rows.into(), 0, 0)
                         .await
                     {
-                        break Some(TerminalError::ConnectionFailed(format!(
+                        break Some(TerminalError::Disconnected(format!(
                             "SSHのリサイズ通知に失敗しました: {e}"
                         )));
                     }
@@ -285,8 +285,8 @@ async fn pump(
                 }
                 Some(ChannelMsg::Close) => break None,
                 // Close を受け取らずに受信が尽きた = 接続が途中で切れた。
-                None => break Some(TerminalError::ConnectionFailed(
-                    "SSH接続が予期せず切断されました".into(),
+                None => break Some(TerminalError::Disconnected(
+                    "リモートから予期せず切断されました".into(),
                 )),
                 Some(_) => {}
             },

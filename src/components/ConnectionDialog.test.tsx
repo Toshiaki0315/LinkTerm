@@ -182,4 +182,40 @@ describe("ConnectionDialog", () => {
     expect(screen.getByLabelText("ホスト")).toHaveValue("");
     expect(screen.getByLabelText("パスワード")).toHaveValue("");
   });
+
+  it("initialValues があれば、それを入力済みの状態で開く（秘密情報は空のまま）", async () => {
+    const user = userEvent.setup();
+    const props = {
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn(),
+      loadSerialPorts: vi.fn().mockResolvedValue([]),
+    };
+    const { rerender } = render(<ConnectionDialog open={false} {...props} />);
+    rerender(
+      <ConnectionDialog
+        open
+        {...props}
+        initialValues={{
+          type: "ssh",
+          host: "example.com",
+          port: 2200,
+          username: "alice",
+          authKind: "password",
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("接続種別")).toHaveValue("ssh");
+    expect(screen.getByLabelText("ホスト")).toHaveValue("example.com");
+    expect(screen.getByLabelText("ポート")).toHaveValue(2200);
+    expect(screen.getByLabelText("ユーザー名")).toHaveValue("alice");
+    expect(screen.getByLabelText("パスワード")).toHaveValue("");
+    await user.type(screen.getByLabelText("パスワード"), "new-pw");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalled());
+    expect(props.onSubmit.mock.calls[0][0]).toMatchObject({
+      host: "example.com",
+      port: 2200,
+      password: "new-pw",
+    });
+  });
 });

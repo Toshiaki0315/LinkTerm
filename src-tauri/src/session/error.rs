@@ -5,6 +5,8 @@ use thiserror::Error;
 pub enum TerminalError {
     #[error("接続に失敗しました: {0}")]
     ConnectionFailed(String),
+    #[error("接続が切断されました: {0}")]
+    Disconnected(String),
     #[error("認証に失敗しました: {0}")]
     AuthenticationFailed(String),
     #[error("ホスト鍵を信頼できません: {0}")]
@@ -52,5 +54,14 @@ mod tests {
     fn invalid_size_message_contains_dimensions() {
         let err = TerminalError::InvalidSize { cols: 0, rows: 24 };
         assert_eq!(err.to_string(), "無効なサイズです: 0x24");
+    }
+
+    #[test]
+    fn disconnected_message_has_no_redundant_prefix() {
+        let err = TerminalError::Disconnected("リモートが接続を閉じました".into());
+        assert_eq!(
+            err.to_string(),
+            "接続が切断されました: リモートが接続を閉じました"
+        );
     }
 }

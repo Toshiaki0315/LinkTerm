@@ -10,8 +10,19 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./lib/terminal-api", () => api);
 vi.mock("./components/TerminalTab", () => ({
-  TerminalTab: ({ tabId }: { tabId: string }) => (
-    <div data-testid={`term-${tabId}`} />
+  TerminalTab: ({
+    tabId,
+    onEditAndReconnect,
+    onSecretsConsumed,
+  }: {
+    tabId: string;
+    onEditAndReconnect: (id: string) => void;
+    onSecretsConsumed: (id: string) => void;
+  }) => (
+    <div data-testid={`term-${tabId}`}>
+      <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
+      <button onClick={() => onSecretsConsumed(tabId)}>consume</button>
+    </div>
   ),
 }));
 
@@ -157,5 +168,69 @@ describe("App", () => {
     );
     expect(await screen.findByText("SHA256:later")).toBeInTheDocument();
     spy.mockRestore();
+  });
+
+  it("ショートカット: ⌘T で接続ダイアログ、⌘W でタブを閉じる、⌘1 で切替", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.keyboard("{Meta>}t{/Meta}");
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+
+    await user.keyboard("{Meta>}t{/Meta}");
+    await user.click(await screen.findByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    expect(screen.getAllByRole("tab")[1]).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{Meta>}1{/Meta}");
+    expect(screen.getAllByRole("tab")[0]).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{Meta>}w{/Meta}");
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+
+  it("ダイアログ表示中は ⌘W / ⌘T でタブを操作しない", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.click(await screen.findByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await screen.findByRole("dialog");
+    await user.keyboard("{Meta>}w{/Meta}");
+    expect(screen.getAllByRole("tab", { hidden: true })).toHaveLength(1);
+  });
+
+  it("再入力して再接続: 設定を引き継いだダイアログを開き、送信するとそのタブを置き換える", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新しい接続" }));
+    await user.selectOptions(await screen.findByLabelText("接続種別"), "ssh");
+    await user.type(screen.getByLabelText("ホスト"), "example.com");
+    await user.type(screen.getByLabelText("ユーザー名"), "alice");
+    await user.type(screen.getByLabelText("パスワード"), "first-pw");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    await user.click(await screen.findByRole("button", { name: "consume" }));
+
+    await user.click(
+      await screen.findByRole("button", { name: "edit-reconnect" }),
+    );
+    expect(await screen.findByLabelText("ホスト")).toHaveValue("example.com");
+    expect(screen.getByLabelText("ユーザー名")).toHaveValue("alice");
+    expect(screen.getByLabelText("パスワード")).toHaveValue("");
+    await user.type(screen.getByLabelText("パスワード"), "second-pw");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getAllByRole("tab")[0]).toHaveTextContent(
+      "alice@example.com",
+    );
   });
 });

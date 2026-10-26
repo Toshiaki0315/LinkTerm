@@ -8,6 +8,7 @@ import {
   connectionTitle,
   type ConnectionValues,
 } from "./lib/connection-schema";
+import { shortcutFor } from "./lib/shortcuts";
 import { initialTabsState, tabsReducer } from "./lib/tabs";
 import {
   onHostKeyRequest,
@@ -18,7 +19,12 @@ import {
 
 function App() {
   const [state, dispatch] = useReducer(tabsReducer, initialTabsState);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  /** 接続ダイアログの状態。`replaceTabId` があれば、送信時にそのタブを置き換える（再入力して再接続）。 */
+  const [dialog, setDialog] = useState<{
+    initialValues?: ConnectionValues;
+    replaceTabId?: string;
+  } | null>(null);
+  const dialogOpen = dialog !== null;
   const [hostKeyQueue, setHostKeyQueue] = useState<HostKeyRequest[]>([]);
   /** 応答済みの要求ID。イベントと問い合わせの両方で届いた要求を二重に出さないために使う。 */
   const handledRequests = useRef(new Set<string>());
@@ -55,12 +61,64 @@ function App() {
     };
   }, []);
 
-  const addTab = useCallback((values: ConnectionValues) => {
-    dispatch({
-      type: "add",
-      tab: { id: crypto.randomUUID(), title: connectionTitle(values), values },
-    });
+  const modalOpen = dialogOpen || hostKeyQueue.length > 0;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // ダイアログ表示中は入力を妨げない。
+      if (modalOpen) return;
+      const action = shortcutFor(event);
+      if (!action) return;
+      event.preventDefault();
+      switch (action.type) {
+        case "new":
+          setDialog({});
+          break;
+        case "close":
+          if (state.activeId) dispatch({ type: "close", id: state.activeId });
+          break;
+        case "select":
+          dispatch({ type: "activateIndex", index: action.index });
+          break;
+        case "next":
+          dispatch({ type: "activateRelative", delta: 1 });
+          break;
+        case "previous":
+          dispatch({ type: "activateRelative", delta: -1 });
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [modalOpen, state.activeId]);
+
+  const addTab = useCallback(
+    (values: ConnectionValues) => {
+      if (dialog?.replaceTabId) {
+        dispatch({ type: "close", id: dialog.replaceTabId });
+      }
+      dispatch({
+        type: "add",
+        tab: {
+          id: crypto.randomUUID(),
+          title: connectionTitle(values),
+          values,
+        },
+      });
+    },
+    [dialog],
+  );
+
+  const onSecretsConsumed = useCallback((id: string) => {
+    dispatch({ type: "scrubSecrets", id });
   }, []);
+
+  const onEditAndReconnect = useCallback(
+    (id: string) => {
+      const tab = state.tabs.find((t) => t.id === id);
+      if (tab) setDialog({ initialValues: tab.values, replaceTabId: id });
+    },
+    [state.tabs],
+  );
 
   const onStatusChange = useCallback((id: string, status: SessionStatus) => {
     dispatch({ type: "setStatus", id, status });
@@ -82,16 +140,19 @@ function App() {
         activeId={state.activeId}
         onActivate={(id) => dispatch({ type: "activate", id })}
         onClose={(id) => dispatch({ type: "close", id })}
-        onNew={() => setDialogOpen(true)}
+        onNew={() => setDialog({})}
       />
       <TerminalWorkspace
         tabs={state.tabs}
         activeId={state.activeId}
         onStatusChange={onStatusChange}
+        onSecretsConsumed={onSecretsConsumed}
+        onEditAndReconnect={onEditAndReconnect}
       />
       <ConnectionDialog
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        initialValues={dialog?.initialValues}
+        onOpenChange={(open) => !open && setDialog(null)}
         onSubmit={addTab}
       />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
