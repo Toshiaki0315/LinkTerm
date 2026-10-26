@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -16,21 +16,15 @@ pub struct LocalShellConfig {
     pub program: String,
     pub args: Vec<String>,
     pub size: TerminalSize,
-    /// 開始ディレクトリ。`None` なら [`default_start_dir`] で決める。
+    /// 開始ディレクトリ。`None` ならホームディレクトリ（[`default_start_dir`]）。
     pub cwd: Option<PathBuf>,
 }
 
-/// 開始ディレクトリの既定値。
+/// 開始ディレクトリの既定値。起動方法（Finder / `make dev` / ターミナル）に関わらずホームにする。
 ///
-/// Finder や `open` から起動したアプリのカレントは `/` になるため、その場合（または取得できない場合）は
-/// ホームディレクトリを使う。ホームが存在するディレクトリでなければ現在のディレクトリを維持する。
+/// ホームが存在するディレクトリでない場合のみ、現在のディレクトリへフォールバックする。
 pub fn default_start_dir(current: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-    let usable_home = home.filter(|h| h.is_dir());
-    match current {
-        Some(dir) if dir != Path::new("/") => Some(dir),
-        Some(root) => usable_home.or(Some(root)),
-        None => usable_home,
-    }
+    home.filter(|h| h.is_dir()).or(current)
 }
 
 /// `portable-pty` 経由のローカルシェルセッション。環境変数は親プロセスから継承する。
@@ -248,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn root_current_dir_falls_back_to_home() {
+    fn root_current_dir_uses_home() {
         let home = temp_dir("home");
         assert_eq!(
             default_start_dir(Some("/".into()), Some(home.clone())),
@@ -258,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_current_dir_falls_back_to_home() {
+    fn missing_current_dir_uses_home() {
         let home = temp_dir("home-none");
         assert_eq!(
             default_start_dir(None, Some(home.clone())),
@@ -268,14 +262,29 @@ mod tests {
     }
 
     #[test]
-    fn non_root_current_dir_is_kept() {
-        let home = temp_dir("home-keep");
+    fn home_is_used_even_when_current_dir_is_not_root() {
+        // `make dev` など、起動元が `/` 以外でも常にホームから始める。
+        let home = temp_dir("home-always");
         let project = temp_dir("project");
         assert_eq!(
             default_start_dir(Some(project.clone()), Some(home.clone())),
-            Some(project.clone())
+            Some(home.clone())
         );
         let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn current_dir_is_kept_when_home_is_unusable() {
+        let project = temp_dir("project-fallback");
+        assert_eq!(
+            default_start_dir(Some(project.clone()), None),
+            Some(project.clone())
+        );
+        assert_eq!(
+            default_start_dir(Some(project.clone()), Some("/nonexistent-home-dir".into())),
+            Some(project.clone())
+        );
         let _ = std::fs::remove_dir_all(project);
     }
 
