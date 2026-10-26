@@ -94,6 +94,7 @@ export function ConnectionDialog({
     control,
     setValue,
     getValues,
+    reset,
     formState: { errors },
   } = useForm<FormValues, unknown, ConnectionValues>({
     resolver: zodResolver(connectionSchema) as unknown as Resolver<
@@ -113,6 +114,11 @@ export function ConnectionDialog({
     error: null,
   });
   const { ports, error: portsError } = portList;
+
+  useEffect(() => {
+    // 閉じたら入力を破棄する（パスワード等の秘密情報をメモリに残さない）。
+    if (!open) reset({ ...defaultConnectionValues });
+  }, [open, reset]);
 
   useEffect(() => {
     // 種別に応じた既定ポートへ切り替える（ユーザーが変更済みの値は維持する）。

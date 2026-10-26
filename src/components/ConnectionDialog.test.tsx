@@ -162,4 +162,24 @@ describe("ConnectionDialog", () => {
     await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
     expect(await screen.findByText(/取得エラー/)).toBeInTheDocument();
   });
+
+  it("閉じて開き直すと、前回の入力（パスワード等の秘密情報を含む）は残らない", async () => {
+    const user = userEvent.setup();
+    const props = {
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn(),
+      loadSerialPorts: vi.fn().mockResolvedValue([]),
+    };
+    const { rerender } = render(<ConnectionDialog open {...props} />);
+    // 他のテストの描画が残らないよう、このテスト内の要素だけを見る。
+    await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+    await user.type(screen.getByLabelText("ホスト"), "example.com");
+    await user.type(screen.getByLabelText("パスワード"), "super-secret");
+    rerender(<ConnectionDialog open={false} {...props} />);
+    rerender(<ConnectionDialog open {...props} />);
+    expect(screen.getByLabelText("接続種別")).toHaveValue("local");
+    await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+    expect(screen.getByLabelText("ホスト")).toHaveValue("");
+    expect(screen.getByLabelText("パスワード")).toHaveValue("");
+  });
 });
