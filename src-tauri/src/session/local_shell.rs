@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -15,6 +16,21 @@ pub struct LocalShellConfig {
     pub program: String,
     pub args: Vec<String>,
     pub size: TerminalSize,
+    /// 開始ディレクトリ。`None` なら [`default_start_dir`] で決める。
+    pub cwd: Option<PathBuf>,
+}
+
+/// 開始ディレクトリの既定値。
+///
+/// Finder や `open` から起動したアプリのカレントは `/` になるため、その場合（または取得できない場合）は
+/// ホームディレクトリを使う。ホームが存在するディレクトリでなければ現在のディレクトリを維持する。
+pub fn default_start_dir(current: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let usable_home = home.filter(|h| h.is_dir());
+    match current {
+        Some(dir) if dir != Path::new("/") => Some(dir),
+        Some(root) => usable_home.or(Some(root)),
+        None => usable_home,
+    }
 }
 
 /// `portable-pty` 経由のローカルシェルセッション。環境変数は親プロセスから継承する。
@@ -43,8 +59,14 @@ impl LocalShellSession {
 
         let mut cmd = CommandBuilder::new(&config.program);
         cmd.args(&config.args);
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.cwd(cwd);
+        let start_dir = config.cwd.or_else(|| {
+            default_start_dir(
+                std::env::current_dir().ok(),
+                std::env::var_os("HOME").map(PathBuf::from),
+            )
+        });
+        if let Some(dir) = start_dir {
+            cmd.cwd(dir);
         }
         let child = pair.slave.spawn_command(cmd).map_err(|e| {
             TerminalError::ConnectionFailed(format!("{} を起動できません: {e}", config.program))
@@ -142,6 +164,7 @@ mod tests {
             program: program.into(),
             args: args.iter().map(|s| s.to_string()).collect(),
             size: TerminalSize::new(80, 24).unwrap(),
+            cwd: None,
         }
     }
 
@@ -216,5 +239,78 @@ mod tests {
         s.close().await.unwrap();
         s.close().await.unwrap();
         assert!(matches!(s.write(b"x").await, Err(TerminalError::Closed)));
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("linkterm-cwd-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn root_current_dir_falls_back_to_home() {
+        let home = temp_dir("home");
+        assert_eq!(
+            default_start_dir(Some("/".into()), Some(home.clone())),
+            Some(home.clone())
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn missing_current_dir_falls_back_to_home() {
+        let home = temp_dir("home-none");
+        assert_eq!(
+            default_start_dir(None, Some(home.clone())),
+            Some(home.clone())
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn non_root_current_dir_is_kept() {
+        let home = temp_dir("home-keep");
+        let project = temp_dir("project");
+        assert_eq!(
+            default_start_dir(Some(project.clone()), Some(home.clone())),
+            Some(project.clone())
+        );
+        let _ = std::fs::remove_dir_all(home);
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn root_is_kept_when_home_is_unusable() {
+        assert_eq!(
+            default_start_dir(Some("/".into()), None),
+            Some(PathBuf::from("/"))
+        );
+        assert_eq!(
+            default_start_dir(Some("/".into()), Some("/nonexistent-home-dir".into())),
+            Some(PathBuf::from("/"))
+        );
+        let file = std::env::temp_dir().join(format!("linkterm-cwd-file-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(
+            default_start_dir(Some("/".into()), Some(file.clone())),
+            Some(PathBuf::from("/"))
+        );
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn nothing_available_yields_none() {
+        assert_eq!(default_start_dir(None, None), None);
+    }
+
+    #[tokio::test]
+    async fn explicit_cwd_is_used_for_the_process() {
+        let dir = temp_dir("explicit");
+        let mut cfg = config("/bin/pwd", &[]);
+        cfg.cwd = Some(dir.clone());
+        let mut s = LocalShellSession::spawn(cfg).unwrap();
+        let out = collect(&mut s, dir.file_name().unwrap().to_str().unwrap()).await;
+        assert!(out.contains(dir.to_str().unwrap()), "{out}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

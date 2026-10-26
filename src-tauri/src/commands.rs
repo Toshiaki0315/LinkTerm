@@ -219,6 +219,7 @@ pub async fn start_local_shell(
         program: login_shell(),
         args: vec!["-l".into()],
         size: size(req.cols, req.rows)?,
+        cwd: None,
     })?;
     Ok(state.manager.start(Box::new(session), codec).await)
 }

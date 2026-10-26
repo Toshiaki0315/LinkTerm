@@ -485,6 +485,7 @@ mod tests {
             // 「日本語」のShift_JISバイト列
             args: vec![r"\223\372\226\173\214\352".into()],
             size: TerminalSize::new(80, 24).unwrap(),
+            cwd: None,
         })
         .unwrap();
         let id = m
