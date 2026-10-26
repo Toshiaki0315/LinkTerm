@@ -6,7 +6,10 @@ mod known_hosts;
 mod local_shell;
 #[cfg(test)]
 mod mock;
+mod newline;
+mod serial;
 mod ssh;
+pub mod telnet;
 
 pub use credentials::{CredentialError, CredentialStore, InMemoryStore, KeychainStore};
 pub use error::TerminalError;
@@ -15,7 +18,12 @@ pub use known_hosts::{
     check_host_key, verify_host_key,
 };
 pub use local_shell::{LocalShellConfig, LocalShellSession};
+pub use newline::{IncomingConverter, RxNewline, TxNewline, convert_outgoing};
+pub use serial::{
+    DataBits, FlowControl, Parity, SerialConfig, SerialSession, StopBits, list_ports,
+};
 pub use ssh::{SshAuth, SshConfig, SshSession};
+pub use telnet::{TelnetConfig, TelnetSession};
 
 use async_trait::async_trait;
 

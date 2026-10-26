@@ -29,10 +29,10 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 
 ## Phase 5: Telnet & Serial 実装
 
-- [ ] TDD: Telnet IACパーサー、NAWS生成の単体テスト。
-- [ ] `TelnetSession` の実装。
-- [ ] TDD: LF/CRLF変換ロジックの関数テスト。
-- [ ] `tokio-serial` を用いた `SerialSession` の実装。
+- [x] TDD: Telnet IACパーサー、NAWS生成の単体テスト。
+- [x] `TelnetSession` の実装。
+- [x] TDD: LF/CRLF変換ロジックの関数テスト。
+- [x] `tokio-serial` を用いた `SerialSession` の実装。
 
 ## Phase 6: Tauri IPC & フロントエンドフック
 
