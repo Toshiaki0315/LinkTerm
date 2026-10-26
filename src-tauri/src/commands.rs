@@ -392,6 +392,18 @@ fn sanitize_file_stem(title: &str) -> String {
     }
 }
 
+/// `<dir>/<stem>-<timestamp>.log`。既に存在する場合は `-1`, `-2` … を付けて衝突を避ける。
+fn unique_log_path(dir: &std::path::Path, stem: &str, timestamp: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}-{timestamp}.log"));
+    if !first.exists() {
+        return first;
+    }
+    (1..)
+        .map(|n| dir.join(format!("{stem}-{timestamp}-{n}.log")))
+        .find(|p| !p.exists())
+        .expect("無限の候補から必ず見つかる")
+}
+
 /// ログの保存先の既定値（`~/Library/Logs/<identifier>/<title>-<日時>.log`）。ディレクトリも作成する。
 #[tauri::command]
 pub fn default_log_path(app: AppHandle, title: String) -> CommandResult<String> {
@@ -402,12 +414,9 @@ pub fn default_log_path(app: AppHandle, title: String) -> CommandResult<String> 
     std::fs::create_dir_all(&dir).map_err(|e| {
         CommandError::Terminal(TerminalError::io(format!("{} の作成", dir.display()), e))
     })?;
-    let name = format!(
-        "{}-{}.log",
-        sanitize_file_stem(&title),
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    );
-    Ok(dir.join(name).to_string_lossy().into_owned())
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f");
+    let path = unique_log_path(&dir, &sanitize_file_stem(&title), &timestamp.to_string());
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -416,8 +425,20 @@ pub async fn start_session_log(
     id: String,
     config: LogConfig,
 ) -> CommandResult<()> {
-    let logger = SessionLogger::open(&config)?;
-    Ok(state.manager.set_logger(&id, Some(logger)).await?)
+    begin_session_log(&state.manager, &id, &config).await
+}
+
+/// ログを開始する。ファイルを開く（上書きなら切り詰める）前に、セッションの存在を確認する。
+async fn begin_session_log(
+    manager: &SessionManager,
+    id: &str,
+    config: &LogConfig,
+) -> CommandResult<()> {
+    if !manager.contains(id).await {
+        return Err(ManagerError::UnknownSession(id.to_owned()).into());
+    }
+    let logger = SessionLogger::open(config)?;
+    Ok(manager.set_logger(id, Some(logger)).await?)
 }
 
 #[tauri::command]
@@ -502,5 +523,98 @@ mod tests {
         assert!(matches!(a, SshAuthRequest::KeyFile { .. }));
         assert!(serde_json::from_str::<SshAuthRequest>(r#"{"kind":"agent"}"#).is_ok());
         assert!(serde_json::from_str::<SshAuthRequest>(r#"{"kind":"bogus"}"#).is_err());
+    }
+
+    #[test]
+    fn unique_log_path_is_plain_when_free() {
+        let dir = std::env::temp_dir().join(format!("linkterm-ulp-free-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            unique_log_path(&dir, "alice", "20260101-000000-123"),
+            dir.join("alice-20260101-000000-123.log")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unique_log_path_avoids_existing_files() {
+        let dir = std::env::temp_dir().join(format!("linkterm-ulp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..5 {
+            let p = unique_log_path(&dir, "t", "20260101-000000-000");
+            assert!(seen.insert(p.clone()), "重複: {p:?}");
+            std::fs::write(&p, "x").unwrap();
+        }
+        assert!(dir.join("t-20260101-000000-000-1.log").exists());
+        assert!(dir.join("t-20260101-000000-000-4.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct NoopSink;
+    impl EventSink for NoopSink {
+        fn data(&self, _: &str, _: &[u8]) {}
+        fn closed(&self, _: &str, _: Option<String>) {}
+        fn log_error(&self, _: &str, _: &str) {}
+    }
+
+    fn log_config(path: PathBuf, append: bool) -> LogConfig {
+        LogConfig {
+            path,
+            mode: crate::session::LogMode::Text,
+            timestamps: false,
+            append,
+        }
+    }
+
+    #[tokio::test]
+    async fn begin_session_log_with_unknown_id_does_not_touch_the_file() {
+        let dir = std::env::temp_dir().join(format!("linkterm-bsl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("existing.log");
+        std::fs::write(&path, "keep me\n").unwrap();
+        let manager = SessionManager::new(Arc::new(NoopSink));
+        let r = begin_session_log(
+            &manager,
+            "no-such-session",
+            &log_config(path.clone(), false),
+        )
+        .await;
+        assert!(matches!(
+            r,
+            Err(CommandError::Manager(ManagerError::UnknownSession(_)))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn begin_session_log_starts_logging_for_a_live_session() {
+        let dir = std::env::temp_dir().join(format!("linkterm-bsl-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.log");
+        let manager = SessionManager::new(Arc::new(NoopSink));
+        let session = LocalShellSession::spawn(LocalShellConfig {
+            program: "/bin/cat".into(),
+            args: vec![],
+            size: TerminalSize::new(80, 24).unwrap(),
+            cwd: None,
+        })
+        .unwrap();
+        let id = manager.start(Box::new(session), Codec::utf8()).await;
+        begin_session_log(&manager, &id, &log_config(path.clone(), false))
+            .await
+            .unwrap();
+        manager.write(&id, "logged-line\r").await.unwrap();
+        let ok = tokio::time::timeout(Duration::from_secs(5), async {
+            while !std::fs::read_to_string(&path).is_ok_and(|t| t.contains("logged-line")) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(ok.is_ok());
+        manager.close_all().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

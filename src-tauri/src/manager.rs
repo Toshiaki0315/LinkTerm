@@ -135,6 +135,10 @@ impl SessionManager {
         }
     }
 
+    pub async fn contains(&self, id: &str) -> bool {
+        self.sessions.lock().await.contains_key(id)
+    }
+
     pub async fn session_count(&self) -> usize {
         self.sessions.lock().await.len()
     }

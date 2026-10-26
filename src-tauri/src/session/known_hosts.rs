@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
@@ -95,11 +96,18 @@ impl KnownHostsStore for InMemoryKnownHosts {
 #[derive(Debug)]
 pub struct FileKnownHosts {
     path: PathBuf,
+    /// 読み込み→更新→書き込みを一連の処理として直列化する（同一プロセス内）。
+    write_lock: Mutex<()>,
+    tmp_counter: AtomicU64,
 }
 
 impl FileKnownHosts {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            write_lock: Mutex::new(()),
+            tmp_counter: AtomicU64::new(0),
+        }
     }
 
     fn read(&self) -> Result<HashMap<String, String>, TerminalError> {
@@ -125,6 +133,8 @@ impl KnownHostsStore for FileKnownHosts {
     }
 
     fn save(&self, host: &str, port: u16, fingerprint: &str) -> Result<(), TerminalError> {
+        // ロックの毒化は保護対象のデータを持たないため無視してよい。
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut all = self.read()?;
         all.insert(key(host, port), fingerprint.into());
         if let Some(dir) = self.path.parent() {
@@ -134,14 +144,26 @@ impl KnownHostsStore for FileKnownHosts {
         let text = serde_json::to_string_pretty(&all).map_err(|e| {
             TerminalError::io("known_hostsのシリアライズ", std::io::Error::other(e))
         })?;
-        std::fs::write(&self.path, text)
-            .map_err(|e| TerminalError::io(format!("{} の書き込み", self.path.display()), e))
+        // 一時ファイルに書いてから置き換え、途中で失敗しても元のファイルを壊さない。
+        let tmp = self.path.with_extension(format!(
+            "tmp-{}-{}",
+            std::process::id(),
+            self.tmp_counter.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = std::fs::write(&tmp, text)
+            .and_then(|()| std::fs::rename(&tmp, &self.path))
+            .map_err(|e| TerminalError::io(format!("{} の書き込み", self.path.display()), e));
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FixedApprover {
@@ -245,6 +267,54 @@ mod tests {
         let path = dir.join("known_hosts.json");
         std::fs::write(&path, "not json").unwrap();
         assert!(FileKnownHosts::new(&path).lookup("h", 22).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_saves_do_not_lose_entries_or_corrupt_the_file() {
+        let dir = std::env::temp_dir().join(format!("linkterm-kh-conc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("known_hosts.json");
+        let store = Arc::new(FileKnownHosts::new(&path));
+        let n = 32;
+        let barrier = Arc::new(std::sync::Barrier::new(n));
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .save(&format!("host{i}"), 22, &format!("SHA256:fp{i}"))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        for i in 0..n {
+            assert_eq!(
+                store.lookup(&format!("host{i}"), 22).unwrap().as_deref(),
+                Some(format!("SHA256:fp{i}").as_str()),
+                "host{i} が失われた"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_leaves_no_temporary_files_behind() {
+        let dir = std::env::temp_dir().join(format!("linkterm-kh-tmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = FileKnownHosts::new(dir.join("known_hosts.json"));
+        store.save("h", 22, "SHA256:a").unwrap();
+        store.save("h2", 22, "SHA256:b").unwrap();
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["known_hosts.json".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
