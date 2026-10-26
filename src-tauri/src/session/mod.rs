@@ -1,10 +1,12 @@
 //! 全プロトコル共通のターミナルセッション抽象。
 
 mod error;
+mod local_shell;
 #[cfg(test)]
 mod mock;
 
 pub use error::TerminalError;
+pub use local_shell::{LocalShellConfig, LocalShellSession};
 
 use async_trait::async_trait;
 

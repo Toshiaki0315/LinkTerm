@@ -18,8 +18,8 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 
 ## Phase 3: PTY（ローカルシェル）実装
 
-- [ ] TDD: `portable-pty` を用いたPTY起動、送受信の単体テスト作成。
-- [ ] `LocalShellSession` の実装。
+- [x] TDD: `portable-pty` を用いたPTY起動、送受信の単体テスト作成。
+- [x] `LocalShellSession` の実装。
 
 ## Phase 4: SSH プロトコル実装
 
