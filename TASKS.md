@@ -36,9 +36,9 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 
 ## Phase 6: Tauri IPC & フロントエンドフック
 
-- [ ] Tauri Commands (セッション開始・停止) の実装。
-- [ ] Tauri Events (データ送受信・終了通知) の実装。
-- [ ] Reactカスタムフック (`useTerminalSession`) のTDD実装。
+- [x] Tauri Commands (セッション開始・停止) の実装。
+- [x] Tauri Events (データ送受信・終了通知) の実装。
+- [x] Reactカスタムフック (`useTerminalSession`) のTDD実装。
 
 ## Phase 7: UI / UX 開発 (React + shadcn/ui)
 

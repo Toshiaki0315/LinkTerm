@@ -1,0 +1,399 @@
+//! Tauri IPC（Commands / Events）。ロジックは `SessionManager` と各セッションに置き、ここは変換のみ行う。
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::{Mutex, oneshot};
+use zeroize::Zeroizing;
+
+use crate::manager::{EventSink, ManagerError, SessionManager};
+use crate::session::{
+    CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
+    LocalShellSession, RxNewline, SerialConfig, SerialSession, SshAuth, SshConfig, SshSession,
+    TelnetConfig, TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline,
+    list_ports,
+};
+
+pub const EVENT_DATA: &str = "terminal-data";
+pub const EVENT_CLOSED: &str = "terminal-closed";
+pub const EVENT_HOST_KEY_REQUEST: &str = "ssh-host-key-request";
+
+const KEYCHAIN_SERVICE: &str = "com.linkterm.app";
+const HOST_KEY_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const SSH_KEEPALIVE: Duration = Duration::from_secs(30);
+const DEFAULT_TERM: &str = "xterm-256color";
+
+/// フロントエンドへ返すエラー。文脈つきメッセージの文字列として渡す。
+#[derive(Debug, thiserror::Error)]
+pub enum CommandError {
+    #[error(transparent)]
+    Terminal(#[from] TerminalError),
+    #[error(transparent)]
+    Manager(#[from] ManagerError),
+    #[error("{0}")]
+    Invalid(String),
+    #[error("認証情報の操作に失敗しました: {0}")]
+    Credential(#[from] crate::session::CredentialError),
+}
+
+impl Serialize for CommandError {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
+}
+
+type CommandResult<T> = Result<T, CommandError>;
+
+#[derive(Clone, Serialize)]
+struct DataPayload<'a> {
+    id: &'a str,
+    /// base64（生バイト列。エンコーディング変換はフロントで行う）
+    data: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ClosedPayload<'a> {
+    id: &'a str,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostKeyRequest {
+    request_id: String,
+    host: String,
+    port: u16,
+    fingerprint: String,
+}
+
+struct TauriSink(AppHandle);
+
+impl EventSink for TauriSink {
+    fn data(&self, id: &str, data: &[u8]) {
+        let payload = DataPayload {
+            id,
+            data: BASE64.encode(data),
+        };
+        if let Err(e) = self.0.emit(EVENT_DATA, payload) {
+            eprintln!("イベント送信に失敗しました ({EVENT_DATA}): {e}");
+        }
+    }
+
+    fn closed(&self, id: &str, reason: Option<String>) {
+        if let Err(e) = self.0.emit(EVENT_CLOSED, ClosedPayload { id, reason }) {
+            eprintln!("イベント送信に失敗しました ({EVENT_CLOSED}): {e}");
+        }
+    }
+}
+
+type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
+/// 未知のホスト鍵をフロントのダイアログで承認させる。
+struct TauriApprover {
+    app: AppHandle,
+    pending: Pending,
+    next: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait]
+impl HostKeyApprover for TauriApprover {
+    async fn approve_unknown(&self, host: &str, port: u16, fingerprint: &str) -> bool {
+        let request_id = format!(
+            "hostkey-{}",
+            self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(request_id.clone(), tx);
+        let request = HostKeyRequest {
+            request_id: request_id.clone(),
+            host: host.into(),
+            port,
+            fingerprint: fingerprint.into(),
+        };
+        if self.app.emit(EVENT_HOST_KEY_REQUEST, request).is_err() {
+            self.pending.lock().await.remove(&request_id);
+            return false;
+        }
+        // タイムアウト・ウィンドウ破棄時は拒否（安全側）。
+        let answer = tokio::time::timeout(HOST_KEY_APPROVAL_TIMEOUT, rx).await;
+        self.pending.lock().await.remove(&request_id);
+        matches!(answer, Ok(Ok(true)))
+    }
+}
+
+pub struct AppState {
+    pub manager: SessionManager,
+    known_hosts: Arc<FileKnownHosts>,
+    credentials: KeychainStore,
+    approver: Arc<TauriApprover>,
+    pending: Pending,
+}
+
+impl AppState {
+    pub fn new(app: &AppHandle) -> Result<Self, tauri::Error> {
+        let dir = app.path().app_data_dir()?;
+        let pending: Pending = Arc::default();
+        Ok(Self {
+            manager: SessionManager::new(Arc::new(TauriSink(app.clone()))),
+            known_hosts: Arc::new(FileKnownHosts::new(dir.join("known_hosts.json"))),
+            credentials: KeychainStore::new(KEYCHAIN_SERVICE),
+            approver: Arc::new(TauriApprover {
+                app: app.clone(),
+                pending: pending.clone(),
+                next: Default::default(),
+            }),
+            pending,
+        })
+    }
+}
+
+fn size(cols: u16, rows: u16) -> CommandResult<TerminalSize> {
+    Ok(TerminalSize::new(cols, rows)?)
+}
+
+fn credential_account(username: &str, host: &str, port: u16) -> String {
+    format!("{username}@{host}:{port}")
+}
+
+/// 起動するシェル。ユーザー入力は受け取らず、環境の `SHELL` を `/etc/shells` で検証する。
+fn login_shell() -> String {
+    const FALLBACK: &str = "/bin/zsh";
+    let Ok(shell) = std::env::var("SHELL") else {
+        return FALLBACK.into();
+    };
+    let allowed = std::fs::read_to_string("/etc/shells")
+        .map(|t| t.lines().any(|l| l.trim() == shell))
+        .unwrap_or(false);
+    if allowed { shell } else { FALLBACK.into() }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLocalShell {
+    cols: u16,
+    rows: u16,
+}
+
+#[tauri::command]
+pub async fn start_local_shell(
+    state: State<'_, AppState>,
+    req: StartLocalShell,
+) -> CommandResult<String> {
+    let session = LocalShellSession::spawn(LocalShellConfig {
+        program: login_shell(),
+        args: vec!["-l".into()],
+        size: size(req.cols, req.rows)?,
+    })?;
+    Ok(state.manager.start(Box::new(session)).await)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SshAuthRequest {
+    Password {
+        password: String,
+        remember: bool,
+    },
+    /// Keychain に保存済みのパスワードを使う。
+    Keychain,
+    #[serde(rename_all = "camelCase")]
+    KeyFile {
+        path: PathBuf,
+        passphrase: Option<String>,
+    },
+    Agent,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartSsh {
+    host: String,
+    port: u16,
+    username: String,
+    auth: SshAuthRequest,
+    cols: u16,
+    rows: u16,
+}
+
+#[tauri::command]
+pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResult<String> {
+    let account = credential_account(&req.username, &req.host, req.port);
+    let mut remember: Option<Zeroizing<String>> = None;
+    let auth = match req.auth {
+        SshAuthRequest::Password {
+            password,
+            remember: r,
+        } => {
+            let password = Zeroizing::new(password);
+            if r {
+                remember = Some(password.clone());
+            }
+            SshAuth::Password(password)
+        }
+        SshAuthRequest::Keychain => {
+            let saved = state.credentials.load(&account)?.ok_or_else(|| {
+                CommandError::Invalid(format!("{account} のパスワードがKeychainにありません"))
+            })?;
+            SshAuth::Password(saved)
+        }
+        SshAuthRequest::KeyFile { path, passphrase } => SshAuth::PrivateKey {
+            path,
+            passphrase: passphrase.map(Zeroizing::new),
+        },
+        SshAuthRequest::Agent => SshAuth::Agent,
+    };
+    let session = SshSession::connect(
+        SshConfig {
+            host: req.host,
+            port: req.port,
+            username: req.username,
+            auth,
+            size: size(req.cols, req.rows)?,
+            term: DEFAULT_TERM.into(),
+            keepalive_interval: Some(SSH_KEEPALIVE),
+        },
+        state.known_hosts.clone(),
+        state.approver.clone(),
+    )
+    .await?;
+    // 認証に成功した場合のみ保存する。
+    if let Some(password) = remember {
+        state.credentials.save(&account, &password)?;
+    }
+    Ok(state.manager.start(Box::new(session)).await)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartTelnet {
+    host: String,
+    port: u16,
+    cols: u16,
+    rows: u16,
+    #[serde(default)]
+    tx_newline: TxNewline,
+    #[serde(default)]
+    rx_newline: RxNewline,
+}
+
+#[tauri::command]
+pub async fn start_telnet(state: State<'_, AppState>, req: StartTelnet) -> CommandResult<String> {
+    let session = TelnetSession::connect(TelnetConfig {
+        host: req.host,
+        port: req.port,
+        size: size(req.cols, req.rows)?,
+        term: DEFAULT_TERM.into(),
+        tx_newline: req.tx_newline,
+        rx_newline: req.rx_newline,
+        connect_timeout: CONNECT_TIMEOUT,
+    })
+    .await?;
+    Ok(state.manager.start(Box::new(session)).await)
+}
+
+#[tauri::command]
+pub async fn start_serial(
+    state: State<'_, AppState>,
+    config: SerialConfig,
+) -> CommandResult<String> {
+    let session: Box<dyn TerminalSession> = Box::new(SerialSession::open(&config)?);
+    Ok(state.manager.start(session).await)
+}
+
+#[tauri::command]
+pub fn list_serial_ports() -> CommandResult<Vec<String>> {
+    Ok(list_ports()?)
+}
+
+#[tauri::command]
+pub async fn terminal_write(
+    state: State<'_, AppState>,
+    id: String,
+    data: String,
+) -> CommandResult<()> {
+    Ok(state.manager.write(&id, data.into_bytes()).await?)
+}
+
+#[tauri::command]
+pub async fn terminal_resize(
+    state: State<'_, AppState>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> CommandResult<()> {
+    Ok(state.manager.resize(&id, size(cols, rows)?).await?)
+}
+
+#[tauri::command]
+pub async fn terminal_close(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+    Ok(state.manager.close(&id).await?)
+}
+
+#[tauri::command]
+pub async fn respond_host_key(
+    state: State<'_, AppState>,
+    request_id: String,
+    approved: bool,
+) -> CommandResult<()> {
+    let tx = state.pending.lock().await.remove(&request_id);
+    match tx {
+        Some(tx) => {
+            // 受信側が既にタイムアウトしている場合は無視してよい。
+            let _ = tx.send(approved);
+            Ok(())
+        }
+        None => Err(CommandError::Invalid(format!(
+            "承認要求 {request_id} は存在しないか期限切れです"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_account_format() {
+        assert_eq!(
+            credential_account("alice", "example.com", 22),
+            "alice@example.com:22"
+        );
+    }
+
+    #[test]
+    fn login_shell_is_an_absolute_path() {
+        assert!(login_shell().starts_with('/'));
+    }
+
+    #[test]
+    fn size_rejects_zero() {
+        assert!(size(0, 10).is_err());
+        assert!(size(80, 24).is_ok());
+    }
+
+    #[test]
+    fn command_error_serializes_as_message() {
+        let e = CommandError::Invalid("x".into());
+        assert_eq!(serde_json::to_string(&e).unwrap(), "\"x\"");
+    }
+
+    #[test]
+    fn ssh_auth_request_deserializes_by_kind() {
+        let a: SshAuthRequest =
+            serde_json::from_str(r#"{"kind":"password","password":"p","remember":true}"#).unwrap();
+        assert!(matches!(a, SshAuthRequest::Password { remember: true, .. }));
+        let a: SshAuthRequest =
+            serde_json::from_str(r#"{"kind":"keyFile","path":"/k","passphrase":null}"#).unwrap();
+        assert!(matches!(a, SshAuthRequest::KeyFile { .. }));
+        assert!(serde_json::from_str::<SshAuthRequest>(r#"{"kind":"agent"}"#).is_ok());
+        assert!(serde_json::from_str::<SshAuthRequest>(r#"{"kind":"bogus"}"#).is_err());
+    }
+}
