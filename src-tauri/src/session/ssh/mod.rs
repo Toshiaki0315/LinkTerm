@@ -92,9 +92,11 @@ enum Command {
     Close,
 }
 
+type Output = Result<Vec<u8>, TerminalError>;
+
 pub struct SshSession {
     commands: mpsc::Sender<Command>,
-    output: mpsc::Receiver<Vec<u8>>,
+    output: mpsc::Receiver<Output>,
     closed: bool,
 }
 
@@ -245,42 +247,54 @@ impl SshSession {
     }
 }
 
-/// チャネルの入出力を仲介する。切断・エラー時は `out_tx` を閉じて読み取り側へ終了を伝える。
+/// チャネルの入出力を仲介する。
+///
+/// 正常終了（リモートの `Close`、またはこちらからの終了要求）では `output` を閉じるだけにし、
+/// 送信失敗や予期しない切断はエラーとして `output` へ流して読み取り側へ理由を伝える。
 async fn pump(
     handle: Handle<ClientHandler>,
     mut channel: Channel<Msg>,
     mut commands: mpsc::Receiver<Command>,
-    output: mpsc::Sender<Vec<u8>>,
+    output: mpsc::Sender<Output>,
 ) {
-    loop {
+    let failure: Option<TerminalError> = loop {
         tokio::select! {
             cmd = commands.recv() => match cmd {
                 Some(Command::Data(data)) => {
-                    if channel.data(&data[..]).await.is_err() {
-                        break;
+                    if let Err(e) = channel.data(&data[..]).await {
+                        break Some(TerminalError::ConnectionFailed(format!("SSH送信に失敗しました: {e}")));
                     }
                 }
                 Some(Command::Resize(size)) => {
-                    if channel
+                    if let Err(e) = channel
                         .window_change(size.cols.into(), size.rows.into(), 0, 0)
                         .await
-                        .is_err()
                     {
-                        break;
+                        break Some(TerminalError::ConnectionFailed(format!(
+                            "SSHのリサイズ通知に失敗しました: {e}"
+                        )));
                     }
                 }
-                Some(Command::Close) | None => break,
+                Some(Command::Close) | None => break None,
             },
             msg = channel.wait() => match msg {
                 Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                    if output.send(data.to_vec()).await.is_err() {
-                        break;
+                    if output.send(Ok(data.to_vec())).await.is_err() {
+                        break None;
                     }
                 }
-                Some(ChannelMsg::Close) | None => break,
+                Some(ChannelMsg::Close) => break None,
+                // Close を受け取らずに受信が尽きた = 接続が途中で切れた。
+                None => break Some(TerminalError::ConnectionFailed(
+                    "SSH接続が予期せず切断されました".into(),
+                )),
                 Some(_) => {}
             },
         }
+    };
+    if let Some(e) = failure {
+        // 読み取り側が既にいなければ通知先はない。
+        let _ = output.send(Err(e)).await;
     }
     let _ = channel.close().await;
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
@@ -299,7 +313,7 @@ impl TerminalSession for SshSession {
     }
 
     async fn read(&mut self) -> Result<Option<Vec<u8>>, TerminalError> {
-        Ok(self.output.recv().await)
+        self.output.recv().await.transpose()
     }
 
     async fn resize(&mut self, size: TerminalSize) -> Result<(), TerminalError> {

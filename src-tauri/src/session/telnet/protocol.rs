@@ -13,6 +13,9 @@ pub const OPT_SGA: u8 = 3;
 pub const OPT_TTYPE: u8 = 24;
 pub const OPT_NAWS: u8 = 31;
 
+/// 副交渉データの上限。終端のない `IAC SB` でメモリが増え続けないようにする。
+pub const MAX_SUBNEGOTIATION_LEN: usize = 4096;
+
 const TTYPE_IS: u8 = 0;
 const TTYPE_SEND: u8 = 1;
 
@@ -48,6 +51,9 @@ enum State {
     SbOption,
     SbData,
     SbIac,
+    /// 上限超過の副交渉を `IAC SE` まで読み捨てる。
+    SbDiscard,
+    SbDiscardIac,
 }
 
 /// 受信バイト列からTelnetイベントを取り出すパーサー。チャンク分割に耐える。
@@ -70,6 +76,16 @@ impl TelnetParser {
             state: State::Data,
             sb_option: 0,
             sb_data: Vec::new(),
+        }
+    }
+
+    /// 副交渉データを蓄積する。上限を超えたらデータを捨て、終端まで読み飛ばす。
+    fn push_sb(&mut self, b: u8) {
+        if self.sb_data.len() >= MAX_SUBNEGOTIATION_LEN {
+            self.sb_data = Vec::new();
+            self.state = State::SbDiscard;
+        } else {
+            self.sb_data.push(b);
         }
     }
 
@@ -129,13 +145,27 @@ impl TelnetParser {
                     if b == IAC {
                         self.state = State::SbIac;
                     } else {
-                        self.sb_data.push(b);
+                        self.push_sb(b);
                     }
+                }
+                State::SbDiscard => {
+                    if b == IAC {
+                        self.state = State::SbDiscardIac;
+                    }
+                }
+                State::SbDiscardIac => {
+                    self.state = match b {
+                        IAC => State::SbDiscard,
+                        // 終端（IAC SE）。破棄した副交渉はイベントにしない。
+                        _ => State::Data,
+                    };
                 }
                 State::SbIac => match b {
                     IAC => {
-                        self.sb_data.push(IAC);
-                        self.state = State::SbData;
+                        self.push_sb(IAC);
+                        if self.state == State::SbIac {
+                            self.state = State::SbData;
+                        }
                     }
                     SE => {
                         events.push(TelnetEvent::Subnegotiation {
@@ -415,6 +445,42 @@ mod tests {
         assert_eq!(p.feed(&[0, b'c']), vec![data(b"c")]);
         // CR LF はそのまま
         assert_eq!(p.feed(b"\r\n"), vec![data(b"\r\n")]);
+    }
+
+    #[test]
+    fn oversized_subnegotiation_is_discarded_with_bounded_memory() {
+        let mut p = TelnetParser::new();
+        let mut input = vec![IAC, SB, OPT_TTYPE];
+        input.extend(std::iter::repeat_n(b'x', 1_000_000));
+        assert!(p.feed(&input).is_empty());
+        assert!(p.sb_data.len() <= MAX_SUBNEGOTIATION_LEN);
+        // 終端後は通常どおり解析を再開し、破棄した副交渉はイベントにならない。
+        assert_eq!(p.feed(&[IAC, SE, b'o', b'k']), vec![data(b"ok")]);
+    }
+
+    #[test]
+    fn oversized_subnegotiation_with_escaped_iac_is_also_bounded() {
+        let mut p = TelnetParser::new();
+        let mut input = vec![IAC, SB, OPT_TTYPE];
+        for _ in 0..100_000 {
+            input.extend([IAC, IAC]);
+        }
+        assert!(p.feed(&input).is_empty());
+        assert!(p.sb_data.len() <= MAX_SUBNEGOTIATION_LEN);
+        assert_eq!(p.feed(&[IAC, SE]), vec![]);
+    }
+
+    #[test]
+    fn subnegotiation_at_the_limit_is_still_delivered() {
+        let mut p = TelnetParser::new();
+        let mut input = vec![IAC, SB, OPT_TTYPE];
+        input.extend(std::iter::repeat_n(b'x', MAX_SUBNEGOTIATION_LEN));
+        input.extend([IAC, SE]);
+        let ev = p.feed(&input);
+        assert_eq!(ev.len(), 1);
+        assert!(
+            matches!(&ev[0], TelnetEvent::Subnegotiation { data, .. } if data.len() == MAX_SUBNEGOTIATION_LEN)
+        );
     }
 
     #[test]

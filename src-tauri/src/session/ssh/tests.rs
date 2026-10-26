@@ -108,6 +108,10 @@ impl server::Handler for MockServer {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if data == b"drop" {
+            // 接続を異常切断する（チャネルのCloseを送らない）。
+            return Err(russh::Error::Disconnect);
+        }
         if data == b"exit\n" {
             session.eof(channel)?;
             session.close(channel)?;
@@ -396,4 +400,32 @@ async fn connection_refused_is_connection_failed() {
     )
     .await;
     assert!(matches!(r, Err(TerminalError::ConnectionFailed(_))));
+}
+
+#[tokio::test]
+async fn abrupt_disconnect_is_reported_as_an_error_not_a_clean_eof() {
+    let h = start_server(None).await;
+    let mut s = connect(
+        &h,
+        password("secret"),
+        Arc::new(InMemoryKnownHosts::default()),
+        true,
+    )
+    .await
+    .unwrap();
+    s.write(b"drop").await.unwrap();
+    let r = timeout(Duration::from_secs(5), async {
+        loop {
+            match s.read().await {
+                Ok(Some(_)) => continue,
+                other => return other,
+            }
+        }
+    })
+    .await
+    .expect("タイムアウト");
+    assert!(
+        matches!(r, Err(TerminalError::ConnectionFailed(_))),
+        "予期しない切断はエラーとして伝わるべき: {r:?}"
+    );
 }

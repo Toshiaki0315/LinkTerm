@@ -1,8 +1,8 @@
 //! セッションログ（Tee分岐）。受信データを表示とは独立にファイルへ記録する。
 
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, Permissions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -136,7 +136,7 @@ fn io_error(context: impl Into<String>, source: std::io::Error) -> LogError {
 }
 
 impl SessionLogger {
-    /// 所有者のみ読み書き可能（0600）で開く。
+    /// 所有者のみ読み書き可能（0600）で開く。既存ファイルの権限も0600に変更する。
     pub fn open(config: &LogConfig) -> Result<Self, LogError> {
         let display = config.path.display().to_string();
         if config.path.as_os_str().is_empty() {
@@ -155,6 +155,9 @@ impl SessionLogger {
         let file = options
             .open(&config.path)
             .map_err(|e| io_error(format!("{display} を開く"), e))?;
+        // `mode()` は新規作成時にしか効かないため、既存ファイルの権限も絞る。
+        file.set_permissions(Permissions::from_mode(0o600))
+            .map_err(|e| io_error(format!("{display} の権限設定"), e))?;
         Ok(Self::with_writer(
             Box::new(file),
             config.mode,
@@ -379,6 +382,22 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_file_permissions_are_tightened_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        for append in [true, false] {
+            let dir = temp_dir(&format!("perm-{append}"));
+            let path = dir.join("s.log");
+            std::fs::write(&path, "old\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let l = SessionLogger::open(&config(path.clone(), append)).unwrap();
+            drop(l);
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "append={append}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
