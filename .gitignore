@@ -6,7 +6,6 @@ dist-ssr/
 
 # Rust / Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
 
 # macOS
 .DS_Store

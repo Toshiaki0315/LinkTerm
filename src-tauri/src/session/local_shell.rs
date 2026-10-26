@@ -27,6 +27,22 @@ pub fn default_start_dir(current: Option<PathBuf>, home: Option<PathBuf>) -> Opt
     home.filter(|h| h.is_dir()).or(current)
 }
 
+/// 子プロセスに設定する端末関連の環境変数。親（起動元のターミナル等）の値は上書きする。
+///
+/// `TERM_PROGRAM` などを引き継ぐと、シェルが起動元（Apple Terminal 等）向けの処理
+/// （セッション復元メッセージなど）を実行してしまう。
+pub fn terminal_env() -> Vec<(&'static str, String)> {
+    vec![
+        ("TERM", "xterm-256color".into()),
+        ("COLORTERM", "truecolor".into()),
+        ("TERM_PROGRAM", "LinkTerm".into()),
+        ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION").into()),
+    ]
+}
+
+/// 子プロセスから取り除く、起動元ターミナル固有の環境変数。
+pub const INHERITED_TERMINAL_VARS: &[&str] = &["TERM_SESSION_ID", "ITERM_SESSION_ID"];
+
 /// `portable-pty` 経由のローカルシェルセッション。環境変数は親プロセスから継承する。
 pub struct LocalShellSession {
     master: Box<dyn MasterPty + Send>,
@@ -53,6 +69,12 @@ impl LocalShellSession {
 
         let mut cmd = CommandBuilder::new(&config.program);
         cmd.args(&config.args);
+        for name in INHERITED_TERMINAL_VARS {
+            cmd.env_remove(name);
+        }
+        for (name, value) in terminal_env() {
+            cmd.env(name, value);
+        }
         let start_dir = config.cwd.or_else(|| {
             default_start_dir(
                 std::env::current_dir().ok(),
@@ -321,5 +343,28 @@ mod tests {
         let out = collect(&mut s, dir.file_name().unwrap().to_str().unwrap()).await;
         assert!(out.contains(dir.to_str().unwrap()), "{out}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn terminal_env_identifies_linkterm_and_supports_color() {
+        let env: std::collections::HashMap<_, _> = terminal_env().into_iter().collect();
+        assert_eq!(env["TERM"], "xterm-256color");
+        assert_eq!(env["COLORTERM"], "truecolor");
+        assert_eq!(env["TERM_PROGRAM"], "LinkTerm");
+        assert_eq!(env["TERM_PROGRAM_VERSION"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn inherited_terminal_session_vars_are_listed_for_removal() {
+        assert!(INHERITED_TERMINAL_VARS.contains(&"TERM_SESSION_ID"));
+    }
+
+    #[tokio::test]
+    async fn spawned_shell_sees_linkterm_environment() {
+        let mut s = LocalShellSession::spawn(config("/usr/bin/env", &[])).unwrap();
+        let out = collect(&mut s, "TERM_PROGRAM_VERSION").await;
+        assert!(out.contains("TERM_PROGRAM=LinkTerm"), "{out}");
+        assert!(out.contains("TERM=xterm-256color"), "{out}");
+        assert!(!out.contains("Apple_Terminal"), "{out}");
     }
 }
