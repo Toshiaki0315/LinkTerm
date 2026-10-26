@@ -7,6 +7,8 @@ pub enum TerminalError {
     ConnectionFailed(String),
     #[error("認証に失敗しました: {0}")]
     AuthenticationFailed(String),
+    #[error("ホスト鍵を信頼できません: {0}")]
+    HostKeyRejected(String),
     #[error("セッションは既に閉じられています")]
     Closed,
     #[error("無効なサイズです: {cols}x{rows}")]

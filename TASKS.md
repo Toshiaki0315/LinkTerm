@@ -23,9 +23,9 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 
 ## Phase 4: SSH プロトコル実装
 
-- [ ] TDD: モック用SSHサーバーを用いたテスト作成。
-- [ ] `russh` を用いた `SshSession` の実装。
-- [ ] macOS Keychain (`keyring` 等) を用いた認証情報管理。
+- [x] TDD: モック用SSHサーバーを用いたテスト作成。
+- [x] `russh` を用いた `SshSession` の実装。
+- [x] macOS Keychain (`keyring` 等) を用いた認証情報管理。
 
 ## Phase 5: Telnet & Serial 実装
 

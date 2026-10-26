@@ -1,12 +1,21 @@
 //! 全プロトコル共通のターミナルセッション抽象。
 
+mod credentials;
 mod error;
+mod known_hosts;
 mod local_shell;
 #[cfg(test)]
 mod mock;
+mod ssh;
 
+pub use credentials::{CredentialError, CredentialStore, InMemoryStore, KeychainStore};
 pub use error::TerminalError;
+pub use known_hosts::{
+    FileKnownHosts, HostKeyApprover, HostKeyStatus, InMemoryKnownHosts, KnownHostsStore,
+    check_host_key, verify_host_key,
+};
 pub use local_shell::{LocalShellConfig, LocalShellSession};
+pub use ssh::{SshAuth, SshConfig, SshSession};
 
 use async_trait::async_trait;
 
