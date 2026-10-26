@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_SETTINGS, type Settings } from "../lib/settings";
+import { DEFAULT_SETTINGS, fontStackFor, type Settings } from "../lib/settings";
+import type { FontFamily } from "../lib/terminal-api";
 import { SettingsDialog } from "./SettingsDialog";
 
 const profiles = [
@@ -9,17 +10,27 @@ const profiles = [
   { id: "p2", name: "ルーター", values: { type: "telnet" } },
 ];
 
+const fonts: FontFamily[] = [
+  { name: "Menlo", monospace: true },
+  { name: "Osaka-Mono", monospace: true },
+  { name: "SF Mono", monospace: true },
+  { name: "Helvetica", monospace: false },
+  { name: "ヒラギノ角ゴシック", monospace: false },
+];
+
 function setup(
   over: {
     settings?: Settings;
     profiles?: typeof profiles;
     onSave?: (s: Settings) => Promise<void>;
+    loadFonts?: () => Promise<FontFamily[]>;
   } = {},
 ) {
   const onSave = vi.fn<(s: Settings) => Promise<void>>(
     over.onSave ?? (async () => {}),
   );
   const onOpenChange = vi.fn();
+  const loadFonts = vi.fn(over.loadFonts ?? (async () => fonts));
   const user = userEvent.setup();
   render(
     <SettingsDialog
@@ -28,9 +39,10 @@ function setup(
       settings={over.settings ?? DEFAULT_SETTINGS}
       profiles={over.profiles ?? profiles}
       onSave={onSave}
+      loadFonts={loadFonts}
     />,
   );
-  return { onSave, onOpenChange, user };
+  return { onSave, onOpenChange, loadFonts, user };
 }
 
 async function replace(
@@ -43,18 +55,24 @@ async function replace(
   if (value !== "") await user.type(input, value);
 }
 
+/** フォント一覧の読み込み完了を待つ。 */
+const fontsLoaded = () => screen.findByRole("option", { name: "SF Mono" });
+
 describe("SettingsDialog", () => {
-  it("現在の設定を表示する", () => {
+  it("現在の設定を表示する", async () => {
     setup({
       settings: {
-        fontFamily: "Osaka-Mono",
+        fontFamily: fontStackFor("Osaka-Mono"),
         fontSize: 16,
         scrollback: 5000,
         cursorBlink: false,
         startup: { kind: "local" },
       },
     });
-    expect(screen.getByLabelText("フォント")).toHaveValue("Osaka-Mono");
+    await fontsLoaded();
+    expect(screen.getByLabelText("フォント")).toHaveValue(
+      fontStackFor("Osaka-Mono"),
+    );
     expect(screen.getByLabelText("フォントサイズ")).toHaveValue(16);
     expect(screen.getByLabelText("スクロールバック行数")).toHaveValue(5000);
     expect(screen.getByLabelText("カーソルを点滅させる")).not.toBeChecked();
@@ -63,9 +81,149 @@ describe("SettingsDialog", () => {
     );
   });
 
+  describe("フォントの選択", () => {
+    it("フォントは自由入力ではなくリストから選ぶ", async () => {
+      setup();
+      await fontsLoaded();
+      expect(screen.getByLabelText("フォント").tagName).toBe("SELECT");
+    });
+
+    it("標準と、インストール済みの等幅フォントが並ぶ（等幅以外は既定では出さない）", async () => {
+      setup();
+      await fontsLoaded();
+      expect(
+        screen.getByRole("option", { name: "標準（Menlo）" }),
+      ).toBeInTheDocument();
+      for (const name of ["Menlo", "Osaka-Mono", "SF Mono"]) {
+        expect(screen.getByRole("option", { name })).toBeInTheDocument();
+      }
+      expect(
+        screen.queryByRole("option", { name: "Helvetica" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("option", { name: "ヒラギノ角ゴシック" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("「等幅以外のフォントも表示する」で、すべてのフォントから選べる", async () => {
+      const { user } = setup();
+      await fontsLoaded();
+      await user.click(screen.getByLabelText("等幅以外のフォントも表示する"));
+      expect(
+        screen.getByRole("option", { name: "Helvetica" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: "ヒラギノ角ゴシック" }),
+      ).toBeInTheDocument();
+    });
+
+    it("現在のフォントが等幅以外なら、最初から一覧に出す", async () => {
+      setup({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          fontFamily: fontStackFor("Helvetica"),
+        },
+      });
+      await fontsLoaded();
+      expect(screen.getByLabelText("フォント")).toHaveValue(
+        fontStackFor("Helvetica"),
+      );
+      expect(
+        screen.getByLabelText("等幅以外のフォントも表示する"),
+      ).toBeChecked();
+    });
+
+    it("選んだフォントを、代替フォントつきで保存する", async () => {
+      const { user, onSave } = setup();
+      await fontsLoaded();
+      await user.selectOptions(screen.getByLabelText("フォント"), "SF Mono");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].fontFamily).toBe(
+        '"SF Mono", Menlo, Monaco, "Courier New", monospace',
+      );
+    });
+
+    it("標準を選ぶと既定の指定になる", async () => {
+      const { user, onSave } = setup({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          fontFamily: fontStackFor("Osaka-Mono"),
+        },
+      });
+      await fontsLoaded();
+      await user.selectOptions(
+        screen.getByLabelText("フォント"),
+        "標準（Menlo）",
+      );
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].fontFamily).toBe(
+        DEFAULT_SETTINGS.fontFamily,
+      );
+    });
+
+    it("以前に手書きで保存した指定も、「現在の指定」として残り、そのまま保存できる", async () => {
+      const { user, onSave } = setup({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          fontFamily: "Courier Prime, monospace",
+        },
+      });
+      await fontsLoaded();
+      expect(
+        screen.getByRole("option", {
+          name: "現在の指定: Courier Prime, monospace",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("フォント")).toHaveValue(
+        "Courier Prime, monospace",
+      );
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].fontFamily).toBe(
+        "Courier Prime, monospace",
+      );
+    });
+
+    it("一覧の読み込み中・失敗時も、標準と現在の指定で操作できる", async () => {
+      const { user, onSave } = setup({
+        loadFonts: async () => {
+          throw "取得できません";
+        },
+      });
+      expect(
+        await screen.findByText(/フォント一覧を取得できません/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: "標準（Menlo）" }),
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+    });
+
+    it("開くたびに一覧を読み込む（フォントを入れた後に反映される）", async () => {
+      const loadFonts = vi.fn(async () => fonts);
+      const props = {
+        onOpenChange: vi.fn(),
+        settings: DEFAULT_SETTINGS,
+        profiles,
+        onSave: vi.fn(),
+        loadFonts,
+      };
+      const { rerender } = render(<SettingsDialog open {...props} />);
+      await waitFor(() => expect(loadFonts).toHaveBeenCalledTimes(1));
+      rerender(<SettingsDialog open={false} {...props} />);
+      expect(loadFonts).toHaveBeenCalledTimes(1);
+      rerender(<SettingsDialog open {...props} />);
+      await waitFor(() => expect(loadFonts).toHaveBeenCalledTimes(2));
+    });
+  });
+
   it("入力した内容で保存し、ダイアログを閉じる", async () => {
     const { user, onSave, onOpenChange } = setup();
-    await replace(user, "フォント", "SF Mono, monospace");
+    await fontsLoaded();
+    await user.selectOptions(screen.getByLabelText("フォント"), "Osaka-Mono");
     await replace(user, "フォントサイズ", "18");
     await replace(user, "スクロールバック行数", "2000");
     await user.click(screen.getByLabelText("カーソルを点滅させる"));
@@ -76,7 +234,7 @@ describe("SettingsDialog", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave).toHaveBeenCalledWith({
-      fontFamily: "SF Mono, monospace",
+      fontFamily: fontStackFor("Osaka-Mono"),
       fontSize: 18,
       scrollback: 2000,
       cursorBlink: false,
@@ -101,7 +259,7 @@ describe("SettingsDialog", () => {
     });
   });
 
-  it("保存済みの接続を選んでいないとエラー（保存済みがない場合は案内を出す）", async () => {
+  it("保存済みの接続を選んでいないとエラー", async () => {
     const { user, onSave } = setup();
     await user.selectOptions(
       screen.getByLabelText("起動時に開くターミナル"),
@@ -123,28 +281,28 @@ describe("SettingsDialog", () => {
     expect(screen.getByText(/保存済みの接続がありません/)).toBeInTheDocument();
   });
 
-  it("範囲外・空の入力はエラーを表示して保存しない", async () => {
+  it("範囲外の入力はエラーを表示して保存しない", async () => {
     const { user, onSave } = setup();
     await replace(user, "フォントサイズ", "7");
-    await replace(user, "フォント", "");
     await replace(user, "スクロールバック行数", "100001");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(
       await screen.findByText("フォントサイズは8〜72の整数で入力してください"),
     ).toBeInTheDocument();
-    expect(screen.getByText("フォントを入力してください")).toBeInTheDocument();
     expect(
       screen.getByText("スクロールバックは0〜100000行で入力してください"),
     ).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("プレビューが入力中のフォント・サイズを反映する", async () => {
+  it("プレビューが選んだフォント・サイズを反映する", async () => {
     const { user } = setup();
-    await replace(user, "フォント", "Osaka-Mono");
+    await fontsLoaded();
+    await user.selectOptions(screen.getByLabelText("フォント"), "Osaka-Mono");
     await replace(user, "フォントサイズ", "20");
     const preview = screen.getByTestId("font-preview");
-    expect(preview).toHaveStyle({ fontFamily: "Osaka-Mono", fontSize: "20px" });
+    expect(preview.style.fontFamily).toContain("Osaka-Mono");
+    expect(preview.style.fontSize).toBe("20px");
     expect(preview).toHaveTextContent("日本語");
   });
 
@@ -152,12 +310,17 @@ describe("SettingsDialog", () => {
     const { user, onSave } = setup({
       settings: {
         ...DEFAULT_SETTINGS,
+        fontFamily: fontStackFor("Osaka-Mono"),
         fontSize: 30,
         scrollback: 1,
         startup: { kind: "local" },
       },
     });
+    await fontsLoaded();
     await user.click(screen.getByRole("button", { name: "初期設定に戻す" }));
+    expect(screen.getByLabelText("フォント")).toHaveValue(
+      DEFAULT_SETTINGS.fontFamily,
+    );
     expect(screen.getByLabelText("フォントサイズ")).toHaveValue(
       DEFAULT_SETTINGS.fontSize,
     );
@@ -189,11 +352,13 @@ describe("SettingsDialog", () => {
   });
 
   it("開き直すと、編集途中の内容ではなく保存済みの設定が表示される", async () => {
+    const loadFonts = vi.fn(async () => fonts);
     const props = {
       onOpenChange: vi.fn(),
       settings: DEFAULT_SETTINGS,
       profiles,
       onSave: vi.fn(),
+      loadFonts,
     };
     const user = userEvent.setup();
     const { rerender } = render(<SettingsDialog open {...props} />);

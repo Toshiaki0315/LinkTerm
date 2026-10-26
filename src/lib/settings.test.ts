@@ -3,6 +3,8 @@ import {
   DEFAULT_SETTINGS,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
+  familyFromStack,
+  fontStackFor,
   settingsSchema,
 } from "./settings";
 
@@ -98,5 +100,42 @@ describe("settingsSchema", () => {
         settingsSchema.safeParse({ ...DEFAULT_SETTINGS, startup }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe("フォントの指定（font-family）", () => {
+  it("選んだフォント名に、標準フォントを代替として付ける", () => {
+    expect(fontStackFor("SF Mono")).toBe(
+      '"SF Mono", Menlo, Monaco, "Courier New", monospace',
+    );
+    expect(fontStackFor("ヒラギノ角ゴシック")).toBe(
+      '"ヒラギノ角ゴシック", Menlo, Monaco, "Courier New", monospace',
+    );
+  });
+
+  it("生成した指定は設定の検証を通る", () => {
+    for (const name of [
+      "SF Mono",
+      "Osaka-Mono",
+      "ヒラギノ角ゴシック",
+      "Courier New",
+    ]) {
+      expect(
+        settingsSchema.safeParse({
+          ...DEFAULT_SETTINGS,
+          fontFamily: fontStackFor(name),
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("指定からフォント名を取り出せる（標準・手書きの指定は null）", () => {
+    expect(familyFromStack(fontStackFor("SF Mono"))).toBe("SF Mono");
+    expect(familyFromStack(fontStackFor("ヒラギノ角ゴシック"))).toBe(
+      "ヒラギノ角ゴシック",
+    );
+    expect(familyFromStack(DEFAULT_SETTINGS.fontFamily)).toBeNull();
+    expect(familyFromStack("Osaka-Mono, monospace")).toBeNull();
+    expect(familyFromStack("")).toBeNull();
   });
 });

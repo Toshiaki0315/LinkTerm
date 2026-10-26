@@ -58,6 +58,12 @@ export interface SavedProfile {
   values: Record<string, unknown>;
 }
 
+export interface FontFamily {
+  name: string;
+  /** 等幅フォントか（ターミナルに向いているか）。 */
+  monospace: boolean;
+}
+
 export interface HostKeyRequest {
   requestId: string;
   host: string;
@@ -126,6 +132,8 @@ export const listSerialPorts = () => invoke<string[]>("list_serial_ports");
 
 export const respondHostKey = (requestId: string, approved: boolean) =>
   invoke<void>("respond_host_key", { requestId, approved });
+
+export const listFonts = () => invoke<FontFamily[]>("list_fonts");
 
 export const getSettings = () => invoke<Settings>("get_settings");
 

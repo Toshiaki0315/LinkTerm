@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::approvals::{ApprovalBook, HostKeyRequest};
+use crate::fonts::{FontError, FontFamily};
 use crate::manager::{EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::session::{
@@ -48,6 +49,8 @@ pub enum CommandError {
     Profile(#[from] ProfileError),
     #[error(transparent)]
     Settings(#[from] SettingsError),
+    #[error(transparent)]
+    Font(#[from] FontError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -468,6 +471,15 @@ pub async fn respond_host_key(
             "承認要求 {request_id} は存在しないか期限切れです"
         )))
     }
+}
+
+/// インストール済みのフォントの一覧（設定画面の選択肢）。時間がかかり得るため別スレッドで取得する。
+#[tauri::command]
+pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
+    tauri::async_runtime::spawn_blocking(crate::fonts::installed_families)
+        .await
+        .map_err(|e| CommandError::Invalid(format!("フォント一覧の取得が中断されました: {e}")))?
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]

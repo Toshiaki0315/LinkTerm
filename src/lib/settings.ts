@@ -70,8 +70,21 @@ export const settingsSchema = z.object({
 export type Settings = z.infer<typeof settingsSchema>;
 export type Startup = Settings["startup"];
 
+/** どのフォントを選んでも末尾に付ける代替フォント（日本語などの字形は、ここへフォールバックする）。 */
+export const FONT_FALLBACK_STACK = 'Menlo, Monaco, "Courier New", monospace';
+
+/** 選んだフォント名から、設定に保存する font-family の指定を作る。 */
+export const fontStackFor = (family: string) =>
+  `"${family}", ${FONT_FALLBACK_STACK}`;
+
+/** `fontStackFor` で作った指定からフォント名を取り出す。標準や手書きの指定は `null`。 */
+export function familyFromStack(stack: string): string | null {
+  const match = /^"([^"]+)", /.exec(stack);
+  return match && fontStackFor(match[1]) === stack ? match[1] : null;
+}
+
 export const DEFAULT_SETTINGS: Settings = {
-  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  fontFamily: FONT_FALLBACK_STACK,
   fontSize: 13,
   scrollback: 10_000,
   cursorBlink: true,
@@ -83,13 +96,3 @@ export type Appearance = Pick<
   Settings,
   "fontFamily" | "fontSize" | "scrollback" | "cursorBlink"
 >;
-
-/** フォント指定の入力候補（macOS に標準で入っている等幅フォント）。 */
-export const FONT_SUGGESTIONS = [
-  'Menlo, Monaco, "Courier New", monospace',
-  "SF Mono, Menlo, monospace",
-  "Monaco, monospace",
-  "Osaka-Mono, monospace",
-  "Courier New, monospace",
-  "Andale Mono, monospace",
-];

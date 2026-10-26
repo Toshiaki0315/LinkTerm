@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import {
   DEFAULT_SETTINGS,
-  FONT_SUGGESTIONS,
+  familyFromStack,
   fontFamilySchema,
   fontSizeSchema,
+  fontStackFor,
   scrollbackSchema,
   type Settings,
 } from "../lib/settings";
-import type { SavedProfile } from "../lib/terminal-api";
+import {
+  listFonts,
+  type FontFamily,
+  type SavedProfile,
+} from "../lib/terminal-api";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -70,6 +75,8 @@ interface Props {
   profiles: SavedProfile[];
   /** 保存。失敗（reject）したら理由を表示し、ダイアログは開いたままにする。 */
   onSave: (settings: Settings) => Promise<void>;
+  /** インストール済みのフォント一覧。開くたびに読み込む。 */
+  loadFonts?: () => Promise<FontFamily[]>;
 }
 
 function Row({
@@ -101,13 +108,21 @@ export function SettingsDialog({
   settings,
   profiles,
   onSave,
+  loadFonts = listFonts,
 }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** `null` は未読み込み。再度開いたときは前回の一覧を表示しつつ、読み込み直す。 */
+  const [fontList, setFontList] = useState<{
+    fonts: FontFamily[];
+    error: string | null;
+  } | null>(null);
+  const [showAllFonts, setShowAllFonts] = useState(false);
   const {
     register,
     handleSubmit,
     control,
     reset,
+    setValue,
     formState: { errors },
   } = useForm<FormValues, unknown, z.output<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -119,9 +134,44 @@ export function SettingsDialog({
     reset(toForm(settings));
   }, [open, settings, reset]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    loadFonts()
+      .then((fonts) => !cancelled && setFontList({ fonts, error: null }))
+      .catch(
+        (e: unknown) =>
+          !cancelled &&
+          setFontList({
+            fonts: [],
+            error: `フォント一覧を取得できません: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loadFonts]);
+
   const fontFamily = useWatch({ control, name: "fontFamily" });
   const fontSize = useWatch({ control, name: "fontSize" });
   const startupKind = useWatch({ control, name: "startupKind" });
+
+  const fonts = useMemo(() => fontList?.fonts ?? [], [fontList]);
+  const currentFamily = familyFromStack(fontFamily);
+  /** 現在のフォントが等幅以外なら、一覧から消えないよう最初から全フォントを出す。 */
+  const currentIsProportional = fonts.some(
+    (f) => f.name === currentFamily && !f.monospace,
+  );
+  const showAll = showAllFonts || currentIsProportional;
+  const visibleFonts = fonts.filter((f) => showAll || f.monospace);
+  const monospaceFonts = visibleFonts.filter((f) => f.monospace);
+  const otherFonts = visibleFonts.filter((f) => !f.monospace);
+  /** 標準でも一覧のフォントでもない現在の指定（手書きで保存したもの等）。選択肢に残す。 */
+  const currentIsListed =
+    fontFamily === DEFAULT_SETTINGS.fontFamily ||
+    (currentFamily !== null &&
+      visibleFonts.some((f) => f.name === currentFamily));
+  const currentOptionLabel = `現在の指定: ${currentFamily ?? fontFamily}`;
 
   const submit = handleSubmit(async (values) => {
     setSaveError(null);
@@ -146,17 +196,59 @@ export function SettingsDialog({
           <Row label="フォント" error={errors.fontFamily?.message}>
             {(id) => (
               <>
-                <Input
+                <Select
                   id={id}
-                  list="font-suggestions"
-                  autoComplete="off"
-                  {...register("fontFamily")}
-                />
-                <datalist id="font-suggestions">
-                  {FONT_SUGGESTIONS.map((f) => (
-                    <option key={f} value={f} />
-                  ))}
-                </datalist>
+                  value={fontFamily}
+                  onChange={(e) =>
+                    setValue("fontFamily", e.target.value, {
+                      shouldValidate: true,
+                    })
+                  }
+                >
+                  {!currentIsListed && (
+                    <option value={fontFamily}>{currentOptionLabel}</option>
+                  )}
+                  <option value={DEFAULT_SETTINGS.fontFamily}>
+                    標準（Menlo）
+                  </option>
+                  {monospaceFonts.length > 0 && (
+                    <optgroup label="等幅フォント">
+                      {monospaceFonts.map((f) => (
+                        <option key={f.name} value={fontStackFor(f.name)}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {otherFonts.length > 0 && (
+                    <optgroup label="その他のフォント">
+                      {otherFonts.map((f) => (
+                        <option key={f.name} value={fontStackFor(f.name)}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </Select>
+                <label className="flex items-center gap-2 text-xs text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={showAll}
+                    disabled={currentIsProportional}
+                    onChange={(e) => setShowAllFonts(e.target.checked)}
+                  />
+                  等幅以外のフォントも表示する
+                </label>
+                {fontList === null && (
+                  <p className="text-xs text-neutral-400">
+                    フォント一覧を読み込んでいます…
+                  </p>
+                )}
+                {fontList?.error && (
+                  <p role="alert" className="text-xs text-red-400">
+                    {fontList.error}
+                  </p>
+                )}
               </>
             )}
           </Row>

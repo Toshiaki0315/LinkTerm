@@ -16,6 +16,7 @@ import {
   onLogError,
   pendingHostKeyRequests,
   getSettings,
+  listFonts,
   onOpenSettings,
   saveSettings,
   deleteProfile,
@@ -224,5 +225,14 @@ describe("設定", () => {
     await onOpenSettings(cb);
     expect(listen.mock.calls[0][0]).toBe("menu-open-settings");
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("フォント一覧", () => {
+  it("list_fonts を呼ぶ", async () => {
+    const fonts = [{ name: "Menlo", monospace: true }];
+    invoke.mockResolvedValueOnce(fonts);
+    await expect(listFonts()).resolves.toEqual(fonts);
+    expect(invoke).toHaveBeenCalledWith("list_fonts");
   });
 });

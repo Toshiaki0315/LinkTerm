@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod atomic_file;
 pub mod commands;
+pub mod fonts;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
@@ -37,6 +38,7 @@ pub fn run() {
             commands::list_profiles,
             commands::save_profile,
             commands::delete_profile,
+            commands::list_fonts,
             commands::get_settings,
             commands::save_settings,
         ])

@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   listSerialPorts: vi.fn(),
   listProfiles: vi.fn(),
   getSettings: vi.fn(),
+  listFonts: vi.fn(),
   saveSettings: vi.fn(),
   onOpenSettings: vi.fn(),
   saveProfile: vi.fn(),
@@ -65,6 +66,7 @@ beforeEach(() => {
   api.listSerialPorts.mockResolvedValue([]);
   api.listProfiles.mockResolvedValue([]);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
+  api.listFonts.mockResolvedValue([]);
   api.saveSettings.mockImplementation(async (s) => s);
   api.onOpenSettings.mockImplementation(async (cb) => {
     openSettingsFromMenu = cb;
