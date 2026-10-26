@@ -14,6 +14,7 @@ import {
   decodeBase64,
   defaultLogPath,
   onLogError,
+  pendingHostKeyRequests,
   startSessionLog,
   stopSessionLog,
   onTerminalClosed,
@@ -150,5 +151,19 @@ describe("ログ", () => {
     await onLogError(cb);
     expect(listen.mock.calls[0][0]).toBe("terminal-log-error");
     expect(cb).toHaveBeenCalledWith("a", "disk full");
+  });
+});
+
+describe("未応答のホスト鍵承認要求", () => {
+  it("pending_host_key_requests を呼ぶ", async () => {
+    const req = {
+      requestId: "r1",
+      host: "h",
+      port: 22,
+      fingerprint: "SHA256:x",
+    };
+    invoke.mockResolvedValue([req]);
+    await expect(pendingHostKeyRequests()).resolves.toEqual([req]);
+    expect(invoke).toHaveBeenCalledWith("pending_host_key_requests");
   });
 });

@@ -1,3 +1,4 @@
+pub mod approvals;
 pub mod commands;
 pub mod manager;
 pub mod session;
@@ -26,6 +27,7 @@ pub fn run() {
             commands::start_session_log,
             commands::stop_session_log,
             commands::respond_host_key,
+            commands::pending_host_key_requests,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

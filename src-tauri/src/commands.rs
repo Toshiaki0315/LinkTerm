@@ -1,6 +1,5 @@
 //! Tauri IPC（Commands / Events）。ロジックは `SessionManager` と各セッションに置き、ここは変換のみ行う。
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,9 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::{Mutex, oneshot};
 use zeroize::Zeroizing;
 
+use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::manager::{EventSink, ManagerError, SessionManager};
 use crate::session::{
     Codec, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
@@ -74,15 +73,6 @@ struct LogErrorPayload<'a> {
     message: &'a str,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HostKeyRequest {
-    request_id: String,
-    host: String,
-    port: u16,
-    fingerprint: String,
-}
-
 struct TauriSink(AppHandle);
 
 impl EventSink for TauriSink {
@@ -112,37 +102,25 @@ impl EventSink for TauriSink {
     }
 }
 
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
-
 /// 未知のホスト鍵をフロントのダイアログで承認させる。
 struct TauriApprover {
     app: AppHandle,
-    pending: Pending,
-    next: std::sync::atomic::AtomicU64,
+    book: Arc<ApprovalBook>,
 }
 
 #[async_trait]
 impl HostKeyApprover for TauriApprover {
     async fn approve_unknown(&self, host: &str, port: u16, fingerprint: &str) -> bool {
-        let request_id = format!(
-            "hostkey-{}",
-            self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        );
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(request_id.clone(), tx);
-        let request = HostKeyRequest {
-            request_id: request_id.clone(),
-            host: host.into(),
-            port,
-            fingerprint: fingerprint.into(),
-        };
+        let (request, rx) = self.book.register(host, port, fingerprint);
+        let request_id = request.request_id.clone();
+        // フロントの購読前でも `pending_host_key_requests` で取り込めるよう、登録してから通知する。
         if self.app.emit(EVENT_HOST_KEY_REQUEST, request).is_err() {
-            self.pending.lock().await.remove(&request_id);
+            self.book.cancel(&request_id);
             return false;
         }
         // タイムアウト・ウィンドウ破棄時は拒否（安全側）。
         let answer = tokio::time::timeout(HOST_KEY_APPROVAL_TIMEOUT, rx).await;
-        self.pending.lock().await.remove(&request_id);
+        self.book.cancel(&request_id);
         matches!(answer, Ok(Ok(true)))
     }
 }
@@ -152,24 +130,23 @@ pub struct AppState {
     known_hosts: Arc<FileKnownHosts>,
     credentials: KeychainStore,
     approver: Arc<TauriApprover>,
-    pending: Pending,
+    approvals: Arc<ApprovalBook>,
     log_paths: LogPathReserver,
 }
 
 impl AppState {
     pub fn new(app: &AppHandle) -> Result<Self, tauri::Error> {
         let dir = app.path().app_data_dir()?;
-        let pending: Pending = Arc::default();
+        let approvals = Arc::new(ApprovalBook::default());
         Ok(Self {
             manager: SessionManager::new(Arc::new(TauriSink(app.clone()))),
             known_hosts: Arc::new(FileKnownHosts::new(dir.join("known_hosts.json"))),
             credentials: KeychainStore::new(KEYCHAIN_SERVICE),
             approver: Arc::new(TauriApprover {
                 app: app.clone(),
-                pending: pending.clone(),
-                next: Default::default(),
+                book: approvals.clone(),
             }),
-            pending,
+            approvals,
             log_paths: LogPathReserver::default(),
         })
     }
@@ -474,17 +451,19 @@ pub async fn respond_host_key(
     request_id: String,
     approved: bool,
 ) -> CommandResult<()> {
-    let tx = state.pending.lock().await.remove(&request_id);
-    match tx {
-        Some(tx) => {
-            // 受信側が既にタイムアウトしている場合は無視してよい。
-            let _ = tx.send(approved);
-            Ok(())
-        }
-        None => Err(CommandError::Invalid(format!(
+    if state.approvals.respond(&request_id, approved) {
+        Ok(())
+    } else {
+        Err(CommandError::Invalid(format!(
             "承認要求 {request_id} は存在しないか期限切れです"
-        ))),
+        )))
     }
+}
+
+/// 未応答のホスト鍵承認要求。フロントが購読を始める前に出た要求を取り込むために使う。
+#[tauri::command]
+pub fn pending_host_key_requests(state: State<'_, AppState>) -> Vec<HostKeyRequest> {
+    state.approvals.pending()
 }
 
 #[cfg(test)]

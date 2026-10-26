@@ -119,6 +119,9 @@ export const listSerialPorts = () => invoke<string[]>("list_serial_ports");
 export const respondHostKey = (requestId: string, approved: boolean) =>
   invoke<void>("respond_host_key", { requestId, approved });
 
+export const pendingHostKeyRequests = () =>
+  invoke<HostKeyRequest[]>("pending_host_key_requests");
+
 export const onTerminalData = (
   cb: (id: string, data: Uint8Array) => void,
 ): Promise<UnlistenFn> =>
