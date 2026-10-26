@@ -43,6 +43,13 @@ export type StartRequest =
     }
   | { type: "serial"; config: SerialConfig; encoding?: string };
 
+export interface LogConfig {
+  path: string;
+  mode: "Raw" | "Text";
+  timestamps: boolean;
+  append: boolean;
+}
+
 export interface HostKeyRequest {
   requestId: string;
   host: string;
@@ -98,6 +105,15 @@ export const resizeSession = (id: string, cols: number, rows: number) =>
 export const closeSession = (id: string) =>
   invoke<void>("terminal_close", { id });
 
+export const startSessionLog = (id: string, config: LogConfig) =>
+  invoke<void>("start_session_log", { id, config });
+
+export const stopSessionLog = (id: string) =>
+  invoke<void>("stop_session_log", { id });
+
+export const defaultLogPath = (title: string) =>
+  invoke<string>("default_log_path", { title });
+
 export const listSerialPorts = () => invoke<string[]>("list_serial_ports");
 
 export const respondHostKey = (requestId: string, approved: boolean) =>
@@ -121,3 +137,10 @@ export const onHostKeyRequest = (
   cb: (req: HostKeyRequest) => void,
 ): Promise<UnlistenFn> =>
   listen<HostKeyRequest>("ssh-host-key-request", (e) => cb(e.payload));
+
+export const onLogError = (
+  cb: (id: string, message: string) => void,
+): Promise<UnlistenFn> =>
+  listen<{ id: string; message: string }>("terminal-log-error", (e) =>
+    cb(e.payload.id, e.payload.message),
+  );

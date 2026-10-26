@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::session::{Codec, TerminalError, TerminalSession, TerminalSize};
+use crate::session::{Codec, SessionLogger, TerminalError, TerminalSession, TerminalSize};
 
 #[derive(Debug, Error)]
 pub enum ManagerError {
@@ -22,6 +22,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn data(&self, id: &str, data: &[u8]);
     /// セッション終了。`reason` はエラーによる終了時のみ。
     fn closed(&self, id: &str, reason: Option<String>);
+    /// ログ書き込みに失敗した（以後そのセッションのログは停止する）。
+    fn log_error(&self, id: &str, message: &str);
 }
 
 type Sessions = Arc<Mutex<HashMap<String, mpsc::Sender<Command>>>>;
@@ -30,6 +32,7 @@ const COMMAND_CAPACITY: usize = 256;
 
 enum Command {
     Write(String),
+    SetLogger(Option<SessionLogger>),
     Resize(TerminalSize),
     Close,
 }
@@ -52,6 +55,16 @@ impl SessionManager {
     /// セッションを登録し、入出力の仲介を開始してIDを返す。
     /// `codec` は接続先の文字コード。受信はUTF-8へ、送信は接続先の文字コードへ変換する。
     pub async fn start(&self, session: Box<dyn TerminalSession>, codec: Codec) -> String {
+        self.start_with_logger(session, codec, None).await
+    }
+
+    /// ログ付きで開始する。ログは表示と独立にTee分岐し、受信した生バイト列を記録する。
+    pub async fn start_with_logger(
+        &self,
+        session: Box<dyn TerminalSession>,
+        codec: Codec,
+        logger: Option<SessionLogger>,
+    ) -> String {
         let id = format!("session-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         self.sessions.lock().await.insert(id.clone(), tx);
@@ -59,6 +72,7 @@ impl SessionManager {
             id.clone(),
             session,
             codec,
+            logger,
             rx,
             self.sink.clone(),
             self.sessions.clone(),
@@ -89,6 +103,15 @@ impl SessionManager {
 
     pub async fn resize(&self, id: &str, size: TerminalSize) -> Result<(), ManagerError> {
         self.send(id, Command::Resize(size)).await
+    }
+
+    /// ログの開始・停止（`None`）。既存のログは置き換えられ、閉じられる。
+    pub async fn set_logger(
+        &self,
+        id: &str,
+        logger: Option<SessionLogger>,
+    ) -> Result<(), ManagerError> {
+        self.send(id, Command::SetLogger(logger)).await
     }
 
     /// セッションを閉じる。以降そのIDへの操作は `UnknownSession` になる。
@@ -123,6 +146,7 @@ async fn run_session(
     id: String,
     mut session: Box<dyn TerminalSession>,
     mut codec: Codec,
+    mut logger: Option<SessionLogger>,
     mut commands: mpsc::Receiver<Command>,
     sink: Arc<dyn EventSink>,
     sessions: Sessions,
@@ -132,6 +156,13 @@ async fn run_session(
             read = session.read() => match read {
                 Ok(Some(data)) => {
                     let text = codec.decode(&data);
+                    // Tee: 表示とは独立に記録する。失敗してもセッションは継続する。
+                    if let Some(l) = logger.as_mut()
+                        && let Err(e) = l.record(&data, &text)
+                    {
+                        logger = None;
+                        sink.log_error(&id, &e.to_string());
+                    }
                     // マルチバイト文字の途中で切れた場合は次回に持ち越すため空になりうる。
                     if !text.is_empty() {
                         sink.data(&id, text.as_bytes());
@@ -146,6 +177,7 @@ async fn run_session(
                         break Some(e.to_string());
                     }
                 }
+                Some(Command::SetLogger(new_logger)) => logger = new_logger,
                 Some(Command::Resize(size)) => {
                     if let Err(e) = session.resize(size).await {
                         break Some(e.to_string());
@@ -174,9 +206,11 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    use crate::session::LogMode;
 
     #[derive(Default)]
     struct RecordingSink {
+        log_errors: StdMutex<Vec<(String, String)>>,
         data: StdMutex<Vec<(String, Vec<u8>)>>,
         closed: StdMutex<Vec<(String, Option<String>)>>,
     }
@@ -188,6 +222,40 @@ mod tests {
         fn closed(&self, id: &str, reason: Option<String>) {
             self.closed.lock().unwrap().push((id.into(), reason));
         }
+        fn log_error(&self, id: &str, message: &str) {
+            self.log_errors
+                .lock()
+                .unwrap()
+                .push((id.into(), message.into()));
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<StdMutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn logger(buf: &SharedBuf, mode: LogMode) -> SessionLogger {
+        SessionLogger::with_writer(Box::new(buf.clone()), mode, false, Box::new(String::new))
     }
 
     impl RecordingSink {
@@ -423,5 +491,93 @@ mod tests {
             .start(Box::new(session), Codec::new("Shift_JIS").unwrap())
             .await;
         wait_for(|| sink.received(&id) == "日本語".as_bytes()).await;
+    }
+
+    const NIHONGO_SJIS: [u8; 6] = [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea];
+
+    #[tokio::test]
+    async fn raw_log_receives_undecoded_bytes_while_display_gets_utf8() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let buf = SharedBuf::default();
+        let id = m
+            .start_with_logger(
+                Box::new(s),
+                Codec::new("Shift_JIS").unwrap(),
+                Some(logger(&buf, LogMode::Raw)),
+            )
+            .await;
+        m.write(&id, "日本語").await.unwrap();
+        wait_for(|| sink.received(&id) == "日本語".as_bytes()).await;
+        assert_eq!(*buf.0.lock().unwrap(), NIHONGO_SJIS);
+    }
+
+    #[tokio::test]
+    async fn text_log_receives_decoded_text() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let buf = SharedBuf::default();
+        let id = m
+            .start_with_logger(
+                Box::new(s),
+                Codec::new("Shift_JIS").unwrap(),
+                Some(logger(&buf, LogMode::Text)),
+            )
+            .await;
+        m.write(&id, "\u{1b}[1m日本語\u{1b}[0m").await.unwrap();
+        wait_for(|| !sink.received(&id).is_empty()).await;
+        wait_for(|| *buf.0.lock().unwrap() == "日本語".as_bytes()).await;
+    }
+
+    #[tokio::test]
+    async fn logger_can_be_attached_and_detached_at_runtime() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        m.write(&id, "before").await.unwrap();
+        wait_for(|| sink.received(&id) == b"before").await;
+
+        let buf = SharedBuf::default();
+        m.set_logger(&id, Some(logger(&buf, LogMode::Text)))
+            .await
+            .unwrap();
+        m.write(&id, "during").await.unwrap();
+        wait_for(|| *buf.0.lock().unwrap() == b"during").await;
+
+        m.set_logger(&id, None).await.unwrap();
+        m.write(&id, "after").await.unwrap();
+        wait_for(|| sink.received(&id) == b"beforeduringafter").await;
+        assert_eq!(*buf.0.lock().unwrap(), b"during");
+    }
+
+    #[tokio::test]
+    async fn log_failure_is_reported_once_and_does_not_break_the_session() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let failing = SessionLogger::with_writer(
+            Box::new(FailingWriter),
+            LogMode::Text,
+            false,
+            Box::new(String::new),
+        );
+        let id = m
+            .start_with_logger(Box::new(s), Codec::utf8(), Some(failing))
+            .await;
+        m.write(&id, "one").await.unwrap();
+        m.write(&id, "two").await.unwrap();
+        wait_for(|| sink.received(&id) == b"onetwo").await;
+        let errors = sink.log_errors.lock().unwrap().clone();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, id);
+        assert!(errors[0].1.contains("disk full"));
+    }
+
+    #[tokio::test]
+    async fn set_logger_on_unknown_session_is_an_error() {
+        let (m, _) = setup();
+        assert!(matches!(
+            m.set_logger("nope", None).await,
+            Err(ManagerError::UnknownSession(_))
+        ));
     }
 }

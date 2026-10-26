@@ -30,6 +30,7 @@ export function TerminalWorkspace({ tabs, activeId, onStatusChange }: Props) {
         >
           <TerminalTab
             tabId={tab.id}
+            title={tab.title}
             values={tab.values}
             active={tab.id === activeId}
             onStatusChange={onStatusChange}

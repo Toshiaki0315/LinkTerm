@@ -16,13 +16,14 @@ use zeroize::Zeroizing;
 use crate::manager::{EventSink, ManagerError, SessionManager};
 use crate::session::{
     Codec, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
-    LocalShellSession, RxNewline, SerialConfig, SerialSession, SshAuth, SshConfig, SshSession,
-    TelnetConfig, TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline,
-    list_ports,
+    LocalShellSession, LogConfig, LogError, RxNewline, SerialConfig, SerialSession, SessionLogger,
+    SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession, TerminalError, TerminalSession,
+    TerminalSize, TxNewline, list_ports,
 };
 
 pub const EVENT_DATA: &str = "terminal-data";
 pub const EVENT_CLOSED: &str = "terminal-closed";
+pub const EVENT_LOG_ERROR: &str = "terminal-log-error";
 pub const EVENT_HOST_KEY_REQUEST: &str = "ssh-host-key-request";
 
 const KEYCHAIN_SERVICE: &str = "com.linkterm.app";
@@ -40,6 +41,8 @@ pub enum CommandError {
     Manager(#[from] ManagerError),
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Log(#[from] LogError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -63,6 +66,12 @@ struct DataPayload<'a> {
 struct ClosedPayload<'a> {
     id: &'a str,
     reason: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct LogErrorPayload<'a> {
+    id: &'a str,
+    message: &'a str,
 }
 
 #[derive(Clone, Serialize)]
@@ -90,6 +99,15 @@ impl EventSink for TauriSink {
     fn closed(&self, id: &str, reason: Option<String>) {
         if let Err(e) = self.0.emit(EVENT_CLOSED, ClosedPayload { id, reason }) {
             eprintln!("イベント送信に失敗しました ({EVENT_CLOSED}): {e}");
+        }
+    }
+
+    fn log_error(&self, id: &str, message: &str) {
+        if let Err(e) = self
+            .0
+            .emit(EVENT_LOG_ERROR, LogErrorPayload { id, message })
+        {
+            eprintln!("イベント送信に失敗しました ({EVENT_LOG_ERROR}): {e}");
         }
     }
 }
@@ -353,6 +371,59 @@ pub async fn terminal_close(state: State<'_, AppState>, id: String) -> CommandRe
     Ok(state.manager.close(&id).await?)
 }
 
+/// ログファイル名に使えるよう、英数字・`-`・`_`・`.` 以外を `_` に置き換える。
+fn sanitize_file_stem(title: &str) -> String {
+    let stem: String = title
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stem = stem.trim_matches('.');
+    if stem.is_empty() {
+        "session".into()
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// ログの保存先の既定値（`~/Library/Logs/<identifier>/<title>-<日時>.log`）。ディレクトリも作成する。
+#[tauri::command]
+pub fn default_log_path(app: AppHandle, title: String) -> CommandResult<String> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| CommandError::Invalid(format!("ログディレクトリを取得できません: {e}")))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        CommandError::Terminal(TerminalError::io(format!("{} の作成", dir.display()), e))
+    })?;
+    let name = format!(
+        "{}-{}.log",
+        sanitize_file_stem(&title),
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    Ok(dir.join(name).to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn start_session_log(
+    state: State<'_, AppState>,
+    id: String,
+    config: LogConfig,
+) -> CommandResult<()> {
+    let logger = SessionLogger::open(&config)?;
+    Ok(state.manager.set_logger(&id, Some(logger)).await?)
+}
+
+#[tauri::command]
+pub async fn stop_session_log(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+    Ok(state.manager.set_logger(&id, None).await?)
+}
+
 #[tauri::command]
 pub async fn respond_host_key(
     state: State<'_, AppState>,
@@ -394,6 +465,18 @@ mod tests {
         assert_eq!(codec_for(None).unwrap().name(), "UTF-8");
         assert_eq!(codec_for(Some("Shift_JIS")).unwrap().name(), "Shift_JIS");
         assert!(codec_for(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn sanitize_file_stem_replaces_unsafe_characters() {
+        assert_eq!(sanitize_file_stem("alice@example.com"), "alice_example.com");
+        assert_eq!(sanitize_file_stem("../../etc/passwd"), "_.._etc_passwd");
+        assert_eq!(
+            sanitize_file_stem("cu.usbserial @115200"),
+            "cu.usbserial__115200"
+        );
+        assert_eq!(sanitize_file_stem("..."), "session");
+        assert_eq!(sanitize_file_stem(""), "session");
     }
 
     #[test]

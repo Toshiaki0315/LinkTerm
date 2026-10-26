@@ -4,18 +4,26 @@ import {
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
+import { LogControl } from "./LogControl";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 
 interface Props {
   tabId: string;
+  title: string;
   values: ConnectionValues;
   active: boolean;
   onStatusChange: (id: string, status: SessionStatus) => void;
 }
 
 /** 1タブ = 1セッション。xterm とセッションをここで結び付ける。 */
-export function TerminalTab({ tabId, values, active, onStatusChange }: Props) {
+export function TerminalTab({
+  tabId,
+  title,
+  values,
+  active,
+  onStatusChange,
+}: Props) {
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
 
@@ -23,9 +31,11 @@ export function TerminalTab({ tabId, values, active, onStatusChange }: Props) {
     (data: Uint8Array) => termRef.current?.write(data),
     [],
   );
-  const { status, error, start, write, resize } = useTerminalSession({
-    onData,
-  });
+  const { status, sessionId, error, start, write, resize } = useTerminalSession(
+    {
+      onData,
+    },
+  );
 
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。
@@ -59,6 +69,10 @@ export function TerminalTab({ tabId, values, active, onStatusChange }: Props) {
 
   return (
     <div className="relative h-full w-full">
+      <LogControl
+        sessionId={status === "connected" ? sessionId : null}
+        title={title}
+      />
       <TerminalView
         ref={termRef}
         active={active}

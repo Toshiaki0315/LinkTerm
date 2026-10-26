@@ -12,6 +12,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 import {
   closeSession,
   decodeBase64,
+  defaultLogPath,
+  onLogError,
+  startSessionLog,
+  stopSessionLog,
   onTerminalClosed,
   onTerminalData,
   respondHostKey,
@@ -114,5 +118,37 @@ describe("イベント", () => {
     const cb = vi.fn();
     await onTerminalClosed(cb);
     expect(cb).toHaveBeenCalledWith("a", "boom");
+  });
+});
+
+describe("ログ", () => {
+  it("start / stop / defaultLogPath", async () => {
+    invoke.mockResolvedValue(undefined);
+    const config = {
+      path: "/tmp/a.log",
+      mode: "Text",
+      timestamps: true,
+      append: false,
+    } as const;
+    await startSessionLog("a", config);
+    await stopSessionLog("a");
+    invoke.mockResolvedValueOnce("/logs/x.log");
+    await expect(defaultLogPath("alice@h")).resolves.toBe("/logs/x.log");
+    expect(invoke.mock.calls).toEqual([
+      ["start_session_log", { id: "a", config }],
+      ["stop_session_log", { id: "a" }],
+      ["default_log_path", { title: "alice@h" }],
+    ]);
+  });
+
+  it("terminal-log-error を渡す", async () => {
+    listen.mockImplementation(async (_name, handler) => {
+      handler({ payload: { id: "a", message: "disk full" } });
+      return () => {};
+    });
+    const cb = vi.fn();
+    await onLogError(cb);
+    expect(listen.mock.calls[0][0]).toBe("terminal-log-error");
+    expect(cb).toHaveBeenCalledWith("a", "disk full");
   });
 });

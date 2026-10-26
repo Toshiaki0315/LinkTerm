@@ -22,6 +22,9 @@ pub fn run() {
             commands::terminal_write,
             commands::terminal_resize,
             commands::terminal_close,
+            commands::default_log_path,
+            commands::start_session_log,
+            commands::stop_session_log,
             commands::respond_host_key,
         ])
         .build(tauri::generate_context!())
