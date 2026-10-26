@@ -153,6 +153,7 @@ pub struct AppState {
     credentials: KeychainStore,
     approver: Arc<TauriApprover>,
     pending: Pending,
+    log_paths: LogPathReserver,
 }
 
 impl AppState {
@@ -169,6 +170,7 @@ impl AppState {
                 next: Default::default(),
             }),
             pending,
+            log_paths: LogPathReserver::default(),
         })
     }
 }
@@ -392,21 +394,39 @@ fn sanitize_file_stem(title: &str) -> String {
     }
 }
 
-/// `<dir>/<stem>-<timestamp>.log`。既に存在する場合は `-1`, `-2` … を付けて衝突を避ける。
-fn unique_log_path(dir: &std::path::Path, stem: &str, timestamp: &str) -> PathBuf {
-    let first = dir.join(format!("{stem}-{timestamp}.log"));
-    if !first.exists() {
-        return first;
+/// 既定ログパスの予約簿。
+///
+/// 存在確認だけでは同時に呼ばれたときに同じ候補を返してしまうため、返したパスを記録して以後は避ける。
+#[derive(Debug, Default)]
+pub struct LogPathReserver {
+    reserved: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+impl LogPathReserver {
+    /// `<dir>/<stem>-<timestamp>.log`。存在する、または予約済みなら `-1`, `-2` … を付けて避け、
+    /// 返すパスを予約する。
+    pub fn reserve(&self, dir: &std::path::Path, stem: &str, timestamp: &str) -> PathBuf {
+        // 確認と予約を同じロック内で行い、同時呼び出しでも重複させない。
+        // ロックの毒化は集合の整合性を壊さないため無視してよい。
+        let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
+        let candidates = std::iter::once(dir.join(format!("{stem}-{timestamp}.log")))
+            .chain((1..).map(|n| dir.join(format!("{stem}-{timestamp}-{n}.log"))));
+        for path in candidates {
+            if !path.exists() && reserved.insert(path.clone()) {
+                return path;
+            }
+        }
+        unreachable!("候補は無限に続く")
     }
-    (1..)
-        .map(|n| dir.join(format!("{stem}-{timestamp}-{n}.log")))
-        .find(|p| !p.exists())
-        .expect("無限の候補から必ず見つかる")
 }
 
 /// ログの保存先の既定値（`~/Library/Logs/<identifier>/<title>-<日時>.log`）。ディレクトリも作成する。
 #[tauri::command]
-pub fn default_log_path(app: AppHandle, title: String) -> CommandResult<String> {
+pub fn default_log_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    title: String,
+) -> CommandResult<String> {
     let dir = app
         .path()
         .app_log_dir()
@@ -415,7 +435,9 @@ pub fn default_log_path(app: AppHandle, title: String) -> CommandResult<String> 
         CommandError::Terminal(TerminalError::io(format!("{} の作成", dir.display()), e))
     })?;
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f");
-    let path = unique_log_path(&dir, &sanitize_file_stem(&title), &timestamp.to_string());
+    let path = state
+        .log_paths
+        .reserve(&dir, &sanitize_file_stem(&title), &timestamp.to_string());
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -526,30 +548,61 @@ mod tests {
     }
 
     #[test]
-    fn unique_log_path_is_plain_when_free() {
+    fn reserve_is_plain_when_free() {
         let dir = std::env::temp_dir().join(format!("linkterm-ulp-free-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(
-            unique_log_path(&dir, "alice", "20260101-000000-123"),
+            LogPathReserver::default().reserve(&dir, "alice", "20260101-000000-123"),
             dir.join("alice-20260101-000000-123.log")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn unique_log_path_avoids_existing_files() {
+    fn reserve_avoids_existing_files() {
         let dir = std::env::temp_dir().join(format!("linkterm-ulp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        let reserver = LogPathReserver::default();
         let mut seen = std::collections::HashSet::new();
         for _ in 0..5 {
-            let p = unique_log_path(&dir, "t", "20260101-000000-000");
+            let p = reserver.reserve(&dir, "t", "20260101-000000-000");
             assert!(seen.insert(p.clone()), "重複: {p:?}");
             std::fs::write(&p, "x").unwrap();
         }
         assert!(dir.join("t-20260101-000000-000-1.log").exists());
         assert!(dir.join("t-20260101-000000-000-4.log").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reserve_returns_distinct_paths_even_before_files_exist() {
+        let dir = std::env::temp_dir().join(format!("linkterm-resv-{}", std::process::id()));
+        let reserver = LogPathReserver::default();
+        let a = reserver.reserve(&dir, "t", "20260101-000000-000");
+        let b = reserver.reserve(&dir, "t", "20260101-000000-000");
+        assert_ne!(a, b);
+        assert_eq!(b, dir.join("t-20260101-000000-000-1.log"));
+    }
+
+    #[test]
+    fn concurrent_reservations_never_collide() {
+        let dir = std::env::temp_dir().join(format!("linkterm-resv-conc-{}", std::process::id()));
+        let reserver = Arc::new(LogPathReserver::default());
+        let n = 32;
+        let barrier = Arc::new(std::sync::Barrier::new(n));
+        let handles: Vec<_> = (0..n)
+            .map(|_| {
+                let (r, b, d) = (reserver.clone(), barrier.clone(), dir.clone());
+                std::thread::spawn(move || {
+                    b.wait();
+                    r.reserve(&d, "t", "20260101-000000-000")
+                })
+            })
+            .collect();
+        let paths: std::collections::HashSet<_> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(paths.len(), n);
     }
 
     struct NoopSink;
