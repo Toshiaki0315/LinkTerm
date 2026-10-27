@@ -212,4 +212,17 @@ describe("tabsReducer", () => {
     expect(s.tabs[0].deferStart).toBe(true);
     expect(add(initialTabsState, "b").tabs[0].deferStart).toBeUndefined();
   });
+
+  it("setColor でタブの色を設定・解除できる。同じ色なら state を変えない", () => {
+    let s = add(add(initialTabsState, "a"), "b");
+    s = tabsReducer(s, { type: "setColor", id: "a", color: "red" });
+    expect(s.tabs[0].values.tabColor).toBe("red");
+    expect(s.tabs[1].values.tabColor).toBeUndefined();
+    expect(tabsReducer(s, { type: "setColor", id: "a", color: "red" })).toBe(s);
+    s = tabsReducer(s, { type: "setColor", id: "a", color: undefined });
+    expect(s.tabs[0].values.tabColor).toBeUndefined();
+    expect(tabsReducer(s, { type: "setColor", id: "zzz", color: "red" })).toBe(
+      s,
+    );
+  });
 });

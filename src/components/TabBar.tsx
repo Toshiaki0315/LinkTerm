@@ -2,6 +2,7 @@ import { Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Tab } from "../lib/tabs";
+import { TAB_COLORS, tabColorHex, type TabColorId } from "../lib/tab-colors";
 import { cn } from "../lib/utils";
 import { ContextMenu } from "./ContextMenu";
 import { Button } from "./ui/button";
@@ -18,6 +19,8 @@ interface Props {
   onDuplicate?: (id: string) => void;
   /** 並べ替え（`toIndex` へ移動）。渡さなければドラッグできない。 */
   onMove?: (id: string, toIndex: number) => void;
+  /** タブの色の変更（`undefined` で色なし）。渡さなければ色のメニューを出さない。 */
+  onColor?: (id: string, color: TabColorId | undefined) => void;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -94,6 +97,7 @@ export function TabBar({
   onRename,
   onDuplicate,
   onMove,
+  onColor,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
@@ -101,7 +105,7 @@ export function TabBar({
   );
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
-  const hasMenu = Boolean(onRename || onDuplicate);
+  const hasMenu = Boolean(onRename || onDuplicate || onColor);
 
   const menuItems = (id: string) => [
     ...(onRename
@@ -110,8 +114,26 @@ export function TabBar({
     ...(onDuplicate
       ? [{ label: "複製", onSelect: () => onDuplicate(id) }]
       : []),
+    ...(onColor ? colorItems(id) : []),
     { label: "閉じる", onSelect: () => onClose(id) },
   ];
+
+  const colorItems = (id: string) => {
+    const current = tabs.find((t) => t.id === id)?.values.tabColor;
+    return [
+      ...TAB_COLORS.map((c) => ({
+        label: `色: ${c.label}`,
+        swatch: c.hex,
+        checked: current === c.id,
+        onSelect: () => onColor?.(id, c.id),
+      })),
+      {
+        label: "色を外す",
+        disabled: current === undefined,
+        onSelect: () => onColor?.(id, undefined),
+      },
+    ];
+  };
 
   return (
     <div className="flex items-center gap-1 border-b border-neutral-800 bg-neutral-950 px-2 pt-1">
@@ -156,7 +178,7 @@ export function TabBar({
                 setMenu({ id: tab.id, x: e.clientX, y: e.clientY });
               }}
               className={cn(
-                "group flex items-center gap-1 rounded-t-md border border-b-0 px-2 py-1 text-sm",
+                "group relative flex items-center gap-1 overflow-hidden rounded-t-md border border-b-0 px-2 py-1 text-sm",
                 active
                   ? "border-neutral-700 bg-neutral-900 text-neutral-100"
                   : "border-transparent text-neutral-400 hover:bg-neutral-900/60",
@@ -164,6 +186,14 @@ export function TabBar({
                 overId === tab.id && "border-l-sky-500",
               )}
             >
+              {tabColorHex(tab.values.tabColor) && (
+                <span
+                  aria-hidden
+                  data-tab-color={tab.values.tabColor}
+                  className="absolute inset-x-0 top-0 h-[3px]"
+                  style={{ backgroundColor: tabColorHex(tab.values.tabColor) }}
+                />
+              )}
               {editingId === tab.id ? (
                 <TitleEditor
                   initial={tab.title}

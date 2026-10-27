@@ -572,3 +572,29 @@ describe("ssh リモートフォワード(-R)", () => {
     });
   });
 });
+
+describe("タブの色", () => {
+  it("未指定・空・none は色なし", () => {
+    for (const tabColor of [undefined, "", "none"]) {
+      const v = connectionSchema.parse({ type: "local", tabColor });
+      expect(v.tabColor).toBeUndefined();
+    }
+  });
+
+  it("定義された色を受け付け、未知の色は拒否する", () => {
+    expect(
+      connectionSchema.parse({ type: "local", tabColor: "red" }).tabColor,
+    ).toBe("red");
+    expect(
+      connectionSchema.safeParse({ type: "local", tabColor: "magenta" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("保存済みの値（色なしの古いデータ）も読み込め、色は保たれる", () => {
+    expect(parseSavedValues({ type: "local" })?.tabColor).toBeUndefined();
+    expect(
+      parseSavedValues({ type: "local", tabColor: "blue" })?.tabColor,
+    ).toBe("blue");
+  });
+});

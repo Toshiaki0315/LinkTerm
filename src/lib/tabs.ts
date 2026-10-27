@@ -1,5 +1,6 @@
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { ConnectionValues } from "./connection-schema";
+import type { TabColorId } from "./tab-colors";
 
 export interface Tab {
   id: string;
@@ -25,6 +26,8 @@ export type TabsAction =
   | { type: "activateIndex"; index: number | "last" }
   | { type: "activateRelative"; delta: 1 | -1 }
   | { type: "setStatus"; id: string; status: SessionStatus }
+  /** タブの色を変える。`undefined` で色なしに戻す。 */
+  | { type: "setColor"; id: string; color: TabColorId | undefined }
   /** 接続開始後、保持しているパスワード等の秘密情報を消す。 */
   | { type: "scrubSecrets"; id: string };
 
@@ -100,6 +103,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         tabs: state.tabs.map((t) =>
           t.id === action.id
             ? { ...t, values: { ...tab.values, password: "", passphrase: "" } }
+            : t,
+        ),
+      };
+    }
+    case "setColor": {
+      const tab = state.tabs.find((t) => t.id === action.id);
+      if (!tab || tab.values.tabColor === action.color) return state;
+      return {
+        ...state,
+        tabs: state.tabs.map((t) =>
+          t.id === action.id
+            ? { ...t, values: { ...t.values, tabColor: action.color } }
             : t,
         ),
       };

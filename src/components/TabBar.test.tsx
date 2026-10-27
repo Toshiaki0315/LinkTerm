@@ -197,4 +197,72 @@ describe("TabBar", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  describe("タブの色分け", () => {
+    const colored = (id: string, tabColor?: "red" | "blue"): Tab => ({
+      ...tab(id),
+      values: { type: "local", encoding: "UTF-8", tabColor },
+    });
+
+    it("色を付けたタブにだけ色の帯を表示する", () => {
+      render(
+        <TabBar
+          tabs={[colored("a", "red"), colored("b")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+        />,
+      );
+      const bands = document.querySelectorAll<HTMLElement>("[data-tab-color]");
+      expect(bands).toHaveLength(1);
+      expect(bands[0].dataset.tabColor).toBe("red");
+      expect(bands[0].style.backgroundColor).toMatch(
+        /^(#ef4444|rgb\(239, 68, 68\))$/i,
+      );
+    });
+
+    it("右クリックのメニューから色を選ぶ・解除する", async () => {
+      const user = userEvent.setup();
+      const onColor = vi.fn();
+      render(
+        <TabBar
+          tabs={[colored("a", "blue"), colored("b")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          onColor={onColor}
+        />,
+      );
+      fireEvent.contextMenu(screen.getByRole("tab", { name: /title-b/ }));
+      await user.click(screen.getByRole("menuitemradio", { name: "色: 赤" }));
+      expect(onColor).toHaveBeenCalledWith("b", "red");
+
+      fireEvent.contextMenu(screen.getByRole("tab", { name: /title-a/ }));
+      // 現在の色は選択済みとして示す。
+      expect(
+        screen.getByRole("menuitemradio", { name: "色: 青" }),
+      ).toHaveAttribute("aria-checked", "true");
+      await user.click(screen.getByRole("menuitem", { name: "色を外す" }));
+      expect(onColor).toHaveBeenCalledWith("a", undefined);
+    });
+
+    it("onColor がなければ色のメニューを出さない", () => {
+      render(
+        <TabBar
+          tabs={[colored("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          onDuplicate={() => {}}
+        />,
+      );
+      fireEvent.contextMenu(screen.getByRole("tab", { name: /title-a/ }));
+      expect(
+        screen.queryByRole("menuitem", { name: "色を外す" }),
+      ).not.toBeInTheDocument();
+    });
+  });
 });

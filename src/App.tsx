@@ -395,6 +395,7 @@ function App() {
         onRename={onRenameTab}
         onDuplicate={onDuplicateTab}
         onMove={onMoveTab}
+        onColor={(id, color) => dispatch({ type: "setColor", id, color })}
       />
       {notice && (
         <div

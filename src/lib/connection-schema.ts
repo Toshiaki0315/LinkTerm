@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TAB_COLOR_IDS } from "./tab-colors";
 import type { StartRequest } from "./terminal-api";
 
 export interface TerminalSize {
@@ -53,9 +54,14 @@ const required = (label: string) =>
   z.string().trim().min(1, `${label}を入力してください`);
 
 const encoding = z.enum(ENCODINGS).default("UTF-8");
+/** タブの色（色分け用。接続には影響しない）。 */
+const tabColor = z.preprocess(
+  (v) => (v === "" || v === "none" ? undefined : v),
+  z.enum(TAB_COLOR_IDS).optional(),
+);
 const localEcho = z.enum(["auto", "on", "off"]).default("auto");
 
-const local = z.object({ type: z.literal("local"), encoding });
+const local = z.object({ type: z.literal("local"), encoding, tabColor });
 
 /** `-L` 形式のポートフォワード1件。 */
 export interface ForwardSpec {
@@ -134,6 +140,7 @@ const ssh = z
   .object({
     type: z.literal("ssh"),
     encoding,
+    tabColor,
     host: required("ホスト"),
     port,
     // ~/.ssh/config を使うなら、空でもよい（設定ファイルの User を使う）。
@@ -205,6 +212,7 @@ const ssh = z
 const telnet = z.object({
   type: z.literal("telnet"),
   encoding,
+  tabColor,
   localEcho,
   host: required("ホスト"),
   port,
@@ -215,6 +223,7 @@ const telnet = z.object({
 const serial = z.object({
   type: z.literal("serial"),
   encoding,
+  tabColor,
   localEcho,
   serialPort: required("ポート").refine(
     (v) => v.startsWith("/dev/") && v.length > 5 && !v.includes(".."),

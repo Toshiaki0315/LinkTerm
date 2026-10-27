@@ -5,6 +5,10 @@ export interface ContextMenuItem {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /** 色見本（CSS の色）。付けると色つきの選択肢として表示する。 */
+  swatch?: string;
+  /** 選択済みの選択肢か（`swatch` と併用）。 */
+  checked?: boolean;
 }
 
 interface Props {
@@ -80,7 +84,10 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       {items.map((item) => (
         <button
           key={item.label}
-          role="menuitem"
+          role={item.swatch !== undefined ? "menuitemradio" : "menuitem"}
+          aria-checked={
+            item.swatch !== undefined ? Boolean(item.checked) : undefined
+          }
           disabled={item.disabled}
           className={cn(
             "block w-full px-3 text-left hover:bg-neutral-800 focus:bg-neutral-800 focus:outline-none disabled:opacity-40 disabled:hover:bg-transparent",
@@ -91,7 +98,19 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
             onClose();
           }}
         >
-          {item.label}
+          {item.swatch !== undefined ? (
+            <span className="flex items-center gap-2">
+              <span
+                aria-hidden
+                className="h-3 w-3 rounded-full border border-neutral-600"
+                style={{ backgroundColor: item.swatch }}
+              />
+              {item.label}
+              {item.checked && <span aria-hidden>✓</span>}
+            </span>
+          ) : (
+            item.label
+          )}
         </button>
       ))}
     </div>

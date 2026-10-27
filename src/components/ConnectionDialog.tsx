@@ -19,6 +19,7 @@ import {
   listSshHosts,
   type SavedProfile,
 } from "../lib/terminal-api";
+import { TAB_COLORS } from "../lib/tab-colors";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -37,6 +38,8 @@ interface FormValues {
   profileName: string;
   type: ConnectionValues["type"];
   encoding: (typeof ENCODINGS)[number];
+  /** タブの色。空は色なし。 */
+  tabColor?: string;
   localEcho: "auto" | "on" | "off";
   host: string;
   port: number;
@@ -322,6 +325,19 @@ export function ConnectionDialog({
                 {ENCODINGS.map((e) => (
                   <option key={e} value={e}>
                     {e}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field label="タブの色">
+            {(id) => (
+              <Select id={id} {...register("tabColor")}>
+                <option value="">なし</option>
+                {TAB_COLORS.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
                   </option>
                 ))}
               </Select>

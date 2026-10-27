@@ -561,4 +561,21 @@ describe("ConnectionDialog", () => {
       );
     });
   });
+
+  it("タブの色を選んで接続でき、選ばなければ色なし", async () => {
+    const { user, onSubmit } = setup();
+    await user.selectOptions(screen.getByLabelText("タブの色"), "red");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].tabColor).toBe("red");
+  });
+
+  it("タブの色を「なし」にすると色は付かない", async () => {
+    const { user, onSubmit } = setup();
+    await user.selectOptions(screen.getByLabelText("タブの色"), "blue");
+    await user.selectOptions(screen.getByLabelText("タブの色"), "");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].tabColor).toBeUndefined();
+  });
 });
