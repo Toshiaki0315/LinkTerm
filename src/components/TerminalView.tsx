@@ -1,10 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { DEFAULT_SETTINGS, type Appearance } from "../lib/settings";
+import { copyText } from "../lib/clipboard";
+import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
 import { themeFor } from "../lib/themes";
+
+/** xterm.js のオプションとして設定する外観（コピー設定は含まない）。 */
+type XtermAppearance = Omit<Appearance, "copyOnSelect">;
 
 const DEFAULT_APPEARANCE: Appearance = {
   fontFamily: DEFAULT_SETTINGS.fontFamily,
@@ -12,6 +18,7 @@ const DEFAULT_APPEARANCE: Appearance = {
   scrollback: DEFAULT_SETTINGS.scrollback,
   cursorBlink: DEFAULT_SETTINGS.cursorBlink,
   theme: DEFAULT_SETTINGS.theme,
+  copyOnSelect: DEFAULT_SETTINGS.copyOnSelect,
 };
 
 export interface TerminalHandle {
@@ -27,6 +34,13 @@ export interface TerminalHandle {
   ): boolean;
   /** 検索の強調表示と選択を消す。 */
   clearSearch(): void;
+  hasSelection(): boolean;
+  getSelection(): string;
+  selectAll(): void;
+  /** スクロールバックを含めて画面を消す。 */
+  clear(): void;
+  /** 貼り付け。入力と同じ経路（`onInput`）で接続先へ送られる。 */
+  paste(text: string): void;
   focus(): void;
 }
 
@@ -37,12 +51,20 @@ interface Props {
   appearance?: Appearance;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
+  /** 右クリック。ブラウザ標準のメニューは出さず、画面上の位置を通知する。 */
+  onContextMenu?: (position: { x: number; y: number }) => void;
 }
 
 /** xterm.js のインスタンスは React の再描画の影響を受けないよう ref で保持する。 */
 export const TerminalView = forwardRef<TerminalHandle, Props>(
   function TerminalView(
-    { active, appearance = DEFAULT_APPEARANCE, onInput, onResize },
+    {
+      active,
+      appearance = DEFAULT_APPEARANCE,
+      onInput,
+      onResize,
+      onContextMenu,
+    },
     handleRef,
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -51,9 +73,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const searchRef = useRef<SearchAddon | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
-    const { fontFamily, fontSize, scrollback, cursorBlink, theme } = appearance;
+    const {
+      fontFamily,
+      fontSize,
+      scrollback,
+      cursorBlink,
+      theme,
+      copyOnSelect,
+    } = appearance;
+    const copyOnSelectRef = useRef(copyOnSelect);
+    const onContextMenuRef = useRef(onContextMenu);
     /** 生成時・前回反映時の外観。値が変わったときだけ xterm に設定する。 */
-    const appliedRef = useRef<Appearance>({
+    const appliedRef = useRef<XtermAppearance>({
       fontFamily,
       fontSize,
       scrollback,
@@ -64,7 +95,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     useEffect(() => {
       onInputRef.current = onInput;
       onResizeRef.current = onResize;
-    }, [onInput, onResize]);
+      copyOnSelectRef.current = copyOnSelect;
+      onContextMenuRef.current = onContextMenu;
+    }, [onInput, onResize, copyOnSelect, onContextMenu]);
 
     useEffect(() => {
       const container = containerRef.current;
@@ -79,6 +112,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       const searchAddon = new SearchAddon();
       term.loadAddon(searchAddon);
       searchRef.current = searchAddon;
+      // URL は ⌘+クリックで開く（修飾キーなしのクリックは、選択操作のために開かない）。
+      term.loadAddon(
+        new WebLinksAddon((event, uri) => {
+          if (!event.metaKey || !isOpenableUrl(uri)) return;
+          openExternalUrl(uri).catch((e: unknown) =>
+            console.error("URLを開けませんでした:", e),
+          );
+        }),
+      );
       term.open(container);
       termRef.current = term;
       fitRef.current = fit;
@@ -109,9 +151,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       const term = termRef.current;
       const applied = appliedRef.current;
       const next = { fontFamily, fontSize, scrollback, cursorBlink, theme };
-      const changed = (Object.keys(next) as Array<keyof Appearance>).filter(
-        (key) => applied[key] !== next[key],
-      );
+      const changed = (
+        Object.keys(next) as Array<keyof XtermAppearance>
+      ).filter((key) => applied[key] !== next[key]);
       if (!term || changed.length === 0) return;
       term.options.fontFamily = fontFamily;
       term.options.fontSize = fontSize;
@@ -150,6 +192,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
           searchRef.current?.clearDecorations();
           termRef.current?.clearSelection();
         },
+        hasSelection: () => termRef.current?.hasSelection() ?? false,
+        getSelection: () => termRef.current?.getSelection() ?? "",
+        selectAll: () => termRef.current?.selectAll(),
+        clear: () => termRef.current?.clear(),
+        paste: (text) => termRef.current?.paste(text),
       }),
       [],
     );
@@ -159,6 +206,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         ref={containerRef}
         className="h-full w-full"
         style={{ backgroundColor: themeFor(theme).background }}
+        onMouseUp={() => {
+          // 選択したらコピー（オンのとき）。選択がなければクリップボードを触らない。
+          const term = termRef.current;
+          if (!copyOnSelectRef.current || !term?.hasSelection()) return;
+          copyText(term.getSelection()).catch((e: unknown) =>
+            console.error("コピーに失敗しました:", e),
+          );
+        }}
+        onContextMenu={(e) => {
+          if (!onContextMenuRef.current) return;
+          e.preventDefault();
+          onContextMenuRef.current({ x: e.clientX, y: e.clientY });
+        }}
       />
     );
   },

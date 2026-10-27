@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { render } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const xterm = vi.hoisted(() => {
@@ -25,6 +25,11 @@ vi.mock("@xterm/xterm", () => ({
     write = vi.fn();
     focus = vi.fn();
     clearSelection = vi.fn();
+    hasSelection = vi.fn(() => false);
+    getSelection = vi.fn(() => "");
+    selectAll = vi.fn();
+    clear = vi.fn();
+    paste = vi.fn();
     dispose = vi.fn();
     loadAddon = vi.fn();
     onData = vi.fn((cb: (d: string) => void) => {
@@ -59,6 +64,23 @@ vi.mock("@xterm/addon-search", () => ({
     }
   },
 }));
+const links = vi.hoisted(() => ({
+  handlers: [] as Array<(event: MouseEvent, uri: string) => void>,
+}));
+vi.mock("@xterm/addon-web-links", () => ({
+  WebLinksAddon: class {
+    constructor(handler: (event: MouseEvent, uri: string) => void) {
+      links.handlers.push(handler);
+    }
+  },
+}));
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }));
+vi.mock("../lib/clipboard", () => clipboard);
+const opener = vi.hoisted(() => ({ openExternalUrl: vi.fn() }));
+vi.mock("../lib/open-url", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/open-url")>()),
+  openExternalUrl: opener.openExternalUrl,
+}));
 const fit = vi.hoisted(() => vi.fn());
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
@@ -73,6 +95,9 @@ import { THEMES } from "../lib/themes";
 beforeEach(() => {
   xterm.instances.length = 0;
   search.instances.length = 0;
+  links.handlers.length = 0;
+  clipboard.copyText.mockReset().mockResolvedValue(undefined);
+  opener.openExternalUrl.mockReset().mockResolvedValue(undefined);
   fit.mockClear();
   globalThis.ResizeObserver = class {
     observe = vi.fn();
@@ -153,6 +178,7 @@ describe("TerminalView", () => {
       scrollback: 777,
       cursorBlink: false,
       theme: "dark" as const,
+      copyOnSelect: false,
     };
 
     it("指定した外観で xterm を生成する", () => {
@@ -245,6 +271,7 @@ describe("TerminalView", () => {
       fontSize: 13,
       scrollback: 100,
       cursorBlink: true,
+      copyOnSelect: false,
     };
 
     it("指定したテーマの配色で生成する（既定はダーク）", () => {
@@ -309,6 +336,126 @@ describe("TerminalView", () => {
       expect(
         (container.firstChild as HTMLElement).style.backgroundColor,
       ).not.toBe("");
+    });
+  });
+
+  describe("コピー・貼り付け・右クリック・URL", () => {
+    const appearance = {
+      fontFamily: "Menlo",
+      fontSize: 13,
+      scrollback: 100,
+      cursorBlink: true,
+      theme: "dark" as const,
+    };
+
+    function mount(copyOnSelect = false, onContextMenu = vi.fn()) {
+      const ref = createRef<TerminalHandle>();
+      const { container } = render(
+        <TerminalView
+          ref={ref}
+          active
+          appearance={{ ...appearance, copyOnSelect }}
+          onInput={() => {}}
+          onResize={() => {}}
+          onContextMenu={onContextMenu}
+        />,
+      );
+      return {
+        handle: ref.current!,
+        root: container.firstChild as HTMLElement,
+        onContextMenu,
+      };
+    }
+
+    it("選択したらコピー: オンのとき、マウスを離した時点の選択をコピーする", () => {
+      const { root } = mount(true);
+      const term = xterm.instances[0];
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("selected text");
+      fireEvent.mouseUp(root);
+      expect(clipboard.copyText).toHaveBeenCalledWith("selected text");
+    });
+
+    it("選択がなければコピーしない（クリップボードを書き換えない）", () => {
+      const { root } = mount(true);
+      fireEvent.mouseUp(root);
+      expect(clipboard.copyText).not.toHaveBeenCalled();
+    });
+
+    it("オフのときは、選択してもコピーしない", () => {
+      const { root } = mount(false);
+      const term = xterm.instances[0];
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("selected text");
+      fireEvent.mouseUp(root);
+      expect(clipboard.copyText).not.toHaveBeenCalled();
+    });
+
+    it("コピーの失敗は握りつぶさずコンソールに残す（画面は壊さない）", async () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      clipboard.copyText.mockRejectedValue(new Error("denied"));
+      const { root } = mount(true);
+      xterm.instances[0].hasSelection.mockReturnValue(true);
+      xterm.instances[0].getSelection.mockReturnValue("x");
+      fireEvent.mouseUp(root);
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      spy.mockRestore();
+    });
+
+    it("ハンドルから選択の取得・全選択・クリア・貼り付けができる", () => {
+      const { handle } = mount();
+      const term = xterm.instances[0];
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("abc");
+      expect(handle.hasSelection()).toBe(true);
+      expect(handle.getSelection()).toBe("abc");
+      handle.selectAll();
+      expect(term.selectAll).toHaveBeenCalled();
+      handle.clear();
+      expect(term.clear).toHaveBeenCalled();
+      handle.paste("pasted\ntext");
+      expect(term.paste).toHaveBeenCalledWith("pasted\ntext");
+    });
+
+    it("右クリックで、ブラウザ標準のメニューではなく、位置つきで通知する", () => {
+      const { root, onContextMenu } = mount();
+      const notPrevented = fireEvent.contextMenu(root, {
+        clientX: 40,
+        clientY: 55,
+      });
+      expect(notPrevented).toBe(false); // preventDefault された
+      expect(onContextMenu).toHaveBeenCalledWith({ x: 40, y: 55 });
+    });
+
+    it("URL: ⌘+クリックで開く。⌘なしのクリック（選択操作）では開かない", () => {
+      mount();
+      const open = links.handlers[0];
+      open(new MouseEvent("click", { metaKey: false }), "https://example.com");
+      expect(opener.openExternalUrl).not.toHaveBeenCalled();
+      open(new MouseEvent("click", { metaKey: true }), "https://example.com");
+      expect(opener.openExternalUrl).toHaveBeenCalledWith(
+        "https://example.com",
+      );
+    });
+
+    it("URL: http / https 以外は、⌘+クリックでも開かない", () => {
+      mount();
+      const open = links.handlers[0];
+      open(new MouseEvent("click", { metaKey: true }), "javascript:alert(1)");
+      open(new MouseEvent("click", { metaKey: true }), "file:///etc/passwd");
+      expect(opener.openExternalUrl).not.toHaveBeenCalled();
+    });
+
+    it("URLを開けなかった場合はコンソールに残す", async () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      opener.openExternalUrl.mockRejectedValue(new Error("no browser"));
+      mount();
+      links.handlers[0](
+        new MouseEvent("click", { metaKey: true }),
+        "https://example.com",
+      );
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      spy.mockRestore();
     });
   });
 

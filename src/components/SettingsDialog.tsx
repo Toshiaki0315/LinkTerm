@@ -35,6 +35,7 @@ const formSchema = z
     scrollback: scrollbackSchema,
     cursorBlink: z.boolean(),
     theme: z.enum(THEME_IDS),
+    copyOnSelect: z.boolean(),
     startupKind: z.enum(["none", "local", "profile"]),
     startupProfileId: z.string(),
   })
@@ -56,6 +57,7 @@ const toForm = (s: Settings): FormValues => ({
   scrollback: s.scrollback,
   cursorBlink: s.cursorBlink,
   theme: s.theme,
+  copyOnSelect: s.copyOnSelect,
   startupKind: s.startup.kind,
   startupProfileId: s.startup.kind === "profile" ? s.startup.profileId : "",
 });
@@ -66,6 +68,7 @@ const toSettings = (v: z.output<typeof formSchema>): Settings => ({
   scrollback: v.scrollback,
   cursorBlink: v.cursorBlink,
   theme: v.theme,
+  copyOnSelect: v.copyOnSelect,
   startup:
     v.startupKind === "profile"
       ? { kind: "profile", profileId: v.startupProfileId }
@@ -306,6 +309,10 @@ export function SettingsDialog({
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register("cursorBlink")} />
             カーソルを点滅させる
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" {...register("copyOnSelect")} />
+            選択したテキストを自動的にコピーする
           </label>
           <Row label="起動時に開くターミナル">
             {(id) => (

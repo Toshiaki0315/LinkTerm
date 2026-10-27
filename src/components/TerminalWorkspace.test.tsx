@@ -105,6 +105,7 @@ describe("TerminalWorkspace", () => {
           scrollback: 10,
           cursorBlink: true,
           theme: "solarized-dark",
+          copyOnSelect: false,
         }}
       />,
     );

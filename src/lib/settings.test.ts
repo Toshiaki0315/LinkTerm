@@ -17,6 +17,7 @@ describe("settingsSchema", () => {
       scrollback: 10000,
       cursorBlink: true,
       theme: "dark",
+      copyOnSelect: false,
       startup: { kind: "none" },
     });
   });

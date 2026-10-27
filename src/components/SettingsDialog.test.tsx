@@ -67,6 +67,7 @@ describe("SettingsDialog", () => {
         scrollback: 5000,
         cursorBlink: false,
         theme: "dracula",
+        copyOnSelect: false,
         startup: { kind: "local" },
       },
     });
@@ -241,6 +242,7 @@ describe("SettingsDialog", () => {
       scrollback: 2000,
       cursorBlink: false,
       theme: "dark",
+      copyOnSelect: false,
       startup: { kind: "local" },
     });
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -391,6 +393,32 @@ describe("SettingsDialog", () => {
       expect(screen.getByLabelText("配色テーマ")).toHaveValue("monokai");
       await user.click(screen.getByRole("button", { name: "初期設定に戻す" }));
       expect(screen.getByLabelText("配色テーマ")).toHaveValue("dark");
+    });
+  });
+
+  describe("選択したらコピー", () => {
+    it("既定はオフで、オンにして保存できる", async () => {
+      const { user, onSave } = setup();
+      const checkbox =
+        screen.getByLabelText("選択したテキストを自動的にコピーする");
+      expect(checkbox).not.toBeChecked();
+      await user.click(checkbox);
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].copyOnSelect).toBe(true);
+    });
+
+    it("保存済みの値を表示し、初期設定に戻すとオフになる", async () => {
+      const { user } = setup({
+        settings: { ...DEFAULT_SETTINGS, copyOnSelect: true },
+      });
+      expect(
+        screen.getByLabelText("選択したテキストを自動的にコピーする"),
+      ).toBeChecked();
+      await user.click(screen.getByRole("button", { name: "初期設定に戻す" }));
+      expect(
+        screen.getByLabelText("選択したテキストを自動的にコピーする"),
+      ).not.toBeChecked();
     });
   });
 

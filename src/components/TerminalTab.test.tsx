@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionValues } from "../lib/connection-schema";
@@ -29,20 +29,43 @@ const termSearch = vi.hoisted(() => ({
   find: vi.fn(),
   clearSearch: vi.fn(),
   focus: vi.fn(),
+  hasSelection: vi.fn(() => false),
+  getSelection: vi.fn(() => ""),
+  selectAll: vi.fn(),
+  clear: vi.fn(),
+  paste: vi.fn(),
 }));
-const viewProps = vi.hoisted(() => ({ onInput: (_d: string) => {} }));
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn(), pasteText: vi.fn() }));
+vi.mock("../lib/clipboard", () => clipboard);
+const viewProps = vi.hoisted(() => ({
+  onInput: (_d: string) => {},
+  onContextMenu: undefined as
+    undefined | ((p: { x: number; y: number }) => void),
+}));
 vi.mock("./TerminalView", async () => {
   const React = await import("react");
   return {
     TerminalView: React.forwardRef(
-      (props: { onInput: (d: string) => void }, ref: React.Ref<unknown>) => {
+      (
+        props: {
+          onInput: (d: string) => void;
+          onContextMenu?: (p: { x: number; y: number }) => void;
+        },
+        ref: React.Ref<unknown>,
+      ) => {
         viewProps.onInput = props.onInput;
+        viewProps.onContextMenu = props.onContextMenu;
         React.useImperativeHandle(ref, () => ({
           write: termWrite,
           size: () => ({ cols: 100, rows: 30 }),
           focus: termSearch.focus,
           find: termSearch.find,
           clearSearch: termSearch.clearSearch,
+          hasSelection: termSearch.hasSelection,
+          getSelection: termSearch.getSelection,
+          selectAll: termSearch.selectAll,
+          clear: termSearch.clear,
+          paste: termSearch.paste,
         }));
         return <div data-testid="term" />;
       },
@@ -105,6 +128,10 @@ beforeEach(() => {
   };
   session.start.mockResolvedValue(undefined);
   session.write.mockResolvedValue(undefined);
+  clipboard.copyText.mockReset().mockResolvedValue(undefined);
+  clipboard.pasteText.mockReset().mockResolvedValue("pasted text");
+  termSearch.hasSelection.mockReturnValue(false);
+  termSearch.getSelection.mockReturnValue("");
   session.resize.mockResolvedValue(undefined);
 });
 
@@ -404,6 +431,88 @@ describe("TerminalTab", () => {
       await user.click(screen.getByRole("button", { name: "検索を閉じる" }));
       expect(termSearch.clearSearch).toHaveBeenCalled();
       expect(termSearch.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("右クリックメニュー", () => {
+    function openMenu() {
+      act(() => viewProps.onContextMenu!({ x: 30, y: 40 }));
+    }
+
+    it("コピー・貼り付け・すべて選択・検索・画面のクリアを表示する", () => {
+      setup(telnet);
+      openMenu();
+      const names = screen.getAllByRole("menuitem").map((i) => i.textContent);
+      expect(names).toEqual([
+        "コピー",
+        "貼り付け",
+        "すべて選択",
+        "検索…",
+        "画面をクリア",
+      ]);
+    });
+
+    it("選択がなければ「コピー」は選べない", () => {
+      setup(telnet);
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: "コピー" })).toBeDisabled();
+    });
+
+    it("選択があれば「コピー」でクリップボードへコピーする", async () => {
+      termSearch.hasSelection.mockReturnValue(true);
+      termSearch.getSelection.mockReturnValue("selected");
+      setup(telnet);
+      openMenu();
+      await userEvent.click(screen.getByRole("menuitem", { name: "コピー" }));
+      expect(clipboard.copyText).toHaveBeenCalledWith("selected");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("「貼り付け」でクリップボードの内容を端末へ貼り付ける", async () => {
+      setup(telnet);
+      openMenu();
+      await userEvent.click(screen.getByRole("menuitem", { name: "貼り付け" }));
+      await waitFor(() =>
+        expect(termSearch.paste).toHaveBeenCalledWith("pasted text"),
+      );
+    });
+
+    it("クリップボードが空なら貼り付けない", async () => {
+      clipboard.pasteText.mockResolvedValue("");
+      setup(telnet);
+      openMenu();
+      await userEvent.click(screen.getByRole("menuitem", { name: "貼り付け" }));
+      await waitFor(() => expect(clipboard.pasteText).toHaveBeenCalled());
+      expect(termSearch.paste).not.toHaveBeenCalled();
+    });
+
+    it("「すべて選択」「画面をクリア」「検索…」", async () => {
+      setup(telnet);
+      openMenu();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "すべて選択" }),
+      );
+      expect(termSearch.selectAll).toHaveBeenCalled();
+      openMenu();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "画面をクリア" }),
+      );
+      expect(termSearch.clear).toHaveBeenCalled();
+      openMenu();
+      await userEvent.click(screen.getByRole("menuitem", { name: "検索…" }));
+      expect(screen.getByRole("search")).toBeInTheDocument();
+    });
+
+    it("コピーに失敗しても画面は壊さず、理由をコンソールに残す", async () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      clipboard.copyText.mockRejectedValue(new Error("denied"));
+      termSearch.hasSelection.mockReturnValue(true);
+      termSearch.getSelection.mockReturnValue("x");
+      setup(telnet);
+      openMenu();
+      await userEvent.click(screen.getByRole("menuitem", { name: "コピー" }));
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      spy.mockRestore();
     });
   });
 });

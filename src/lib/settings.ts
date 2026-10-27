@@ -66,6 +66,7 @@ export const settingsSchema = z.object({
   scrollback: scrollbackSchema,
   cursorBlink: z.boolean(),
   theme: z.enum(THEME_IDS),
+  copyOnSelect: z.boolean(),
   startup: startupSchema,
 });
 
@@ -91,11 +92,17 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollback: 10_000,
   cursorBlink: true,
   theme: "dark",
+  copyOnSelect: false,
   startup: { kind: "none" },
 };
 
 /** ターミナルの見た目に関わる設定。 */
 export type Appearance = Pick<
   Settings,
-  "fontFamily" | "fontSize" | "scrollback" | "cursorBlink" | "theme"
+  | "fontFamily"
+  | "fontSize"
+  | "scrollback"
+  | "cursorBlink"
+  | "theme"
+  | "copyOnSelect"
 >;

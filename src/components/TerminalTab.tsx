@@ -7,6 +7,8 @@ import {
 } from "../lib/connection-schema";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance } from "../lib/settings";
+import { copyText, pasteText } from "../lib/clipboard";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { EchoControl } from "./EchoControl";
 import { SearchBar } from "./SearchBar";
 import { LogControl } from "./LogControl";
@@ -68,6 +70,40 @@ export function TerminalTab({
     setSeenFindSignal(findSignal);
     setSearchOpen(true);
   }
+  /** 右クリックメニュー。選択の有無は、開いた時点のものを使う。 */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
+  const logError = (what: string) => (e: unknown) =>
+    console.error(`${what}に失敗しました:`, e);
+  /** メニュー項目を作る。右クリックのイベント処理の中で呼ぶ（ref を描画中に読まないため）。 */
+  const buildMenuItems = (hasSelection: boolean): ContextMenuItem[] => [
+    {
+      label: "コピー",
+      disabled: !hasSelection,
+      onSelect: () => {
+        copyText(termRef.current?.getSelection() ?? "").catch(
+          logError("コピー"),
+        );
+      },
+    },
+    {
+      label: "貼り付け",
+      onSelect: () => {
+        pasteText()
+          .then((text) => {
+            if (text !== "") termRef.current?.paste(text);
+          })
+          .catch(logError("貼り付け"));
+      },
+    },
+    { label: "すべて選択", onSelect: () => termRef.current?.selectAll() },
+    { label: "検索…", onSelect: () => setSearchOpen(true) },
+    { label: "画面をクリア", onSelect: () => termRef.current?.clear() },
+  ];
+
   const closeSearch = () => {
     setSearchOpen(false);
     termRef.current?.clearSearch();
@@ -171,7 +207,25 @@ export function TerminalTab({
         appearance={appearance}
         onInput={onInput}
         onResize={onResize}
+        onContextMenu={({ x, y }) =>
+          setMenu({
+            x,
+            y,
+            items: buildMenuItems(termRef.current?.hasSelection() ?? false),
+          })
+        }
       />
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.items}
+          onClose={() => {
+            setMenu(null);
+            termRef.current?.focus();
+          }}
+        />
+      )}
       {(status === "error" || status === "closed") && (
         <div
           role="status"
