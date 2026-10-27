@@ -2,7 +2,8 @@
 //! 鍵・踏み台（`ProxyJump`）を解決する。
 //!
 //! 対応するのは `Host` / `HostName` / `User` / `Port` / `IdentityFile` / `ProxyJump` と、
-//! `Host` 行のワイルドカード（`*` `?`）・否定（`!`）。`Match` と `Include` は対応しない（読み飛ばす）。
+//! `Host` 行のワイルドカード（`*` `?`）・否定（`!`）。`Include`（ファイル名部分のワイルドカード可）と、`Match all` / `Match host` / `Match originalhost`
+//! にも対応する。それ以外の `Match` 条件（`user` `exec` など）は評価できないので、どのホストにも当てはめない。
 //! OpenSSH と同じく、同じ項目は先に見つかった値を優先し、`IdentityFile` は全部を集める。
 
 use std::path::{Path, PathBuf};
@@ -203,6 +204,118 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// `Match` 行の条件を、`Host` と同じパターン一覧にする。
+/// 対応するのは `all` と、単独の `host` / `originalhost`。それ以外（`user` `exec` や複数条件）は
+/// 評価できないので、どのホストにも当てはまらない（空の一覧）ものとして扱う。
+fn match_patterns(args: &[String]) -> Option<Vec<String>> {
+    let lower: Vec<String> = args.iter().map(|a| a.to_ascii_lowercase()).collect();
+    match lower.as_slice() {
+        [all] if all == "all" => None,
+        [key, _] if key == "host" || key == "originalhost" => Some(
+            args[1]
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        ),
+        _ => Some(Vec::new()),
+    }
+}
+
+/// `Include` の最大のたどり深さ。
+const MAX_INCLUDE_DEPTH: usize = 8;
+
+/// `text` 中の `Include` 行を、その位置にファイルの内容を差し込んで展開する。
+/// 相対パスは `base`（設定ファイルのあるディレクトリ）から、`~` は `home` から解決する。
+/// ファイル名部分のワイルドカード（`*` `?`）に対応し、名前順に差し込む。
+/// 読めない／存在しないファイルは読み飛ばす。差し込む総量は `budget` を超えられない。
+fn expand_includes(
+    text: &str,
+    base: &Path,
+    home: Option<&Path>,
+    depth: usize,
+    budget: &mut u64,
+    seen: &mut Vec<PathBuf>,
+    origin: &Path,
+) -> Result<String, SshConfigError> {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let args = match split_line(line) {
+            Some((keyword, args)) if keyword == "include" && depth < MAX_INCLUDE_DEPTH => args,
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+        };
+        for arg in args {
+            for file in include_targets(&arg, base, home) {
+                let Ok(canonical) = file.canonicalize() else {
+                    continue;
+                };
+                if seen.contains(&canonical) {
+                    continue;
+                }
+                let Ok(metadata) = std::fs::metadata(&canonical) else {
+                    continue;
+                };
+                if metadata.len() > *budget {
+                    return Err(SshConfigError::TooLarge {
+                        path: origin.display().to_string(),
+                        limit: MAX_CONFIG_BYTES,
+                    });
+                }
+                *budget -= metadata.len();
+                let Ok(bytes) = std::fs::read(&canonical) else {
+                    continue;
+                };
+                let included = String::from_utf8_lossy(&bytes);
+                seen.push(canonical.clone());
+                let expanded =
+                    expand_includes(&included, base, home, depth + 1, budget, seen, origin)?;
+                seen.pop();
+                out.push_str(&expanded);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `Include` の引数1つが指すファイルの一覧（ワイルドカード展開済み、名前順）。
+fn include_targets(arg: &str, base: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let expanded = expand_tilde(arg, home);
+    let path = if expanded.is_absolute() {
+        expanded
+    } else {
+        base.join(expanded)
+    };
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    if !name.contains(['*', '?']) {
+        return if path.is_file() {
+            vec![path]
+        } else {
+            Vec::new()
+        };
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| glob_match(name, n))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 /// `Host` 行のパターン一覧が `host` に当てはまるか。否定（`!`）に当たれば全体が不一致。
 fn patterns_match(patterns: &[String], host: &str) -> bool {
     let mut matched = false;
@@ -223,22 +336,25 @@ impl SshConfig {
     /// 設定ファイルの内容を解析する。解釈できない行は読み飛ばす。`home` は `~` の展開に使う。
     pub fn parse(text: &str, home: Option<&Path>) -> Self {
         let mut blocks = vec![Block::default()];
-        // `Match` 区画の設定は対応しないので、次の `Host` まで読み飛ばす。
-        let mut skipping = false;
         for line in text.lines() {
             let Some((keyword, args)) = split_line(line) else {
                 continue;
             };
             match keyword.as_str() {
                 "host" => {
-                    skipping = false;
                     blocks.push(Block {
                         patterns: Some(args),
                         options: Vec::new(),
                     });
                 }
-                "match" => skipping = true,
-                _ if skipping => {}
+                "match" => {
+                    blocks.push(Block {
+                        patterns: match_patterns(&args),
+                        options: Vec::new(),
+                    });
+                }
+                // `Include` は `load` が展開済み。`parse` に直接渡された分は無視する。
+                "include" => {}
                 key => {
                     let keyword = match key {
                         "hostname" => Keyword::HostName,
@@ -286,7 +402,12 @@ impl SshConfig {
             });
         }
         let bytes = std::fs::read(path).map_err(io)?;
-        Ok(Self::parse(&String::from_utf8_lossy(&bytes), home))
+        let text = String::from_utf8_lossy(&bytes);
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut budget = MAX_CONFIG_BYTES - metadata.len();
+        let mut seen: Vec<PathBuf> = path.canonicalize().into_iter().collect();
+        let expanded = expand_includes(&text, base, home, 0, &mut budget, &mut seen, path)?;
+        Ok(Self::parse(&expanded, home))
     }
 
     fn expand_path(&self, value: &str) -> PathBuf {
@@ -671,10 +792,130 @@ mod tests {
     }
 
     #[test]
-    fn match_and_include_are_ignored_without_breaking_following_blocks() {
-        let c = cfg("Include ~/.ssh/other\nMatch host foo\n  User matched\nHost a\n  User real\n");
+    fn match_host_applies_to_matching_hosts_only() {
+        let c = cfg("Match host foo,bar*\n  User matched\nHost a\n  User real\n");
+        assert_eq!(c.resolve("foo").user.as_deref(), Some("matched"));
+        assert_eq!(c.resolve("barista").user.as_deref(), Some("matched"));
         assert_eq!(c.resolve("a").user.as_deref(), Some("real"));
-        assert_eq!(c.resolve("foo").user, None);
+        assert_eq!(c.resolve("zzz").user, None);
+    }
+
+    #[test]
+    fn match_host_supports_negation_and_originalhost() {
+        let c = cfg("Match originalhost web*,!web2\n  Port 2200\n");
+        assert_eq!(c.resolve("web1").port, Some(2200));
+        assert_eq!(c.resolve("web2").port, None);
+    }
+
+    #[test]
+    fn match_all_applies_to_every_host() {
+        let c = cfg("Match all\n  User everyone\n");
+        assert_eq!(c.resolve("x").user.as_deref(), Some("everyone"));
+    }
+
+    #[test]
+    fn unsupported_match_criteria_never_match() {
+        let c = cfg(
+            "Match user root\n  Port 1\nMatch host a user b\n  Port 2\nMatch exec \"true\"\n  Port 3\nHost a\n  User real\n",
+        );
+        let r = c.resolve("a");
+        assert_eq!(r.port, None);
+        assert_eq!(r.user.as_deref(), Some("real"));
+    }
+
+    #[test]
+    fn match_does_not_leak_into_following_host_blocks() {
+        let c = cfg("Match host a\n  User m\nHost b\n  Port 5\n");
+        assert_eq!(c.resolve("b").user, None);
+        assert_eq!(c.resolve("b").port, Some(5));
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("linkterm-sshcfg-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn include_splices_files_relative_to_the_config_directory() {
+        let dir = temp_dir("inc");
+        std::fs::write(dir.join("extra"), "Host inc\n  User from_include\n").unwrap();
+        std::fs::write(dir.join("config"), "Include extra\nHost a\n  User u\n").unwrap();
+        let c = SshConfig::load(&dir.join("config"), None).unwrap();
+        assert_eq!(c.resolve("inc").user.as_deref(), Some("from_include"));
+        assert_eq!(c.resolve("a").user.as_deref(), Some("u"));
+        assert_eq!(c.host_aliases(), vec!["inc", "a"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_supports_wildcards_in_the_file_name_in_sorted_order() {
+        let dir = temp_dir("glob");
+        std::fs::create_dir_all(dir.join("conf.d")).unwrap();
+        std::fs::write(dir.join("conf.d/20-b"), "Host b\n  User b\n").unwrap();
+        std::fs::write(dir.join("conf.d/10-a"), "Host a\n  User a\n").unwrap();
+        std::fs::write(dir.join("config"), "Include conf.d/*\n").unwrap();
+        let c = SshConfig::load(&dir.join("config"), None).unwrap();
+        assert_eq!(c.host_aliases(), vec!["a", "b"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_accepts_absolute_and_tilde_paths() {
+        let dir = temp_dir("abs");
+        std::fs::write(dir.join("extra"), "Host t\n  Port 7\n").unwrap();
+        std::fs::write(
+            dir.join("config"),
+            format!("Include {}\nInclude ~/extra\n", dir.join("extra").display()),
+        )
+        .unwrap();
+        let c = SshConfig::load(&dir.join("config"), Some(&dir)).unwrap();
+        assert_eq!(c.resolve("t").port, Some(7));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_cycles_and_missing_files_are_harmless() {
+        let dir = temp_dir("cycle");
+        std::fs::write(
+            dir.join("config"),
+            "Include config\nInclude nothing\nHost a\n  User u\n",
+        )
+        .unwrap();
+        let c = SshConfig::load(&dir.join("config"), None).unwrap();
+        assert_eq!(c.resolve("a").user.as_deref(), Some("u"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_inside_a_host_block_stays_in_that_block() {
+        let dir = temp_dir("inblock");
+        std::fs::write(dir.join("opts"), "User inner\n").unwrap();
+        std::fs::write(
+            dir.join("config"),
+            "Host a\n  Include opts\nHost b\n  Port 1\n",
+        )
+        .unwrap();
+        let c = SshConfig::load(&dir.join("config"), None).unwrap();
+        assert_eq!(c.resolve("a").user.as_deref(), Some("inner"));
+        assert_eq!(c.resolve("b").user, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_total_size_is_limited() {
+        let dir = temp_dir("size");
+        let line = format!("# {}\n", "x".repeat(60_000));
+        std::fs::write(dir.join("big"), line.repeat(10)).unwrap();
+        let incs = "Include big\n".repeat(30);
+        std::fs::write(dir.join("config"), incs).unwrap();
+        assert!(matches!(
+            SshConfig::load(&dir.join("config"), None),
+            Err(SshConfigError::TooLarge { .. })
+        ));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
