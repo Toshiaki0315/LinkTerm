@@ -14,8 +14,11 @@ export interface TabsState {
 }
 
 export type TabsAction =
-  | { type: "add"; tab: Omit<Tab, "status"> }
+  | { type: "add"; tab: Omit<Tab, "status">; afterId?: string }
   | { type: "close"; id: string }
+  | { type: "rename"; id: string; title: string }
+  /** タブを `toIndex` の位置へ移動する（並べ替え）。アクティブなタブは変わらない。 */
+  | { type: "move"; id: string; toIndex: number }
   | { type: "activate"; id: string }
   | { type: "activateIndex"; index: number | "last" }
   | { type: "activateRelative"; delta: 1 | -1 }
@@ -23,15 +26,45 @@ export type TabsAction =
   /** 接続開始後、保持しているパスワード等の秘密情報を消す。 */
   | { type: "scrubSecrets"; id: string };
 
+/** タブ名の最大文字数。 */
+export const MAX_TITLE_CHARS = 60;
+
 export const initialTabsState: TabsState = { tabs: [], activeId: null };
 
 export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
   switch (action.type) {
-    case "add":
+    case "add": {
+      const added: Tab = { ...action.tab, status: "connecting" };
+      const after = state.tabs.findIndex((t) => t.id === action.afterId);
+      const tabs =
+        after < 0
+          ? [...state.tabs, added]
+          : [
+              ...state.tabs.slice(0, after + 1),
+              added,
+              ...state.tabs.slice(after + 1),
+            ];
+      return { tabs, activeId: added.id };
+    }
+    case "rename": {
+      const title = [...action.title.trim()].slice(0, MAX_TITLE_CHARS).join("");
+      const tab = state.tabs.find((t) => t.id === action.id);
+      if (!tab || title === "" || title === tab.title) return state;
       return {
-        tabs: [...state.tabs, { ...action.tab, status: "connecting" }],
-        activeId: action.tab.id,
+        ...state,
+        tabs: state.tabs.map((t) => (t.id === action.id ? { ...t, title } : t)),
       };
+    }
+    case "move": {
+      const from = state.tabs.findIndex((t) => t.id === action.id);
+      if (from < 0) return state;
+      const to = Math.max(0, Math.min(action.toIndex, state.tabs.length - 1));
+      if (to === from) return state;
+      const tabs = [...state.tabs];
+      const [moved] = tabs.splice(from, 1);
+      tabs.splice(to, 0, moved);
+      return { ...state, tabs };
+    }
     case "activate":
       return state.tabs.some((t) => t.id === action.id)
         ? { ...state, activeId: action.id }

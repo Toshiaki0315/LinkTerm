@@ -262,6 +262,36 @@ function App() {
     [reloadProfiles],
   );
 
+  const onRenameTab = useCallback((id: string, title: string) => {
+    dispatch({ type: "rename", id, title });
+  }, []);
+
+  const onMoveTab = useCallback((id: string, toIndex: number) => {
+    dispatch({ type: "move", id, toIndex });
+  }, []);
+
+  /** タブを複製する。保持していない秘密情報（SSHのパスワード）が要る場合は、入力用のダイアログを開く。 */
+  const onDuplicateTab = useCallback(
+    (id: string) => {
+      const tab = state.tabs.find((t) => t.id === id);
+      if (!tab) return;
+      const needsSecret =
+        tab.values.type === "ssh" &&
+        tab.values.authKind === "password" &&
+        tab.values.password === "";
+      if (needsSecret) {
+        setDialog({ initialValues: tab.values });
+        return;
+      }
+      dispatch({
+        type: "add",
+        afterId: id,
+        tab: { id: crypto.randomUUID(), title: tab.title, values: tab.values },
+      });
+    },
+    [state.tabs],
+  );
+
   const onSecretsConsumed = useCallback((id: string) => {
     dispatch({ type: "scrubSecrets", id });
   }, []);
@@ -295,6 +325,9 @@ function App() {
         onActivate={(id) => dispatch({ type: "activate", id })}
         onClose={(id) => dispatch({ type: "close", id })}
         onNew={() => setDialog({})}
+        onRename={onRenameTab}
+        onDuplicate={onDuplicateTab}
+        onMove={onMoveTab}
       />
       {notice && (
         <div

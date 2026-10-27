@@ -118,4 +118,84 @@ describe("tabsReducer", () => {
     expect(tabsReducer(s, { type: "scrubSecrets", id: "a" })).toBe(s);
     expect(tabsReducer(s, { type: "scrubSecrets", id: "zzz" })).toBe(s);
   });
+
+  it("add に afterId を付けると、そのタブの右隣へ挿入する", () => {
+    let s = add(add(add(initialTabsState, "a"), "b"), "c");
+    s = tabsReducer(s, {
+      type: "add",
+      afterId: "a",
+      tab: { id: "x", title: "x", values: local },
+    });
+    expect(s.tabs.map((t) => t.id)).toEqual(["a", "x", "b", "c"]);
+    expect(s.activeId).toBe("x");
+    s = tabsReducer(s, {
+      type: "add",
+      afterId: "no-such-tab",
+      tab: { id: "y", title: "y", values: local },
+    });
+    expect(s.tabs.map((t) => t.id)).toEqual(["a", "x", "b", "c", "y"]);
+  });
+
+  describe("rename", () => {
+    it("タブ名を変更する（前後の空白は除く）", () => {
+      let s = add(initialTabsState, "a");
+      s = tabsReducer(s, {
+        type: "rename",
+        id: "a",
+        title: "  本番サーバー  ",
+      });
+      expect(s.tabs[0].title).toBe("本番サーバー");
+    });
+
+    it("空・空白だけの名前、変化なし、存在しないタブは無視する", () => {
+      const s = add(initialTabsState, "a");
+      expect(tabsReducer(s, { type: "rename", id: "a", title: "" })).toBe(s);
+      expect(tabsReducer(s, { type: "rename", id: "a", title: "   " })).toBe(s);
+      expect(tabsReducer(s, { type: "rename", id: "a", title: "a" })).toBe(s);
+      expect(tabsReducer(s, { type: "rename", id: "zzz", title: "x" })).toBe(s);
+    });
+
+    it("長すぎる名前は60文字に切り詰める", () => {
+      const s = tabsReducer(add(initialTabsState, "a"), {
+        type: "rename",
+        id: "a",
+        title: "あ".repeat(100),
+      });
+      expect([...s.tabs[0].title]).toHaveLength(60);
+    });
+  });
+
+  describe("move（並べ替え）", () => {
+    const abc = () => add(add(add(initialTabsState, "a"), "b"), "c");
+    const order = (s: TabsState) => s.tabs.map((t) => t.id).join("");
+
+    it("指定位置へ移動し、アクティブなタブは変わらない", () => {
+      const s = abc();
+      expect(s.activeId).toBe("c");
+      expect(order(tabsReducer(s, { type: "move", id: "a", toIndex: 2 }))).toBe(
+        "bca",
+      );
+      expect(order(tabsReducer(s, { type: "move", id: "c", toIndex: 0 }))).toBe(
+        "cab",
+      );
+      expect(order(tabsReducer(s, { type: "move", id: "b", toIndex: 2 }))).toBe(
+        "acb",
+      );
+      expect(
+        tabsReducer(s, { type: "move", id: "a", toIndex: 2 }).activeId,
+      ).toBe("c");
+    });
+
+    it("範囲外は端に丸める。同じ位置・存在しないタブは何もしない", () => {
+      const s = abc();
+      expect(
+        order(tabsReducer(s, { type: "move", id: "a", toIndex: 99 })),
+      ).toBe("bca");
+      expect(
+        order(tabsReducer(s, { type: "move", id: "c", toIndex: -5 })),
+      ).toBe("cab");
+      expect(tabsReducer(s, { type: "move", id: "b", toIndex: 1 })).toBe(s);
+      expect(tabsReducer(s, { type: "move", id: "zzz", toIndex: 0 })).toBe(s);
+    });
+  });
 });

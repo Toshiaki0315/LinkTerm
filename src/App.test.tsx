@@ -1,4 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -559,6 +565,98 @@ describe("App", () => {
       await screen.findByRole("dialog");
       await user.keyboard("{Meta>}f{/Meta}");
       expect(signals()).toEqual(["0"]);
+    });
+  });
+
+  describe("タブの名前変更・複製・並べ替え", () => {
+    async function addLocalTab(user: ReturnType<typeof userEvent.setup>) {
+      const before = screen.queryAllByRole("tab").length;
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() =>
+        expect(screen.getAllByRole("tab")).toHaveLength(before + 1),
+      );
+    }
+    const titles = () => screen.getAllByRole("tab").map((t) => t.textContent);
+
+    it("ダブルクリックでタブ名を変更できる", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await addLocalTab(user);
+      await user.dblClick(screen.getByRole("tab", { name: /Local/ }));
+      const input = await screen.findByRole("textbox", { name: "タブ名" });
+      await user.clear(input);
+      await user.type(input, "本番サーバー{Enter}");
+      expect(
+        screen.getByRole("tab", { name: /本番サーバー/ }),
+      ).toBeInTheDocument();
+    });
+
+    it("右クリック→複製で、同じ設定のタブが右隣にできて選択される（名前も引き継ぐ）", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await addLocalTab(user);
+      await user.dblClick(screen.getByRole("tab", { name: /Local/ }));
+      const input = await screen.findByRole("textbox", { name: "タブ名" });
+      await user.clear(input);
+      await user.type(input, "作業用{Enter}");
+      await addLocalTab(user);
+      // 先頭のタブ（作業用）を複製すると、その右隣に入る。
+      fireEvent.contextMenu(screen.getByRole("tab", { name: /作業用/ }));
+      await user.click(await screen.findByRole("menuitem", { name: "複製" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(3));
+      expect(titles()).toEqual(["作業用", "作業用", "Local"]);
+      expect(screen.getAllByRole("tab")[1]).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+
+    it("パスワード認証のSSHは、パスワードを保持していないので複製時に入力用のダイアログを開く", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.selectOptions(await screen.findByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "example.com");
+      await user.type(screen.getByLabelText("ユーザー名"), "alice");
+      await user.type(screen.getByLabelText("パスワード"), "pw");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await user.click(await screen.findByRole("button", { name: "consume" }));
+
+      fireEvent.contextMenu(
+        screen.getByRole("tab", { name: /alice@example.com/ }),
+      );
+      await user.click(await screen.findByRole("menuitem", { name: "複製" }));
+      expect(await screen.findByLabelText("ホスト")).toHaveValue("example.com");
+      expect(screen.getByLabelText("パスワード")).toHaveValue("");
+      await user.type(screen.getByLabelText("パスワード"), "pw2");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+    });
+
+    it("ドラッグ＆ドロップで並べ替えできる", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await addLocalTab(user);
+      await user.dblClick(screen.getByRole("tab", { name: /Local/ }));
+      const input = await screen.findByRole("textbox", { name: "タブ名" });
+      await user.clear(input);
+      await user.type(input, "A{Enter}");
+      await addLocalTab(user);
+      expect(titles()).toEqual(["A", "Local"]);
+      const dataTransfer = {
+        setData: vi.fn(),
+        effectAllowed: "",
+        dropEffect: "",
+      };
+      fireEvent.dragStart(screen.getByRole("tab", { name: /^A$/ }), {
+        dataTransfer,
+      });
+      fireEvent.drop(screen.getByRole("tab", { name: /Local/ }), {
+        dataTransfer,
+      });
+      expect(titles()).toEqual(["Local", "A"]);
     });
   });
 });
