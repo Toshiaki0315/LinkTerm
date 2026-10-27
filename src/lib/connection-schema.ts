@@ -17,7 +17,19 @@ export const ENCODINGS = [
   "windows-1252",
 ] as const;
 
+/** 端末の種類（TERM）。Rust 側の許可リストと揃える。 */
+export const TERM_TYPES = [
+  "xterm-256color",
+  "xterm",
+  "vt100",
+  "vt102",
+  "vt220",
+  "ansi",
+  "linux",
+] as const;
+
 export const defaultConnectionValues = {
+  termType: "xterm-256color",
   type: "local",
   encoding: "UTF-8",
   localEcho: "auto",
@@ -136,10 +148,13 @@ export function isValidJumpList(text: string): boolean {
   });
 }
 
+const termType = z.enum(TERM_TYPES).default("xterm-256color");
+
 const ssh = z
   .object({
     type: z.literal("ssh"),
     encoding,
+    termType,
     tabColor,
     host: required("ホスト"),
     port,
@@ -212,6 +227,7 @@ const ssh = z
 const telnet = z.object({
   type: z.literal("telnet"),
   encoding,
+  termType,
   tabColor,
   localEcho,
   host: required("ホスト"),
@@ -268,6 +284,7 @@ export function toStartRequest(
         forwards: parseForwards(v.forwards ?? "") ?? [],
         remoteForwards: parseForwards(v.remoteForwards ?? "") ?? [],
         dynamicForwards: parseSocksPorts(v.socksPorts ?? "") ?? [],
+        termType: v.termType,
         encoding: v.encoding,
         ...size,
       };
@@ -304,6 +321,7 @@ export function toStartRequest(
         port: v.port,
         txNewline: v.txNewline,
         rxNewline: v.rxNewline,
+        termType: v.termType,
         encoding: v.encoding,
         ...size,
       };

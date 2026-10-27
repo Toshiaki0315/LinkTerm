@@ -10,13 +10,16 @@ import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
 import { themeFor } from "../lib/themes";
 
 /** xterm.js のオプションとして設定する外観（コピー設定は含まない）。 */
-type XtermAppearance = Omit<Appearance, "copyOnSelect">;
+type XtermAppearance = Omit<Appearance, "copyOnSelect" | "backspaceKey">;
 
 const DEFAULT_APPEARANCE: Appearance = {
   fontFamily: DEFAULT_SETTINGS.fontFamily,
   fontSize: DEFAULT_SETTINGS.fontSize,
   scrollback: DEFAULT_SETTINGS.scrollback,
   cursorBlink: DEFAULT_SETTINGS.cursorBlink,
+  cursorStyle: DEFAULT_SETTINGS.cursorStyle,
+  backspaceKey: DEFAULT_SETTINGS.backspaceKey,
+  optionIsMeta: DEFAULT_SETTINGS.optionIsMeta,
   theme: DEFAULT_SETTINGS.theme,
   copyOnSelect: DEFAULT_SETTINGS.copyOnSelect,
 };
@@ -78,10 +81,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       fontSize,
       scrollback,
       cursorBlink,
+      cursorStyle,
+      optionIsMeta,
+      backspaceKey,
       theme,
       copyOnSelect,
     } = appearance;
     const copyOnSelectRef = useRef(copyOnSelect);
+    const backspaceKeyRef = useRef(backspaceKey);
     const onContextMenuRef = useRef(onContextMenu);
     /** 生成時・前回反映時の外観。値が変わったときだけ xterm に設定する。 */
     const appliedRef = useRef<XtermAppearance>({
@@ -89,22 +96,30 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       fontSize,
       scrollback,
       cursorBlink,
+      cursorStyle,
+      optionIsMeta,
       theme,
     });
 
     useEffect(() => {
+      backspaceKeyRef.current = backspaceKey;
       onInputRef.current = onInput;
       onResizeRef.current = onResize;
       copyOnSelectRef.current = copyOnSelect;
       onContextMenuRef.current = onContextMenu;
-    }, [onInput, onResize, copyOnSelect, onContextMenu]);
+    }, [onInput, onResize, copyOnSelect, onContextMenu, backspaceKey]);
 
     useEffect(() => {
       const container = containerRef.current;
       if (!container) return;
-      const { theme: initialTheme, ...options } = appliedRef.current;
+      const {
+        theme: initialTheme,
+        optionIsMeta: meta,
+        ...options
+      } = appliedRef.current;
       const term = new Terminal({
         ...options,
+        macOptionIsMeta: meta,
         theme: themeFor(initialTheme).xterm,
       });
       const fit = new FitAddon();
@@ -125,7 +140,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       termRef.current = term;
       fitRef.current = fit;
 
-      const dataSub = term.onData((d) => onInputRef.current(d));
+      // BS 設定のとき、Backspace が送る DEL(0x7f) を BS(0x08) に置き換える。
+      const dataSub = term.onData((d) =>
+        onInputRef.current(
+          d === "\x7f" && backspaceKeyRef.current === "bs" ? "\x08" : d,
+        ),
+      );
       const resizeSub = term.onResize(({ cols, rows }) =>
         onResizeRef.current(cols, rows),
       );
@@ -150,7 +170,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     useEffect(() => {
       const term = termRef.current;
       const applied = appliedRef.current;
-      const next = { fontFamily, fontSize, scrollback, cursorBlink, theme };
+      const next = {
+        fontFamily,
+        fontSize,
+        scrollback,
+        cursorBlink,
+        cursorStyle,
+        optionIsMeta,
+        theme,
+      };
       const changed = (
         Object.keys(next) as Array<keyof XtermAppearance>
       ).filter((key) => applied[key] !== next[key]);
@@ -159,11 +187,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       term.options.fontSize = fontSize;
       term.options.scrollback = scrollback;
       term.options.cursorBlink = cursorBlink;
+      term.options.cursorStyle = cursorStyle;
+      term.options.macOptionIsMeta = optionIsMeta;
       if (applied.theme !== theme) term.options.theme = themeFor(theme).xterm;
       appliedRef.current = next;
       // 文字の大きさが変わると行・列数が変わるため、表示中なら再計算する。
       if (containerRef.current?.offsetParent !== null) fitRef.current?.fit();
-    }, [fontFamily, fontSize, scrollback, cursorBlink, theme]);
+    }, [
+      fontFamily,
+      fontSize,
+      scrollback,
+      cursorBlink,
+      cursorStyle,
+      optionIsMeta,
+      theme,
+    ]);
 
     useEffect(() => {
       if (!active) return;

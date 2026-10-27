@@ -563,6 +563,30 @@ describe("ConnectionDialog", () => {
     });
   });
 
+  describe("端末の種類 (TERM)", () => {
+    it("SSH では選べ、選んだ値で接続する", async () => {
+      const { user, onSubmit } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "h");
+      await user.type(screen.getByLabelText("ユーザー名"), "u");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      await user.selectOptions(
+        screen.getByLabelText("端末の種類 (TERM)"),
+        "vt100",
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].termType).toBe("vt100");
+    });
+
+    it("ローカルシェル・シリアルでは表示しない", async () => {
+      const { user } = setup();
+      expect(screen.queryByLabelText("端末の種類 (TERM)")).toBeNull();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
+      expect(screen.queryByLabelText("端末の種類 (TERM)")).toBeNull();
+    });
+  });
+
   it("タブの色を選んで接続でき、選ばなければ色なし", async () => {
     const { user, onSubmit } = setup();
     await user.selectOptions(screen.getByLabelText("タブの色"), "red");

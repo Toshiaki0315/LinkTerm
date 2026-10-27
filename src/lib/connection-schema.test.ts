@@ -139,10 +139,32 @@ describe("toStartRequest", () => {
       forwards: [],
       dynamicForwards: [],
       remoteForwards: [],
+      termType: "xterm-256color",
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
     });
+  });
+
+  it("端末の種類（TERM）を ssh / telnet の要求に含める。未指定は xterm-256color", () => {
+    const sshV = connectionSchema.parse(ssh({ termType: "vt100" }));
+    expect(toStartRequest(sshV, SIZE)).toMatchObject({ termType: "vt100" });
+    const telnetV = connectionSchema.parse({
+      type: "telnet",
+      host: "h",
+      port: 23,
+      termType: "vt220",
+    });
+    expect(toStartRequest(telnetV, SIZE)).toMatchObject({ termType: "vt220" });
+    expect(toStartRequest(connectionSchema.parse(ssh()), SIZE)).toMatchObject({
+      termType: "xterm-256color",
+    });
+  });
+
+  it("未対応の端末の種類は受け付けない", () => {
+    expect(
+      connectionSchema.safeParse(ssh({ termType: "foo bar" })).success,
+    ).toBe(false);
   });
 
   it("ssh 鍵（パスフレーズ空は null）", () => {
@@ -181,6 +203,7 @@ describe("toStartRequest", () => {
       port: 23,
       txNewline: "CrLf",
       rxNewline: "LfToCrLf",
+      termType: "xterm-256color",
       encoding: "UTF-8",
       ...SIZE,
     });

@@ -33,6 +33,8 @@ export type StartRequest =
       cols: number;
       rows: number;
       encoding?: string;
+      /** 端末の種類（TERM）。未指定は xterm-256color。 */
+      termType?: string;
       /** ~/.ssh/config を使う（別名・User・IdentityFile・ProxyJump の解決）。 */
       useSshConfig?: boolean;
       /** 踏み台（`[user@]host[:port],...`）。空なら ~/.ssh/config の設定。 */
@@ -59,6 +61,8 @@ export type StartRequest =
       cols: number;
       rows: number;
       encoding?: string;
+      /** 端末の種類（TERM）。未指定は xterm-256color。 */
+      termType?: string;
       txNewline?: NewlineTx;
       rxNewline?: NewlineRx;
     }

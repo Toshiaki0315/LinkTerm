@@ -89,6 +89,25 @@ pub enum Theme {
     Monokai,
 }
 
+/// カーソルの形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+/// バックスペースキーが送る文字。VT100 系の機器は BS（^H）、現在の Unix は DEL（^?）を期待する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackspaceKey {
+    #[default]
+    Del,
+    Bs,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -96,6 +115,11 @@ pub struct Settings {
     pub font_size: u16,
     pub scrollback: u32,
     pub cursor_blink: bool,
+    pub cursor_style: CursorStyle,
+    /// バックスペースキーが送る文字。
+    pub backspace_key: BackspaceKey,
+    /// Option キーを Meta（Esc 前置）として送る。オフなら macOS の特殊文字入力になる。
+    pub option_is_meta: bool,
     pub theme: Theme,
     /// 選択したテキストを自動的にクリップボードへコピーする。
     pub copy_on_select: bool,
@@ -110,6 +134,9 @@ impl Default for Settings {
             font_size: 13,
             scrollback: 10_000,
             cursor_blink: true,
+            cursor_style: CursorStyle::default(),
+            backspace_key: BackspaceKey::default(),
+            option_is_meta: false,
             theme: Theme::default(),
             copy_on_select: false,
             auto_reconnect: AutoReconnect::default(),
@@ -256,6 +283,9 @@ mod tests {
         assert_eq!(d.font_size, 13);
         assert_eq!(d.scrollback, 10_000);
         assert!(d.cursor_blink);
+        assert_eq!(d.cursor_style, CursorStyle::Block);
+        assert_eq!(d.backspace_key, BackspaceKey::Del);
+        assert!(!d.option_is_meta);
         assert_eq!(d.startup, Startup::None);
         assert!(d.clone().validated().is_ok());
     }
@@ -275,6 +305,9 @@ mod tests {
             font_size: 16,
             scrollback: 50_000,
             cursor_blink: false,
+            cursor_style: CursorStyle::Bar,
+            backspace_key: BackspaceKey::Bs,
+            option_is_meta: true,
             theme: Theme::Monokai,
             copy_on_select: true,
             auto_reconnect: AutoReconnect::default(),

@@ -97,6 +97,9 @@ export const autoReconnectSchema = z.object({
     ),
 });
 
+export const CURSOR_STYLES = ["block", "underline", "bar"] as const;
+export const BACKSPACE_KEYS = ["del", "bs"] as const;
+
 export type AutoReconnect = z.infer<typeof autoReconnectSchema>;
 
 export const settingsSchema = z.object({
@@ -104,6 +107,9 @@ export const settingsSchema = z.object({
   fontSize: fontSizeSchema,
   scrollback: scrollbackSchema,
   cursorBlink: z.boolean(),
+  cursorStyle: z.enum(CURSOR_STYLES),
+  backspaceKey: z.enum(BACKSPACE_KEYS),
+  optionIsMeta: z.boolean(),
   theme: z.enum(THEME_IDS),
   copyOnSelect: z.boolean(),
   autoReconnect: autoReconnectSchema,
@@ -131,6 +137,9 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   scrollback: 10_000,
   cursorBlink: true,
+  cursorStyle: "block",
+  backspaceKey: "del",
+  optionIsMeta: false,
   theme: "dark",
   copyOnSelect: false,
   autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
@@ -144,6 +153,9 @@ export type Appearance = Pick<
   | "fontSize"
   | "scrollback"
   | "cursorBlink"
+  | "cursorStyle"
+  | "backspaceKey"
+  | "optionIsMeta"
   | "theme"
   | "copyOnSelect"
 >;

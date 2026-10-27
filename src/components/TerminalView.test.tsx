@@ -177,6 +177,9 @@ describe("TerminalView", () => {
       fontSize: 18,
       scrollback: 777,
       cursorBlink: false,
+      cursorStyle: "block" as const,
+      backspaceKey: "del" as const,
+      optionIsMeta: false,
       theme: "dark" as const,
       copyOnSelect: false,
     };
@@ -195,6 +198,8 @@ describe("TerminalView", () => {
         fontSize: 18,
         scrollback: 777,
         cursorBlink: false,
+        cursorStyle: "block" as const,
+        macOptionIsMeta: false,
       });
     });
 
@@ -204,6 +209,8 @@ describe("TerminalView", () => {
         fontSize: 13,
         scrollback: 10000,
         cursorBlink: true,
+        cursorStyle: "block" as const,
+        macOptionIsMeta: false,
       });
     });
 
@@ -226,6 +233,9 @@ describe("TerminalView", () => {
             fontSize: 24,
             scrollback: 5,
             cursorBlink: true,
+            cursorStyle: "block" as const,
+            backspaceKey: "del" as const,
+            optionIsMeta: false,
           }}
           onInput={() => {}}
           onResize={() => {}}
@@ -237,8 +247,63 @@ describe("TerminalView", () => {
         fontSize: 24,
         scrollback: 5,
         cursorBlink: true,
+        cursorStyle: "block" as const,
+        macOptionIsMeta: false,
       });
       expect(fit).toHaveBeenCalled();
+    });
+
+    it("バックスペースキーの設定に応じて DEL を BS に置き換えて送る", () => {
+      const onInput = vi.fn();
+      const { rerender } = render(
+        <TerminalView
+          active
+          appearance={appearance}
+          onInput={onInput}
+          onResize={() => {}}
+        />,
+      );
+      xterm.handlers.data?.("\x7f");
+      expect(onInput).toHaveBeenLastCalledWith("\x7f");
+      rerender(
+        <TerminalView
+          active
+          appearance={{ ...appearance, backspaceKey: "bs" as const }}
+          onInput={onInput}
+          onResize={() => {}}
+        />,
+      );
+      xterm.handlers.data?.("\x7f");
+      expect(onInput).toHaveBeenLastCalledWith("\x08");
+      xterm.handlers.data?.("a");
+      expect(onInput).toHaveBeenLastCalledWith("a");
+    });
+
+    it("カーソルの形と Option キーの設定を xterm に反映する", () => {
+      const { rerender } = render(
+        <TerminalView
+          active
+          appearance={appearance}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      rerender(
+        <TerminalView
+          active
+          appearance={{
+            ...appearance,
+            cursorStyle: "bar" as const,
+            optionIsMeta: true,
+          }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances[0].options).toMatchObject({
+        cursorStyle: "bar",
+        macOptionIsMeta: true,
+      });
     });
 
     it("外観が同じなら xterm のオプションに触れない", () => {
@@ -271,6 +336,9 @@ describe("TerminalView", () => {
       fontSize: 13,
       scrollback: 100,
       cursorBlink: true,
+      cursorStyle: "block" as const,
+      backspaceKey: "del" as const,
+      optionIsMeta: false,
       copyOnSelect: false,
     };
 
@@ -345,6 +413,9 @@ describe("TerminalView", () => {
       fontSize: 13,
       scrollback: 100,
       cursorBlink: true,
+      cursorStyle: "block" as const,
+      backspaceKey: "del" as const,
+      optionIsMeta: false,
       theme: "dark" as const,
     };
 

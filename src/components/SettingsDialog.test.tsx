@@ -66,6 +66,9 @@ describe("SettingsDialog", () => {
         fontSize: 16,
         scrollback: 5000,
         cursorBlink: false,
+        cursorStyle: "block",
+        backspaceKey: "del",
+        optionIsMeta: false,
         theme: "dracula",
         copyOnSelect: false,
         autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
@@ -224,6 +227,23 @@ describe("SettingsDialog", () => {
     });
   });
 
+  it("端末エミュレーションの設定（カーソルの形・バックスペース・Option）を保存できる", async () => {
+    const { user, onSave } = setup();
+    await fontsLoaded();
+    await user.selectOptions(screen.getByLabelText("カーソルの形"), "bar");
+    await user.selectOptions(screen.getByLabelText("バックスペースキー"), "bs");
+    await user.click(screen.getByLabelText(/Option キーを Meta/));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cursorStyle: "bar",
+        backspaceKey: "bs",
+        optionIsMeta: true,
+      }),
+    );
+  });
+
   it("入力した内容で保存し、ダイアログを閉じる", async () => {
     const { user, onSave, onOpenChange } = setup();
     await fontsLoaded();
@@ -242,6 +262,9 @@ describe("SettingsDialog", () => {
       fontSize: 18,
       scrollback: 2000,
       cursorBlink: false,
+      cursorStyle: "block",
+      backspaceKey: "del",
+      optionIsMeta: false,
       theme: "dark",
       copyOnSelect: false,
       autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },

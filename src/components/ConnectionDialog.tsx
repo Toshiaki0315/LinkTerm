@@ -11,6 +11,7 @@ import {
   connectionSchema,
   defaultConnectionValues,
   ENCODINGS,
+  TERM_TYPES,
   stripSecrets,
   type ConnectionValues,
 } from "../lib/connection-schema";
@@ -39,6 +40,8 @@ interface FormValues {
   profileName: string;
   type: ConnectionValues["type"];
   encoding: (typeof ENCODINGS)[number];
+  /** 端末の種類（TERM）。SSH / Telnet で使う。 */
+  termType: (typeof TERM_TYPES)[number];
   /** タブの色。空は色なし。 */
   tabColor?: string;
   localEcho: "auto" | "on" | "off";
@@ -365,6 +368,20 @@ export function ConnectionDialog({
               </Select>
             )}
           </Field>
+
+          {(type === "ssh" || type === "telnet") && (
+            <Field label="端末の種類 (TERM)">
+              {(id) => (
+                <Select id={id} {...register("termType")}>
+                  {TERM_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )}
 
           <Field label="タブの色">
             {(id) => (

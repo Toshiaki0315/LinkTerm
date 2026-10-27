@@ -41,6 +41,16 @@ const HOST_KEY_APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const SSH_KEEPALIVE: Duration = Duration::from_secs(30);
 const DEFAULT_TERM: &str = "xterm-256color";
+/// 選べる端末の種類（TERM）。リモートへ送る文字列なので、許可したものだけを通す。
+const TERM_TYPES: &[&str] = &[
+    "xterm-256color",
+    "xterm",
+    "vt100",
+    "vt102",
+    "vt220",
+    "ansi",
+    "linux",
+];
 
 /// フロントエンドへ返すエラー。文脈つきメッセージの文字列として渡す。
 #[derive(Debug, thiserror::Error)]
@@ -196,6 +206,17 @@ impl AppState {
     }
 }
 
+/// 未指定なら `xterm-256color`。許可した種類以外は拒否する。
+fn term_for(label: Option<&str>) -> CommandResult<String> {
+    match label {
+        None => Ok(DEFAULT_TERM.into()),
+        Some(t) if TERM_TYPES.contains(&t) => Ok(t.into()),
+        Some(t) => Err(CommandError::Invalid(format!(
+            "未対応の端末の種類です: {t}"
+        ))),
+    }
+}
+
 fn size(cols: u16, rows: u16) -> CommandResult<TerminalSize> {
     Ok(TerminalSize::new(cols, rows)?)
 }
@@ -274,6 +295,9 @@ pub struct StartSsh {
     cols: u16,
     rows: u16,
     encoding: Option<String>,
+    /// 端末の種類（TERM）。未指定は `xterm-256color`。
+    #[serde(default)]
+    term_type: Option<String>,
     /// `~/.ssh/config` を使う（別名・User・Port・IdentityFile・ProxyJump の解決）。
     #[serde(default = "default_true")]
     use_ssh_config: bool,
@@ -368,7 +392,7 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             username: target.username.clone(),
             auth,
             size: size(req.cols, req.rows)?,
-            term: DEFAULT_TERM.into(),
+            term: term_for(req.term_type.as_deref())?,
             keepalive_interval: Some(SSH_KEEPALIVE),
             jump_hosts: build_jump_hosts(&config, &target.jumps, &target.username),
             forwards,
@@ -394,6 +418,9 @@ pub struct StartTelnet {
     cols: u16,
     rows: u16,
     encoding: Option<String>,
+    /// 端末の種類（TERM）。未指定は `xterm-256color`。
+    #[serde(default)]
+    term_type: Option<String>,
     #[serde(default)]
     tx_newline: TxNewline,
     #[serde(default)]
@@ -407,7 +434,7 @@ pub async fn start_telnet(state: State<'_, AppState>, req: StartTelnet) -> Comma
         host: req.host,
         port: req.port,
         size: size(req.cols, req.rows)?,
-        term: DEFAULT_TERM.into(),
+        term: term_for(req.term_type.as_deref())?,
         tx_newline: req.tx_newline,
         rx_newline: req.rx_newline,
         connect_timeout: CONNECT_TIMEOUT,
@@ -678,6 +705,16 @@ mod tests {
             credential_account("alice", "example.com", 22),
             "alice@example.com:22"
         );
+    }
+
+    #[test]
+    fn term_for_defaults_and_allows_only_known_types() {
+        assert_eq!(term_for(None).unwrap(), "xterm-256color");
+        assert_eq!(term_for(Some("vt100")).unwrap(), "vt100");
+        assert_eq!(term_for(Some("linux")).unwrap(), "linux");
+        assert!(term_for(Some("")).is_err());
+        assert!(term_for(Some("xterm; rm -rf /")).is_err());
+        assert!(term_for(Some("VT100")).is_err());
     }
 
     #[test]

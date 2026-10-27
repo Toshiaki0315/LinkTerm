@@ -104,6 +104,9 @@ describe("TerminalWorkspace", () => {
           fontSize: 13,
           scrollback: 10,
           cursorBlink: true,
+          cursorStyle: "block",
+          backspaceKey: "del",
+          optionIsMeta: false,
           theme: "solarized-dark",
           copyOnSelect: false,
         }}

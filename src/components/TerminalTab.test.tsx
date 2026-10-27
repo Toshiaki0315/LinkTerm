@@ -84,6 +84,7 @@ import { TerminalTab } from "./TerminalTab";
 const telnet: ConnectionValues = {
   type: "telnet",
   encoding: "UTF-8",
+  termType: "xterm-256color",
   localEcho: "auto",
   host: "h",
   port: 23,
@@ -93,6 +94,7 @@ const telnet: ConnectionValues = {
 const sshPassword: ConnectionValues = {
   type: "ssh",
   encoding: "UTF-8",
+  termType: "xterm-256color",
   host: "h",
   port: 22,
   username: "u",

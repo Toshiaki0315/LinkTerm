@@ -3,6 +3,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import {
+  BACKSPACE_KEYS,
+  CURSOR_STYLES,
   autoReconnectSchema,
   DEFAULT_SETTINGS,
   familyFromStack,
@@ -35,6 +37,9 @@ const formSchema = z
     fontSize: fontSizeSchema,
     scrollback: scrollbackSchema,
     cursorBlink: z.boolean(),
+    cursorStyle: z.enum(CURSOR_STYLES),
+    backspaceKey: z.enum(BACKSPACE_KEYS),
+    optionIsMeta: z.boolean(),
     theme: z.enum(THEME_IDS),
     copyOnSelect: z.boolean(),
     autoReconnect: autoReconnectSchema,
@@ -58,6 +63,9 @@ const toForm = (s: Settings): FormValues => ({
   fontSize: s.fontSize,
   scrollback: s.scrollback,
   cursorBlink: s.cursorBlink,
+  cursorStyle: s.cursorStyle,
+  backspaceKey: s.backspaceKey,
+  optionIsMeta: s.optionIsMeta,
   theme: s.theme,
   copyOnSelect: s.copyOnSelect,
   autoReconnect: s.autoReconnect,
@@ -70,6 +78,9 @@ const toSettings = (v: z.output<typeof formSchema>): Settings => ({
   fontSize: v.fontSize,
   scrollback: v.scrollback,
   cursorBlink: v.cursorBlink,
+  cursorStyle: v.cursorStyle,
+  backspaceKey: v.backspaceKey,
+  optionIsMeta: v.optionIsMeta,
   theme: v.theme,
   copyOnSelect: v.copyOnSelect,
   autoReconnect: v.autoReconnect,
@@ -313,6 +324,27 @@ export function SettingsDialog({
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register("cursorBlink")} />
             カーソルを点滅させる
+          </label>
+          <Row label="カーソルの形">
+            {(id) => (
+              <Select id={id} {...register("cursorStyle")}>
+                <option value="block">ブロック</option>
+                <option value="underline">アンダーライン</option>
+                <option value="bar">バー</option>
+              </Select>
+            )}
+          </Row>
+          <Row label="バックスペースキー">
+            {(id) => (
+              <Select id={id} {...register("backspaceKey")}>
+                <option value="del">DEL（^?）— 一般的な Unix</option>
+                <option value="bs">BS（^H）— VT100 系の機器など</option>
+              </Select>
+            )}
+          </Row>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" {...register("optionIsMeta")} />
+            Option キーを Meta キーとして使う（Esc を前置して送る）
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register("copyOnSelect")} />

@@ -92,6 +92,7 @@ describe("tabsReducer", () => {
     const sshValues = {
       type: "ssh",
       encoding: "UTF-8",
+      termType: "xterm-256color",
       host: "h",
       port: 22,
       username: "u",
