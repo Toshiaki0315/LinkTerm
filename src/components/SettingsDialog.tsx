@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import {
+  autoReconnectSchema,
   DEFAULT_SETTINGS,
   familyFromStack,
   fontFamilySchema,
@@ -36,6 +37,7 @@ const formSchema = z
     cursorBlink: z.boolean(),
     theme: z.enum(THEME_IDS),
     copyOnSelect: z.boolean(),
+    autoReconnect: autoReconnectSchema,
     startupKind: z.enum(["none", "local", "profile"]),
     startupProfileId: z.string(),
   })
@@ -58,6 +60,7 @@ const toForm = (s: Settings): FormValues => ({
   cursorBlink: s.cursorBlink,
   theme: s.theme,
   copyOnSelect: s.copyOnSelect,
+  autoReconnect: s.autoReconnect,
   startupKind: s.startup.kind,
   startupProfileId: s.startup.kind === "profile" ? s.startup.profileId : "",
 });
@@ -69,6 +72,7 @@ const toSettings = (v: z.output<typeof formSchema>): Settings => ({
   cursorBlink: v.cursorBlink,
   theme: v.theme,
   copyOnSelect: v.copyOnSelect,
+  autoReconnect: v.autoReconnect,
   startup:
     v.startupKind === "profile"
       ? { kind: "profile", profileId: v.startupProfileId }
@@ -314,6 +318,40 @@ export function SettingsDialog({
             <input type="checkbox" {...register("copyOnSelect")} />
             選択したテキストを自動的にコピーする
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" {...register("autoReconnect.enabled")} />
+            切断（エラー）時に自動で再接続する
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <Row
+              label="再接続までの待ち時間（秒）"
+              error={errors.autoReconnect?.delaySeconds?.message}
+            >
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  {...register("autoReconnect.delaySeconds", {
+                    valueAsNumber: true,
+                  })}
+                />
+              )}
+            </Row>
+            <Row
+              label="再接続の試行回数（0で無制限）"
+              error={errors.autoReconnect?.maxAttempts?.message}
+            >
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  {...register("autoReconnect.maxAttempts", {
+                    valueAsNumber: true,
+                  })}
+                />
+              )}
+            </Row>
+          </div>
           <Row label="起動時に開くターミナル">
             {(id) => (
               <Select id={id} {...register("startupKind")}>

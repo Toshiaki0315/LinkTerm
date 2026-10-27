@@ -15,6 +15,8 @@ pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<u16> = 8..=72;
 pub const MAX_SCROLLBACK: u32 = 100_000;
 pub const MAX_FONT_FAMILY_CHARS: usize = 200;
 pub const MAX_PROFILE_ID_CHARS: usize = 100;
+pub const RECONNECT_DELAY_RANGE: std::ops::RangeInclusive<u32> = 1..=3600;
+pub const MAX_RECONNECT_ATTEMPTS: u32 = 1000;
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -51,6 +53,27 @@ pub enum Startup {
     Profile { profile_id: String },
 }
 
+/// 切断（エラー）時の自動再接続。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoReconnect {
+    pub enabled: bool,
+    /// 再接続までの待ち時間（秒）。
+    pub delay_seconds: u32,
+    /// 連続して試す回数。0 は無制限。
+    pub max_attempts: u32,
+}
+
+impl Default for AutoReconnect {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            delay_seconds: 5,
+            max_attempts: 5,
+        }
+    }
+}
+
 /// ターミナルの配色テーマ。色の定義はフロントエンド側にある。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -74,6 +97,7 @@ pub struct Settings {
     pub theme: Theme,
     /// 選択したテキストを自動的にクリップボードへコピーする。
     pub copy_on_select: bool,
+    pub auto_reconnect: AutoReconnect,
     pub startup: Startup,
 }
 
@@ -86,6 +110,7 @@ impl Default for Settings {
             cursor_blink: true,
             theme: Theme::default(),
             copy_on_select: false,
+            auto_reconnect: AutoReconnect::default(),
             startup: Startup::None,
         }
     }
@@ -123,6 +148,18 @@ impl Settings {
         if self.scrollback > MAX_SCROLLBACK {
             return Err(SettingsError::Invalid(format!(
                 "スクロールバックは{MAX_SCROLLBACK}行以内にしてください"
+            )));
+        }
+        if !RECONNECT_DELAY_RANGE.contains(&self.auto_reconnect.delay_seconds) {
+            return Err(SettingsError::Invalid(format!(
+                "再接続までの待ち時間は{}〜{}秒で指定してください",
+                RECONNECT_DELAY_RANGE.start(),
+                RECONNECT_DELAY_RANGE.end()
+            )));
+        }
+        if self.auto_reconnect.max_attempts > MAX_RECONNECT_ATTEMPTS {
+            return Err(SettingsError::Invalid(format!(
+                "再接続の回数は{MAX_RECONNECT_ATTEMPTS}回以内で指定してください（0は無制限）"
             )));
         }
         if let Startup::Profile { profile_id } = &self.startup {
@@ -238,6 +275,7 @@ mod tests {
             cursor_blink: false,
             theme: Theme::Monokai,
             copy_on_select: true,
+            auto_reconnect: AutoReconnect::default(),
             startup: Startup::Profile {
                 profile_id: "profile-1".into(),
             },
@@ -505,5 +543,64 @@ mod tests {
         std::fs::write(&path, r#"{"fontSize": 14}"#).unwrap();
         assert!(!s.load().unwrap().copy_on_select);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_reconnect_defaults_to_off_with_sensible_limits() {
+        let d = Settings::default().auto_reconnect;
+        assert!(!d.enabled);
+        assert_eq!(d.delay_seconds, 5);
+        assert_eq!(d.max_attempts, 5);
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(
+            v["autoReconnect"],
+            json!({"enabled": false, "delaySeconds": 5, "maxAttempts": 5})
+        );
+    }
+
+    #[test]
+    fn auto_reconnect_roundtrips_and_partial_values_use_defaults() {
+        let (s, path, dir) = store("auto-reconnect");
+        let custom = Settings {
+            auto_reconnect: AutoReconnect {
+                enabled: true,
+                delay_seconds: 10,
+                max_attempts: 0,
+            },
+            ..Default::default()
+        };
+        assert_eq!(s.save(custom.clone()).unwrap(), custom);
+        assert_eq!(SettingsStore::new(&path).load().unwrap(), custom);
+        std::fs::write(&path, r#"{"autoReconnect": {"enabled": true}}"#).unwrap();
+        let loaded = s.load().unwrap();
+        assert!(loaded.auto_reconnect.enabled);
+        assert_eq!(loaded.auto_reconnect.delay_seconds, 5);
+        assert_eq!(loaded.auto_reconnect.max_attempts, 5);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_reconnect_values_are_range_checked() {
+        let with = |delay_seconds, max_attempts| Settings {
+            auto_reconnect: AutoReconnect {
+                enabled: true,
+                delay_seconds,
+                max_attempts,
+            },
+            ..Default::default()
+        };
+        // 待ち時間は 1〜3600 秒、回数は 0（無制限）〜 1000 回。
+        for ok in [(1, 0), (3600, 1000), (5, 5)] {
+            assert!(with(ok.0, ok.1).validated().is_ok(), "{ok:?}");
+        }
+        for bad in [(0, 5), (3601, 5), (5, 1001)] {
+            assert!(
+                matches!(
+                    with(bad.0, bad.1).validated(),
+                    Err(SettingsError::Invalid(_))
+                ),
+                "{bad:?}"
+            );
+        }
     }
 }

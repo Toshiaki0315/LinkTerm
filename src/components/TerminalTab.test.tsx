@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionValues } from "../lib/connection-schema";
 
 const session = vi.hoisted(() => ({
@@ -513,6 +513,117 @@ describe("TerminalTab", () => {
       await userEvent.click(screen.getByRole("menuitem", { name: "コピー" }));
       await waitFor(() => expect(spy).toHaveBeenCalled());
       spy.mockRestore();
+    });
+  });
+
+  describe("自動再接続", () => {
+    const auto = { enabled: true, delaySeconds: 5, maxAttempts: 2 };
+    const errored = {
+      status: "error",
+      sessionId: null,
+      error: "切断",
+      remoteEcho: null,
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function mount(values: ConnectionValues, autoReconnect = auto) {
+      const props = {
+        findSignal: 0,
+        tabId: "t1",
+        title: "title",
+        values,
+        active: true,
+        onStatusChange: vi.fn(),
+        onSecretsConsumed: vi.fn(),
+        onEditAndReconnect: vi.fn(),
+        autoReconnect,
+      };
+      const view = render(<TerminalTab {...props} />);
+      return { view, props };
+    }
+    const advance = (seconds: number) =>
+      act(() => vi.advanceTimersByTime(seconds * 1000));
+
+    it("異常な切断のあと、カウントダウンを表示して、時間が来たら再接続する", () => {
+      session.state = errored;
+      mount(telnet);
+      session.start.mockClear();
+      expect(screen.getByText(/5秒後に自動再接続します/)).toBeInTheDocument();
+      expect(screen.getByText(/1\/2回目/)).toBeInTheDocument();
+      advance(2);
+      expect(screen.getByText(/3秒後に自動再接続します/)).toBeInTheDocument();
+      advance(3);
+      expect(session.start).toHaveBeenCalledTimes(1);
+      expect(session.start).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "telnet" }),
+      );
+    });
+
+    it("「キャンセル」で自動再接続を止める", () => {
+      session.state = errored;
+      mount(telnet);
+      session.start.mockClear();
+      act(() =>
+        screen.getByRole("button", { name: "自動再接続をキャンセル" }).click(),
+      );
+      expect(screen.queryByText(/自動再接続します/)).not.toBeInTheDocument();
+      advance(60);
+      expect(session.start).not.toHaveBeenCalled();
+    });
+
+    it("設定が無効なら表示も再接続もしない", () => {
+      session.state = errored;
+      mount(telnet, { ...auto, enabled: false });
+      session.start.mockClear();
+      expect(screen.queryByText(/自動再接続/)).not.toBeInTheDocument();
+      advance(60);
+      expect(session.start).not.toHaveBeenCalled();
+    });
+
+    it("正常な終了（closed）では再接続しない", () => {
+      session.state = {
+        status: "closed",
+        sessionId: "s1",
+        error: null,
+        remoteEcho: null,
+      };
+      mount(telnet);
+      session.start.mockClear();
+      advance(60);
+      expect(session.start).not.toHaveBeenCalled();
+      expect(screen.queryByText(/自動再接続/)).not.toBeInTheDocument();
+    });
+
+    it("パスワード認証のSSHは、パスワードを保持していないため自動再接続できないと伝える", () => {
+      session.state = errored;
+      mount({ ...sshPassword, password: "" });
+      session.start.mockClear();
+      expect(screen.getByText(/自動再接続できません/)).toBeInTheDocument();
+      advance(60);
+      expect(session.start).not.toHaveBeenCalled();
+    });
+
+    it("上限の回数に達したら、止まったことを知らせる", () => {
+      session.state = errored;
+      const { view, props } = mount(telnet, { ...auto, maxAttempts: 1 });
+      session.start.mockClear();
+      advance(5);
+      expect(session.start).toHaveBeenCalledTimes(1);
+      session.state = { ...errored, status: "connecting", error: null };
+      view.rerender(<TerminalTab {...props} />);
+      session.state = errored;
+      view.rerender(<TerminalTab {...props} />);
+      expect(
+        screen.getByText(/上限（1回）に達したため、自動再接続を止めました/),
+      ).toBeInTheDocument();
+      advance(60);
+      expect(session.start).toHaveBeenCalledTimes(1);
     });
   });
 });

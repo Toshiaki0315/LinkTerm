@@ -1,6 +1,6 @@
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Tab } from "../lib/tabs";
-import type { Appearance } from "../lib/settings";
+import type { Appearance, AutoReconnect } from "../lib/settings";
 import { themeFor } from "../lib/themes";
 import { cn } from "../lib/utils";
 import { TerminalTab } from "./TerminalTab";
@@ -12,6 +12,7 @@ interface Props {
   onSecretsConsumed: (id: string) => void;
   onEditAndReconnect: (id: string) => void;
   appearance?: Appearance;
+  autoReconnect?: AutoReconnect;
   /** タブごとの検索要求の回数。増えたタブが検索バーを開く。 */
   findSignals?: Record<string, number>;
 }
@@ -24,6 +25,7 @@ export function TerminalWorkspace({
   onSecretsConsumed,
   onEditAndReconnect,
   appearance,
+  autoReconnect,
   findSignals,
 }: Props) {
   if (tabs.length === 0) {
@@ -53,6 +55,7 @@ export function TerminalWorkspace({
             onSecretsConsumed={onSecretsConsumed}
             onEditAndReconnect={onEditAndReconnect}
             appearance={appearance}
+            autoReconnect={autoReconnect}
             findSignal={findSignals?.[tab.id] ?? 0}
           />
         </div>

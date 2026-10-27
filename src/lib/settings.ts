@@ -7,6 +7,8 @@ export const FONT_SIZE_MAX = 72;
 export const SCROLLBACK_MAX = 100_000;
 export const FONT_FAMILY_MAX_CHARS = 200;
 export const PROFILE_ID_MAX_CHARS = 100;
+export const RECONNECT_DELAY_MAX_SECONDS = 3600;
+export const RECONNECT_ATTEMPTS_MAX = 1000;
 
 /** CSS の font-family を壊す・宣言を区切る文字。 */
 // eslint-disable-next-line no-control-regex
@@ -60,6 +62,42 @@ export const scrollbackSchema = z
     `スクロールバックは0〜${SCROLLBACK_MAX}行で入力してください`,
   );
 
+export const autoReconnectSchema = z.object({
+  enabled: z.boolean(),
+  delaySeconds: z
+    .number(
+      `待ち時間は1〜${RECONNECT_DELAY_MAX_SECONDS}秒の整数で入力してください`,
+    )
+    .int(
+      `待ち時間は1〜${RECONNECT_DELAY_MAX_SECONDS}秒の整数で入力してください`,
+    )
+    .min(
+      1,
+      `待ち時間は1〜${RECONNECT_DELAY_MAX_SECONDS}秒の整数で入力してください`,
+    )
+    .max(
+      RECONNECT_DELAY_MAX_SECONDS,
+      `待ち時間は1〜${RECONNECT_DELAY_MAX_SECONDS}秒の整数で入力してください`,
+    ),
+  maxAttempts: z
+    .number(
+      `回数は0〜${RECONNECT_ATTEMPTS_MAX}の整数で入力してください（0は無制限）`,
+    )
+    .int(
+      `回数は0〜${RECONNECT_ATTEMPTS_MAX}の整数で入力してください（0は無制限）`,
+    )
+    .min(
+      0,
+      `回数は0〜${RECONNECT_ATTEMPTS_MAX}の整数で入力してください（0は無制限）`,
+    )
+    .max(
+      RECONNECT_ATTEMPTS_MAX,
+      `回数は0〜${RECONNECT_ATTEMPTS_MAX}の整数で入力してください（0は無制限）`,
+    ),
+});
+
+export type AutoReconnect = z.infer<typeof autoReconnectSchema>;
+
 export const settingsSchema = z.object({
   fontFamily: fontFamilySchema,
   fontSize: fontSizeSchema,
@@ -67,6 +105,7 @@ export const settingsSchema = z.object({
   cursorBlink: z.boolean(),
   theme: z.enum(THEME_IDS),
   copyOnSelect: z.boolean(),
+  autoReconnect: autoReconnectSchema,
   startup: startupSchema,
 });
 
@@ -93,6 +132,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cursorBlink: true,
   theme: "dark",
   copyOnSelect: false,
+  autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
   startup: { kind: "none" },
 };
 

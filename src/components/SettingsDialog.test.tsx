@@ -68,6 +68,7 @@ describe("SettingsDialog", () => {
         cursorBlink: false,
         theme: "dracula",
         copyOnSelect: false,
+        autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
         startup: { kind: "local" },
       },
     });
@@ -243,6 +244,7 @@ describe("SettingsDialog", () => {
       cursorBlink: false,
       theme: "dark",
       copyOnSelect: false,
+      autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
       startup: { kind: "local" },
     });
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -419,6 +421,79 @@ describe("SettingsDialog", () => {
       expect(
         screen.getByLabelText("選択したテキストを自動的にコピーする"),
       ).not.toBeChecked();
+    });
+  });
+
+  describe("自動再接続", () => {
+    const enable = (user: ReturnType<typeof userEvent.setup>) =>
+      user.click(screen.getByLabelText("切断（エラー）時に自動で再接続する"));
+
+    it("既定はオフ。オンにして、待ち時間と回数を指定して保存できる", async () => {
+      const { user, onSave } = setup();
+      expect(
+        screen.getByLabelText("切断（エラー）時に自動で再接続する"),
+      ).not.toBeChecked();
+      await enable(user);
+      await replace(user, "再接続までの待ち時間（秒）", "10");
+      await replace(user, "再接続の試行回数（0で無制限）", "0");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].autoReconnect).toEqual({
+        enabled: true,
+        delaySeconds: 10,
+        maxAttempts: 0,
+      });
+    });
+
+    it("保存済みの値を表示する", () => {
+      setup({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          autoReconnect: { enabled: true, delaySeconds: 30, maxAttempts: 3 },
+        },
+      });
+      expect(
+        screen.getByLabelText("切断（エラー）時に自動で再接続する"),
+      ).toBeChecked();
+      expect(screen.getByLabelText("再接続までの待ち時間（秒）")).toHaveValue(
+        30,
+      );
+      expect(
+        screen.getByLabelText("再接続の試行回数（0で無制限）"),
+      ).toHaveValue(3);
+    });
+
+    it("範囲外の値はエラーにして保存しない", async () => {
+      const { user, onSave } = setup();
+      await replace(user, "再接続までの待ち時間（秒）", "0");
+      await replace(user, "再接続の試行回数（0で無制限）", "1001");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      expect(
+        await screen.findByText("待ち時間は1〜3600秒の整数で入力してください"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("回数は0〜1000の整数で入力してください（0は無制限）"),
+      ).toBeInTheDocument();
+      expect(onSave).not.toHaveBeenCalled();
+    });
+
+    it("初期設定に戻すと、オフ・5秒・5回になる", async () => {
+      const { user } = setup({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          autoReconnect: { enabled: true, delaySeconds: 30, maxAttempts: 3 },
+        },
+      });
+      await user.click(screen.getByRole("button", { name: "初期設定に戻す" }));
+      expect(
+        screen.getByLabelText("切断（エラー）時に自動で再接続する"),
+      ).not.toBeChecked();
+      expect(screen.getByLabelText("再接続までの待ち時間（秒）")).toHaveValue(
+        5,
+      );
+      expect(
+        screen.getByLabelText("再接続の試行回数（0で無制限）"),
+      ).toHaveValue(5);
     });
   });
 

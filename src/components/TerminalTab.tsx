@@ -1,12 +1,13 @@
 import { Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAutoReconnect } from "../hooks/useAutoReconnect";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import {
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
-import type { Appearance } from "../lib/settings";
+import type { Appearance, AutoReconnect } from "../lib/settings";
 import { copyText, pasteText } from "../lib/clipboard";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { EchoControl } from "./EchoControl";
@@ -16,6 +17,12 @@ import { SerialControls } from "./SerialControls";
 import { Button } from "./ui/button";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
 import type { SessionStatus } from "../hooks/useTerminalSession";
+
+const DISABLED_AUTO_RECONNECT: AutoReconnect = {
+  enabled: false,
+  delaySeconds: 5,
+  maxAttempts: 5,
+};
 
 interface Props {
   tabId: string;
@@ -28,6 +35,8 @@ interface Props {
   /** 保持していない秘密情報の再入力が必要な再接続。 */
   onEditAndReconnect: (id: string) => void;
   appearance?: Appearance;
+  /** 異常な切断のあとの自動再接続。省略すると無効。 */
+  autoReconnect?: AutoReconnect;
   /** 増えたら検索バーを開く（⌘F）。 */
   findSignal?: number;
 }
@@ -42,6 +51,7 @@ export function TerminalTab({
   onSecretsConsumed,
   onEditAndReconnect,
   appearance,
+  autoReconnect = DISABLED_AUTO_RECONNECT,
   findSignal = 0,
 }: Props) {
   const termRef = useRef<TerminalHandle>(null);
@@ -161,6 +171,17 @@ export function TerminalTab({
     );
   }, [needsSecret, onEditAndReconnect, tabId, start, values]);
 
+  const auto = useAutoReconnect({
+    enabled: autoReconnect.enabled,
+    delaySeconds: autoReconnect.delaySeconds,
+    maxAttempts: autoReconnect.maxAttempts,
+    status,
+    canReconnect: !needsSecret,
+    onReconnect: reconnect,
+  });
+  const maxLabel =
+    autoReconnect.maxAttempts === 0 ? "∞" : String(autoReconnect.maxAttempts);
+
   return (
     <div className="relative h-full w-full">
       <div className="absolute right-3 top-2 z-10 flex items-center gap-2">
@@ -236,11 +257,72 @@ export function TerminalTab({
               ? `接続エラー: ${error ?? "不明なエラー"}`
               : "セッションが終了しました"}
           </span>
-          <Button size="sm" onClick={reconnect}>
-            再接続
-          </Button>
+          <span className="flex items-center gap-2">
+            {autoReconnect.enabled && status === "error" && (
+              <AutoReconnectNotice
+                needsSecret={needsSecret}
+                remaining={auto.remaining}
+                attempt={auto.attempt}
+                maxLabel={maxLabel}
+                maxAttempts={autoReconnect.maxAttempts}
+                exhausted={auto.exhausted}
+                onCancel={auto.cancel}
+              />
+            )}
+            <Button size="sm" onClick={reconnect}>
+              再接続
+            </Button>
+          </span>
         </div>
       )}
     </div>
+  );
+}
+
+/** 自動再接続の状況（カウントダウン・上限・再接続できない理由）の表示。 */
+function AutoReconnectNotice({
+  needsSecret,
+  remaining,
+  attempt,
+  maxLabel,
+  maxAttempts,
+  exhausted,
+  onCancel,
+}: {
+  needsSecret: boolean;
+  remaining: number | null;
+  attempt: number;
+  maxLabel: string;
+  maxAttempts: number;
+  exhausted: boolean;
+  onCancel: () => void;
+}) {
+  if (needsSecret) {
+    return (
+      <span className="text-amber-300">
+        パスワード認証のため、自動再接続できません
+      </span>
+    );
+  }
+  if (exhausted) {
+    return (
+      <span className="text-amber-300">
+        上限（{maxAttempts}回）に達したため、自動再接続を止めました
+      </span>
+    );
+  }
+  if (remaining === null) return null;
+  return (
+    <span className="flex items-center gap-2 text-sky-300">
+      {remaining}秒後に自動再接続します（{attempt + 1}/{maxLabel}回目）
+      <Button
+        size="sm"
+        variant="outline"
+        aria-label="自動再接続をキャンセル"
+        onClick={onCancel}
+      >
+        キャンセル
+      </Button>
+    </span>
   );
 }

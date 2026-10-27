@@ -351,6 +351,7 @@ function App() {
         onSecretsConsumed={onSecretsConsumed}
         onEditAndReconnect={onEditAndReconnect}
         appearance={settings}
+        autoReconnect={settings.autoReconnect}
         findSignals={findSignals}
       />
       <ConnectionDialog

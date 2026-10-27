@@ -18,6 +18,7 @@ describe("settingsSchema", () => {
       cursorBlink: true,
       theme: "dark",
       copyOnSelect: false,
+      autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
       startup: { kind: "none" },
     });
   });
@@ -123,6 +124,31 @@ describe("配色テーマの設定", () => {
     expect(
       settingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: "neon" }).success,
     ).toBe(false);
+  });
+});
+
+describe("自動再接続の設定", () => {
+  const withReconnect = (autoReconnect: unknown) => ({
+    ...DEFAULT_SETTINGS,
+    autoReconnect,
+  });
+
+  it("待ち時間は 1〜3600 秒の整数、回数は 0（無制限）〜1000 の整数", () => {
+    for (const ok of [
+      { enabled: true, delaySeconds: 1, maxAttempts: 0 },
+      { enabled: true, delaySeconds: 3600, maxAttempts: 1000 },
+    ]) {
+      expect(settingsSchema.safeParse(withReconnect(ok)).success).toBe(true);
+    }
+    for (const bad of [
+      { enabled: true, delaySeconds: 0, maxAttempts: 5 },
+      { enabled: true, delaySeconds: 3601, maxAttempts: 5 },
+      { enabled: true, delaySeconds: 1.5, maxAttempts: 5 },
+      { enabled: true, delaySeconds: 5, maxAttempts: -1 },
+      { enabled: true, delaySeconds: 5, maxAttempts: 1001 },
+    ]) {
+      expect(settingsSchema.safeParse(withReconnect(bad)).success).toBe(false);
+    }
   });
 });
 
