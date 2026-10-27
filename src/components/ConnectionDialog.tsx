@@ -464,7 +464,7 @@ export function ConnectionDialog({
             </Field>
           )}
 
-          {type === "telnet" && (
+          {(type === "telnet" || type === "serial") && (
             <div className="grid grid-cols-2 gap-2">
               <Field label="送信改行">
                 {(id) => (

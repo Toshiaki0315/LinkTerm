@@ -18,6 +18,8 @@ export interface SerialConfig {
   parity: "None" | "Odd" | "Even";
   stop_bits: "One" | "Two";
   flow_control: "None" | "Software" | "Hardware";
+  tx_newline?: NewlineTx;
+  rx_newline?: NewlineRx;
 }
 
 export type StartRequest =

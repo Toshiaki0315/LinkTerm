@@ -159,6 +159,8 @@ const serial = z.object({
   parity: z.enum(["None", "Odd", "Even"]).default("None"),
   stopBits: z.enum(["One", "Two"]).default("One"),
   flowControl: z.enum(["None", "Software", "Hardware"]).default("None"),
+  txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
+  rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
 });
 
 export const connectionSchema = z.discriminatedUnion("type", [
@@ -234,6 +236,8 @@ export function toStartRequest(
           parity: v.parity,
           stop_bits: v.stopBits,
           flow_control: v.flowControl,
+          tx_newline: v.txNewline,
+          rx_newline: v.rxNewline,
         },
         encoding: v.encoding,
       };

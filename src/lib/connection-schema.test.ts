@@ -191,6 +191,8 @@ describe("toStartRequest", () => {
       parity: "Even",
       stopBits: "Two",
       flowControl: "Hardware",
+      txNewline: "CrLf",
+      rxNewline: "LfToCrLf",
       encoding: "Shift_JIS",
     });
     expect(toStartRequest(v, SIZE)).toEqual({
@@ -202,6 +204,8 @@ describe("toStartRequest", () => {
         parity: "Even",
         stop_bits: "Two",
         flow_control: "Hardware",
+        tx_newline: "CrLf",
+        rx_newline: "LfToCrLf",
       },
       encoding: "Shift_JIS",
     });

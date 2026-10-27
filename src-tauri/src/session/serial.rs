@@ -8,7 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_serial::{SerialPort, SerialPortBuilderExt};
 
-use super::{ControlSignal, TerminalError, TerminalSession, TerminalSize};
+use super::{
+    ControlSignal, IncomingConverter, RxNewline, TerminalError, TerminalSession, TerminalSize,
+    TxNewline, convert_outgoing,
+};
 
 const READ_BUFFER_SIZE: usize = 4096;
 const OUTPUT_CAPACITY: usize = 64;
@@ -50,6 +53,12 @@ pub struct SerialConfig {
     pub parity: Parity,
     pub stop_bits: StopBits,
     pub flow_control: FlowControl,
+    /// 送信時の改行（既定は変換なし）。
+    #[serde(default)]
+    pub tx_newline: TxNewline,
+    /// 受信時の改行の表示変換（既定は変換なし）。
+    #[serde(default)]
+    pub rx_newline: RxNewline,
 }
 
 impl SerialConfig {
@@ -62,6 +71,8 @@ impl SerialConfig {
             parity: Parity::None,
             stop_bits: StopBits::One,
             flow_control: FlowControl::None,
+            tx_newline: TxNewline::default(),
+            rx_newline: RxNewline::default(),
         }
     }
 
@@ -188,6 +199,7 @@ type Output = Result<Vec<u8>, TerminalError>;
 pub struct SerialSession {
     commands: mpsc::Sender<Command>,
     output: mpsc::Receiver<Output>,
+    tx_newline: TxNewline,
     closed: bool,
 }
 
@@ -208,7 +220,12 @@ impl SerialSession {
             .try_clone()
             .map(|port| Box::new(NativeControl(port)) as Box<dyn SerialControl>)
             .unwrap_or_else(|_| Box::new(NoControl));
-        Ok(Self::from_stream_with_control(stream, control))
+        Ok(Self::build(
+            stream,
+            control,
+            config.tx_newline,
+            config.rx_newline,
+        ))
     }
 
     /// 任意の非同期ストリームからセッションを作る（テストでPTYペアを使うため公開）。
@@ -224,12 +241,34 @@ impl SerialSession {
     where
         S: AsyncRead + AsyncWrite + Send + 'static,
     {
+        Self::build(stream, control, TxNewline::default(), RxNewline::default())
+    }
+
+    /// 改行変換つきでセッションを作る。
+    pub fn from_stream_with_newlines<S>(stream: S, tx: TxNewline, rx: RxNewline) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        Self::build(stream, Box::new(NoControl), tx, rx)
+    }
+
+    fn build<S>(
+        stream: S,
+        control: Box<dyn SerialControl>,
+        tx_newline: TxNewline,
+        rx_newline: RxNewline,
+    ) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Send + 'static,
+    {
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (out_tx, out_rx) = mpsc::channel(OUTPUT_CAPACITY);
-        tokio::spawn(pump(stream, control, cmd_rx, out_tx));
+        let rx_converter = IncomingConverter::new(rx_newline);
+        tokio::spawn(pump(stream, control, rx_converter, cmd_rx, out_tx));
         Self {
             commands: cmd_tx,
             output: out_rx,
+            tx_newline,
             closed: false,
         }
     }
@@ -238,6 +277,7 @@ impl SerialSession {
 async fn pump<S>(
     stream: S,
     mut control: Box<dyn SerialControl>,
+    mut rx_converter: IncomingConverter,
     mut commands: mpsc::Receiver<Command>,
     output: mpsc::Sender<Output>,
 ) where
@@ -250,7 +290,7 @@ async fn pump<S>(
             read = reader.read(&mut buf) => match read {
                 Ok(0) => break,
                 Ok(n) => {
-                    if output.send(Ok(buf[..n].to_vec())).await.is_err() {
+                    if output.send(Ok(rx_converter.convert(&buf[..n]))).await.is_err() {
                         break;
                     }
                 }
@@ -357,7 +397,7 @@ impl TerminalSession for SerialSession {
             return Err(TerminalError::Closed);
         }
         self.commands
-            .send(Command::Data(data.to_vec()))
+            .send(Command::Data(convert_outgoing(data, self.tx_newline)))
             .await
             .map_err(|_| TerminalError::Closed)
     }
@@ -482,6 +522,51 @@ mod tests {
             .iter()
             .map(|(n, _)| n.clone())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn transmit_newline_is_converted() {
+        let (a, mut dev) = SerialStream::pair().unwrap();
+        let mut s = SerialSession::from_stream_with_newlines(a, TxNewline::CrLf, RxNewline::Raw);
+        s.write(b"ls\r").await.unwrap();
+        let mut buf = [0u8; 4];
+        timeout(Duration::from_secs(5), dev.read_exact(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf, b"ls\r\n");
+    }
+
+    #[tokio::test]
+    async fn received_lf_can_be_shown_as_crlf() {
+        let (a, mut dev) = SerialStream::pair().unwrap();
+        let mut s = SerialSession::from_stream_with_newlines(a, TxNewline::Cr, RxNewline::LfToCrLf);
+        dev.write_all(b"a\nb\r\nc").await.unwrap();
+        assert_eq!(read_until(&mut s, b"c").await, b"a\r\nb\r\nc");
+    }
+
+    #[tokio::test]
+    async fn newlines_are_untouched_by_default() {
+        let (mut s, mut dev) = pair();
+        dev.write_all(b"a\nb").await.unwrap();
+        assert_eq!(read_until(&mut s, b"b").await, b"a\nb");
+        s.write(b"x\r").await.unwrap();
+        let mut buf = [0u8; 2];
+        timeout(Duration::from_secs(5), dev.read_exact(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf, b"x\r");
+    }
+
+    #[test]
+    fn config_newlines_default_to_raw_and_deserialize_without_them() {
+        let c = SerialConfig::new("/dev/x", 9600);
+        assert_eq!(c.tx_newline, TxNewline::Cr);
+        assert_eq!(c.rx_newline, RxNewline::Raw);
+        let json = r#"{"port":"/dev/x","baud_rate":9600,"data_bits":"Eight","parity":"None","stop_bits":"One","flow_control":"None"}"#;
+        let c: SerialConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.tx_newline, TxNewline::Cr);
     }
 
     #[tokio::test]
