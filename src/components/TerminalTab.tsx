@@ -1,3 +1,4 @@
+import { Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import {
@@ -7,6 +8,7 @@ import {
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance } from "../lib/settings";
 import { EchoControl } from "./EchoControl";
+import { SearchBar } from "./SearchBar";
 import { LogControl } from "./LogControl";
 import { SerialControls } from "./SerialControls";
 import { Button } from "./ui/button";
@@ -24,6 +26,8 @@ interface Props {
   /** 保持していない秘密情報の再入力が必要な再接続。 */
   onEditAndReconnect: (id: string) => void;
   appearance?: Appearance;
+  /** 増えたら検索バーを開く（⌘F）。 */
+  findSignal?: number;
 }
 
 /** 1タブ = 1セッション。xterm とセッションをここで結び付ける。 */
@@ -36,6 +40,7 @@ export function TerminalTab({
   onSecretsConsumed,
   onEditAndReconnect,
   appearance,
+  findSignal = 0,
 }: Props) {
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
@@ -55,6 +60,19 @@ export function TerminalTab({
       : "off",
   );
   const localEcho = supportsEcho && isLocalEchoOn(echoMode, remoteEcho);
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [seenFindSignal, setSeenFindSignal] = useState(findSignal);
+  if (findSignal !== seenFindSignal) {
+    // 検索の要求が来た（⌘F）。描画中の状態更新は、値が変わったときの1回だけ。
+    setSeenFindSignal(findSignal);
+    setSearchOpen(true);
+  }
+  const closeSearch = () => {
+    setSearchOpen(false);
+    termRef.current?.clearSearch();
+    termRef.current?.focus();
+  };
 
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。
@@ -116,6 +134,15 @@ export function TerminalTab({
             sessionId={status === "connected" ? sessionId : null}
           />
         )}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="検索（⌘F）"
+          title="検索（⌘F）"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search className="h-4 w-4" />
+        </Button>
         {supportsEcho && (
           <EchoControl
             mode={echoMode}
@@ -128,6 +155,16 @@ export function TerminalTab({
           title={title}
         />
       </div>
+      {searchOpen && (
+        <SearchBar
+          onFind={(term, options, direction, incremental) =>
+            termRef.current?.find(term, options, direction, incremental) ??
+            false
+          }
+          onClear={() => termRef.current?.clearSearch()}
+          onClose={closeSearch}
+        />
+      )}
       <TerminalView
         ref={termRef}
         active={active}

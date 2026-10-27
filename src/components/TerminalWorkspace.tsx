@@ -11,6 +11,8 @@ interface Props {
   onSecretsConsumed: (id: string) => void;
   onEditAndReconnect: (id: string) => void;
   appearance?: Appearance;
+  /** タブごとの検索要求の回数。増えたタブが検索バーを開く。 */
+  findSignals?: Record<string, number>;
 }
 
 /** 非アクティブなタブもアンマウントせず `hidden` で隠す（セッションと表示内容を保持）。 */
@@ -21,6 +23,7 @@ export function TerminalWorkspace({
   onSecretsConsumed,
   onEditAndReconnect,
   appearance,
+  findSignals,
 }: Props) {
   if (tabs.length === 0) {
     return (
@@ -48,6 +51,7 @@ export function TerminalWorkspace({
             onSecretsConsumed={onSecretsConsumed}
             onEditAndReconnect={onEditAndReconnect}
             appearance={appearance}
+            findSignal={findSignals?.[tab.id] ?? 0}
           />
         </div>
       ))}

@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { DEFAULT_SETTINGS, type Appearance } from "../lib/settings";
@@ -15,6 +16,15 @@ export interface TerminalHandle {
   /** 生バイト列を描画する（文字コード変換は xterm 側のUTF-8デコードに任せる）。 */
   write(data: Uint8Array): void;
   size(): { cols: number; rows: number };
+  /** スクロールバック内を検索する。一致があれば `true`。不正な正規表現は例外になる。 */
+  find(
+    term: string,
+    options: { caseSensitive: boolean; regex: boolean },
+    direction: "next" | "previous",
+    incremental: boolean,
+  ): boolean;
+  /** 検索の強調表示と選択を消す。 */
+  clearSearch(): void;
   focus(): void;
 }
 
@@ -36,6 +46,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitRef = useRef<FitAddon | null>(null);
+    const searchRef = useRef<SearchAddon | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const { fontFamily, fontSize, scrollback, cursorBlink } = appearance;
@@ -58,6 +69,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       const term = new Terminal({ ...appliedRef.current });
       const fit = new FitAddon();
       term.loadAddon(fit);
+      const searchAddon = new SearchAddon();
+      term.loadAddon(searchAddon);
+      searchRef.current = searchAddon;
       term.open(container);
       termRef.current = term;
       fitRef.current = fit;
@@ -80,6 +94,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         term.dispose();
         termRef.current = null;
         fitRef.current = null;
+        searchRef.current = null;
       };
     }, []);
 
@@ -115,6 +130,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
           rows: termRef.current?.rows ?? 24,
         }),
         focus: () => termRef.current?.focus(),
+        find: (term, options, direction, incremental) => {
+          const search = searchRef.current;
+          if (!search) return false;
+          const opts = { ...options, incremental };
+          return direction === "next"
+            ? search.findNext(term, opts)
+            : search.findPrevious(term, opts);
+        },
+        clearSearch: () => {
+          searchRef.current?.clearDecorations();
+          termRef.current?.clearSelection();
+        },
       }),
       [],
     );

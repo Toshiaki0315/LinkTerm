@@ -20,17 +20,20 @@ vi.mock("./components/TerminalTab", () => ({
   TerminalTab: ({
     tabId,
     appearance,
+    findSignal,
     onEditAndReconnect,
     onSecretsConsumed,
   }: {
     tabId: string;
     appearance?: { fontSize: number; fontFamily: string };
+    findSignal?: number;
     onEditAndReconnect: (id: string) => void;
     onSecretsConsumed: (id: string) => void;
   }) => (
     <div
       data-testid={`term-${tabId}`}
       data-font-size={appearance?.fontSize}
+      data-find-signal={findSignal}
       data-font-family={appearance?.fontFamily}
     >
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
@@ -506,6 +509,56 @@ describe("App", () => {
       await user.click(await screen.findByRole("button", { name: "保存" }));
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
       expect(screen.getAllByRole("tab", { hidden: true })).toHaveLength(1);
+    });
+  });
+
+  describe("検索（⌘F）", () => {
+    async function openTabs(
+      user: ReturnType<typeof userEvent.setup>,
+      n: number,
+    ) {
+      for (let i = 0; i < n; i++) {
+        await user.click(screen.getByRole("button", { name: "新しい接続" }));
+        await user.click(await screen.findByRole("button", { name: "接続" }));
+        await waitFor(() =>
+          expect(screen.getAllByRole("tab")).toHaveLength(i + 1),
+        );
+      }
+    }
+    const signals = () =>
+      screen
+        .getAllByTestId(/^term-/)
+        .map((el) => el.getAttribute("data-find-signal"));
+
+    it("⌘F は、表示中のタブにだけ検索を要求する（押すたびに値が増える）", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await openTabs(user, 2);
+      expect(signals()).toEqual(["0", "0"]);
+      await user.keyboard("{Meta>}f{/Meta}");
+      expect(signals()).toEqual(["0", "1"]);
+      await user.keyboard("{Meta>}f{/Meta}");
+      expect(signals()).toEqual(["0", "2"]);
+      await user.keyboard("{Meta>}1{/Meta}");
+      await user.keyboard("{Meta>}f{/Meta}");
+      expect(signals()).toEqual(["1", "2"]);
+    });
+
+    it("タブがなければ何もしない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}f{/Meta}");
+      expect(screen.queryAllByTestId(/^term-/)).toHaveLength(0);
+    });
+
+    it("ダイアログ表示中は受け付けない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await openTabs(user, 1);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await screen.findByRole("dialog");
+      await user.keyboard("{Meta>}f{/Meta}");
+      expect(signals()).toEqual(["0"]);
     });
   });
 });

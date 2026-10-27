@@ -1,6 +1,7 @@
 export type ShortcutAction =
   | { type: "new" }
   | { type: "close" }
+  | { type: "find" }
   | { type: "select"; index: number | "last" }
   | { type: "next" }
   | { type: "previous" };
@@ -29,6 +30,7 @@ export function shortcutFor(event: KeyEventLike): ShortcutAction | null {
   }
   if (key === "t") return { type: "new" };
   if (key === "w") return { type: "close" };
+  if (key === "f") return { type: "find" };
   if (/^[1-9]$/.test(key)) {
     return { type: "select", index: key === "9" ? "last" : Number(key) - 1 };
   }

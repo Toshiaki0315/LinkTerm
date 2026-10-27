@@ -24,6 +24,7 @@ vi.mock("@xterm/xterm", () => ({
     open = vi.fn();
     write = vi.fn();
     focus = vi.fn();
+    clearSelection = vi.fn();
     dispose = vi.fn();
     loadAddon = vi.fn();
     onData = vi.fn((cb: (d: string) => void) => {
@@ -41,6 +42,23 @@ vi.mock("@xterm/xterm", () => ({
     }
   },
 }));
+const search = vi.hoisted(() => ({
+  instances: [] as Array<{
+    findNext: ReturnType<typeof vi.fn>;
+    findPrevious: ReturnType<typeof vi.fn>;
+    clearDecorations: ReturnType<typeof vi.fn>;
+  }>,
+}));
+vi.mock("@xterm/addon-search", () => ({
+  SearchAddon: class {
+    findNext = vi.fn(() => true);
+    findPrevious = vi.fn(() => true);
+    clearDecorations = vi.fn();
+    constructor() {
+      search.instances.push(this);
+    }
+  },
+}));
 const fit = vi.hoisted(() => vi.fn());
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
@@ -53,6 +71,7 @@ import { TerminalView, type TerminalHandle } from "./TerminalView";
 
 beforeEach(() => {
   xterm.instances.length = 0;
+  search.instances.length = 0;
   fit.mockClear();
   globalThis.ResizeObserver = class {
     observe = vi.fn();
@@ -215,6 +234,55 @@ describe("TerminalView", () => {
       );
       expect(xterm.instances[0].options).toEqual(before);
       expect(fit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("検索", () => {
+    const opts = { caseSensitive: true, regex: false };
+
+    function mount() {
+      const ref = createRef<TerminalHandle>();
+      render(
+        <TerminalView
+          ref={ref}
+          active
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      return ref.current!;
+    }
+
+    it("検索アドオンを読み込む", () => {
+      mount();
+      expect(search.instances).toHaveLength(1);
+      expect(xterm.instances[0].loadAddon).toHaveBeenCalledWith(
+        search.instances[0],
+      );
+    });
+
+    it("次・前の一致を探し、結果（一致の有無）を返す", () => {
+      const handle = mount();
+      expect(handle.find("err", opts, "next", true)).toBe(true);
+      expect(search.instances[0].findNext).toHaveBeenCalledWith("err", {
+        caseSensitive: true,
+        regex: false,
+        incremental: true,
+      });
+      search.instances[0].findPrevious.mockReturnValue(false);
+      expect(handle.find("err", opts, "previous", false)).toBe(false);
+      expect(search.instances[0].findPrevious).toHaveBeenCalledWith("err", {
+        caseSensitive: true,
+        regex: false,
+        incremental: false,
+      });
+    });
+
+    it("検索を消すと、強調表示と選択を解除する", () => {
+      const handle = mount();
+      handle.clearSearch();
+      expect(search.instances[0].clearDecorations).toHaveBeenCalled();
+      expect(xterm.instances[0].clearSelection).toHaveBeenCalled();
     });
   });
 });

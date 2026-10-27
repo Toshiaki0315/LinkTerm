@@ -67,6 +67,8 @@ function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const startupDone = useRef(false);
+  /** タブごとの検索要求の回数（⌘F のたびに増やし、そのタブが検索バーを開く）。 */
+  const [findSignals, setFindSignals] = useState<Record<string, number>>({});
 
   /** タブを追加する。 */
   const openTab = useCallback((values: ConnectionValues) => {
@@ -212,6 +214,11 @@ function App() {
         case "close":
           if (state.activeId) dispatch({ type: "close", id: state.activeId });
           break;
+        case "find": {
+          const id = state.activeId;
+          if (id) setFindSignals((s) => ({ ...s, [id]: (s[id] ?? 0) + 1 }));
+          break;
+        }
         case "select":
           dispatch({ type: "activateIndex", index: action.index });
           break;
@@ -311,6 +318,7 @@ function App() {
         onSecretsConsumed={onSecretsConsumed}
         onEditAndReconnect={onEditAndReconnect}
         appearance={settings}
+        findSignals={findSignals}
       />
       <ConnectionDialog
         open={dialogOpen}

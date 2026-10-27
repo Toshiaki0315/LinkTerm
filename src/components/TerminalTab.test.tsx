@@ -25,6 +25,11 @@ vi.mock("../hooks/useTerminalSession", () => ({
   }),
 }));
 const termWrite = vi.hoisted(() => vi.fn());
+const termSearch = vi.hoisted(() => ({
+  find: vi.fn(),
+  clearSearch: vi.fn(),
+  focus: vi.fn(),
+}));
 const viewProps = vi.hoisted(() => ({ onInput: (_d: string) => {} }));
 vi.mock("./TerminalView", async () => {
   const React = await import("react");
@@ -35,7 +40,9 @@ vi.mock("./TerminalView", async () => {
         React.useImperativeHandle(ref, () => ({
           write: termWrite,
           size: () => ({ cols: 100, rows: 30 }),
-          focus: () => {},
+          focus: termSearch.focus,
+          find: termSearch.find,
+          clearSearch: termSearch.clearSearch,
         }));
         return <div data-testid="term" />;
       },
@@ -75,6 +82,7 @@ const sshPassword: ConnectionValues = {
 
 function setup(values: ConnectionValues) {
   const props = {
+    findSignal: 0,
     tabId: "t1",
     title: "title",
     values,
@@ -355,6 +363,47 @@ describe("TerminalTab", () => {
         "data-session",
         "",
       );
+    });
+  });
+
+  describe("検索", () => {
+    it("最初は検索バーを出さない。ツールバーの「検索」でも開ける", async () => {
+      setup(telnet);
+      expect(screen.queryByRole("search")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "検索（⌘F）" }));
+      expect(screen.getByRole("search")).toBeInTheDocument();
+    });
+
+    it("検索の要求（findSignal の増加）で検索バーが開く。同じ値のままなら開き直さない", async () => {
+      const { view, ...props } = setup(telnet);
+      view.rerender(<TerminalTab {...props} findSignal={1} />);
+      expect(screen.getByRole("search")).toBeInTheDocument();
+      await userEvent.click(
+        screen.getByRole("button", { name: "検索を閉じる" }),
+      );
+      expect(screen.queryByRole("search")).not.toBeInTheDocument();
+      view.rerender(<TerminalTab {...props} findSignal={1} />);
+      expect(screen.queryByRole("search")).not.toBeInTheDocument();
+      view.rerender(<TerminalTab {...props} findSignal={2} />);
+      expect(screen.getByRole("search")).toBeInTheDocument();
+    });
+
+    it("入力した語でスクロールバックを検索し、閉じると強調を消してターミナルへ戻る", async () => {
+      termSearch.find.mockReturnValue(true);
+      const user = userEvent.setup();
+      setup(telnet);
+      await user.click(screen.getByRole("button", { name: "検索（⌘F）" }));
+      await user.type(screen.getByRole("textbox", { name: "検索" }), "ab");
+      expect(termSearch.find).toHaveBeenLastCalledWith(
+        "ab",
+        { caseSensitive: false, regex: false },
+        "next",
+        true,
+      );
+      termSearch.focus.mockClear();
+      await user.click(screen.getByRole("button", { name: "検索を閉じる" }));
+      expect(termSearch.clearSearch).toHaveBeenCalled();
+      expect(termSearch.focus).toHaveBeenCalled();
     });
   });
 });

@@ -76,4 +76,12 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("c", { metaKey: true }))).toBeNull();
     expect(shortcutFor(key("v", { metaKey: true }))).toBeNull();
   });
+
+  it("⌘F は検索（⌘⇧F や Ctrl+F は無視）", () => {
+    expect(shortcutFor(key("f", { metaKey: true }))).toEqual({ type: "find" });
+    expect(shortcutFor(key("F", { metaKey: true }))).toEqual({ type: "find" });
+    expect(shortcutFor(key("f", { metaKey: true, shiftKey: true }))).toBeNull();
+    expect(shortcutFor(key("f", { ctrlKey: true }))).toBeNull();
+    expect(shortcutFor(key("f"))).toBeNull();
+  });
 });
