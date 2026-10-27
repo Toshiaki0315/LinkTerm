@@ -17,6 +17,7 @@ const FORBIDDEN_FONT_CHARS = /[\u0000-\u001f\u007f;{}<>\\]/;
 const startupSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }),
   z.object({ kind: z.literal("local") }),
+  z.object({ kind: z.literal("restore") }),
   z.object({
     kind: z.literal("profile"),
     profileId: z

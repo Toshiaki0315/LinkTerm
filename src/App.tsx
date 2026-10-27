@@ -18,6 +18,8 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import {
   connectionSchema,
   connectionTitle,
+  parseSavedValues,
+  stripSecrets,
   type ConnectionValues,
 } from "./lib/connection-schema";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
@@ -25,6 +27,7 @@ import { shortcutFor } from "./lib/shortcuts";
 import { initialTabsState, tabsReducer } from "./lib/tabs";
 import {
   deleteProfile,
+  getSessionState,
   getSettings,
   listProfiles,
   onHostKeyRequest,
@@ -32,6 +35,7 @@ import {
   pendingHostKeyRequests,
   respondHostKey,
   saveProfile,
+  saveSessionState,
   saveSettings,
   type HostKeyRequest,
   type SavedProfile,
@@ -67,20 +71,29 @@ function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const startupDone = useRef(false);
+  /** 起動時の復元が済んだか。済むまでは、保存済みのタブ構成を上書きしない。 */
+  const [sessionReady, setSessionReady] = useState(false);
   /** タブごとの検索要求の回数（⌘F のたびに増やし、そのタブが検索バーを開く）。 */
   const [findSignals, setFindSignals] = useState<Record<string, number>>({});
 
   /** タブを追加する。 */
-  const openTab = useCallback((values: ConnectionValues) => {
-    dispatch({
-      type: "add",
-      tab: {
-        id: crypto.randomUUID(),
-        title: connectionTitle(values),
-        values,
-      },
-    });
-  }, []);
+  const openTab = useCallback(
+    (
+      values: ConnectionValues,
+      extra?: { title?: string; deferStart?: boolean },
+    ) => {
+      dispatch({
+        type: "add",
+        tab: {
+          id: crypto.randomUUID(),
+          title: extra?.title ?? connectionTitle(values),
+          values,
+          deferStart: extra?.deferStart,
+        },
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     // 設定と保存済みの接続を読み込み、起動時に開くターミナルを開く（1回だけ）。
@@ -114,7 +127,39 @@ function App() {
       if (!startupDone.current) {
         startupDone.current = true;
         const { startup } = loadedSettings;
-        if (startup.kind === "local") {
+        if (startup.kind === "restore") {
+          try {
+            const session = await getSessionState();
+            if (cancelled) return;
+            let skipped = 0;
+            let activeIndex: number | null = null;
+            let restoredCount = 0;
+            session.tabs.forEach((saved, index) => {
+              const values = parseSavedValues(saved.values);
+              if (!values) {
+                skipped += 1;
+                return;
+              }
+              if (index === session.active) activeIndex = restoredCount;
+              restoredCount += 1;
+              openTab(values, {
+                title: saved.title,
+                // パスワードは保存していないため、パスワード認証のSSHは「接続」を待つ。
+                deferStart:
+                  values.type === "ssh" && values.authKind === "password",
+              });
+            });
+            if (activeIndex !== null) {
+              dispatch({ type: "activateIndex", index: activeIndex });
+            }
+            if (skipped > 0) {
+              notices.push(`${skipped}個のタブを復元できませんでした`);
+            }
+          } catch (e) {
+            if (cancelled) return;
+            notices.push(`タブ構成を読み込めません: ${describe(e)}`);
+          }
+        } else if (startup.kind === "local") {
           openTab(connectionSchema.parse({ type: "local" }));
         } else if (startup.kind === "profile") {
           const profile = loadedProfiles.find(
@@ -138,12 +183,34 @@ function App() {
           }
         }
       }
+      setSessionReady(true);
       if (notices.length > 0) setNotice(notices.join(" / "));
     })();
     return () => {
       cancelled = true;
     };
   }, [openTab]);
+
+  /** 保存するタブ構成（パスワード類を除く）。内容が変わったときだけ保存するため、文字列にして比べる。 */
+  const sessionPayload = JSON.stringify({
+    tabs: state.tabs.map((t) => ({
+      title: t.title,
+      values: stripSecrets(t.values),
+    })),
+    active: state.tabs.some((t) => t.id === state.activeId)
+      ? state.tabs.findIndex((t) => t.id === state.activeId)
+      : null,
+  });
+  const saveLayout = settings.startup.kind === "restore" && sessionReady;
+  useEffect(() => {
+    if (!saveLayout) return;
+    const timer = setTimeout(() => {
+      saveSessionState(JSON.parse(sessionPayload)).catch((e: unknown) =>
+        setNotice(`タブ構成を保存できません: ${describe(e)}`),
+      );
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [saveLayout, sessionPayload]);
 
   useEffect(() => {
     let disposed = false;

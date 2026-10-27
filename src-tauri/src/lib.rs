@@ -6,6 +6,7 @@ pub mod manager;
 pub mod menu;
 pub mod profiles;
 pub mod session;
+pub mod session_state;
 pub mod settings;
 
 use tauri::Manager;
@@ -43,6 +44,8 @@ pub fn run() {
             commands::save_profile,
             commands::delete_profile,
             commands::list_fonts,
+            commands::get_session_state,
+            commands::save_session_state,
             commands::get_settings,
             commands::save_settings,
         ])

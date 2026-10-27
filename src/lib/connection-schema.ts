@@ -88,8 +88,8 @@ const telnet = z.object({
   localEcho,
   host: required("ホスト"),
   port,
-  txNewline: z.enum(["Cr", "Lf", "CrLf"]),
-  rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]),
+  txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
+  rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
 });
 
 const serial = z.object({
@@ -104,10 +104,10 @@ const serial = z.object({
     .number("ボーレートを入力してください")
     .int("ボーレートは整数で入力してください")
     .min(1, "ボーレートは1以上で入力してください"),
-  dataBits: z.enum(["Five", "Six", "Seven", "Eight"]),
-  parity: z.enum(["None", "Odd", "Even"]),
-  stopBits: z.enum(["One", "Two"]),
-  flowControl: z.enum(["None", "Software", "Hardware"]),
+  dataBits: z.enum(["Five", "Six", "Seven", "Eight"]).default("Eight"),
+  parity: z.enum(["None", "Odd", "Even"]).default("None"),
+  stopBits: z.enum(["One", "Two"]).default("One"),
+  flowControl: z.enum(["None", "Software", "Hardware"]).default("None"),
 });
 
 export const connectionSchema = z.discriminatedUnion("type", [
@@ -198,4 +198,41 @@ export function connectionTitle(v: ConnectionValues): string {
     case "serial":
       return `${v.serialPort.split("/").pop()} @${v.baudRate}`;
   }
+}
+
+/**
+ * 保存済みの設定（プロファイル・前回のタブ構成）を接続設定として読む。
+ *
+ * 秘密情報は保存しないため、パスワード認証の SSH はパスワード欄が空のまま読めるようにする
+ * （接続時に入力してもらう）。保存値に紛れたパスワード類は捨てる。不正な値は `null`。
+ */
+export function parseSavedValues(raw: unknown): ConnectionValues | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    return null;
+  const {
+    password: _password,
+    passphrase: _passphrase,
+    ...rest
+  } = raw as Record<string, unknown>;
+  // 検証を通すためだけの仮の値。読み込み後に空へ戻す。
+  const candidate =
+    rest.type === "ssh" && rest.authKind === "password"
+      ? { ...rest, password: "placeholder" }
+      : rest;
+  const parsed = connectionSchema.safeParse(candidate);
+  if (!parsed.success) return null;
+  const values = parsed.data;
+  return values.type === "ssh"
+    ? { ...values, password: "", passphrase: "" }
+    : values;
+}
+
+/** 保存・表示に使う値から、パスワード類を取り除く。 */
+export function stripSecrets(
+  values: ConnectionValues,
+): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...values };
+  delete rest.password;
+  delete rest.passphrase;
+  return rest;
 }

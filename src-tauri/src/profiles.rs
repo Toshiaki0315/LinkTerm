@@ -56,7 +56,7 @@ fn io_error(context: impl Into<String>, source: std::io::Error) -> ProfileError 
 }
 
 /// 秘密情報のキーを取り除く（キー名の大文字小文字は区別しない）。
-fn strip_secrets(values: &mut serde_json::Value) {
+pub(crate) fn strip_secrets(values: &mut serde_json::Value) {
     if let Some(map) = values.as_object_mut() {
         map.retain(|key, _| !SECRET_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)));
     }

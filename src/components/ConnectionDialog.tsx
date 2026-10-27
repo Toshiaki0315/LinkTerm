@@ -11,6 +11,7 @@ import {
   connectionSchema,
   defaultConnectionValues,
   ENCODINGS,
+  stripSecrets,
   type ConnectionValues,
 } from "../lib/connection-schema";
 import { listSerialPorts, type SavedProfile } from "../lib/terminal-api";
@@ -78,14 +79,6 @@ const EXTRA_DEFAULTS = {
 
 /** 手入力を選ぶ選択肢の値。 */
 const MANUAL_PORT = "__manual__";
-
-/** 保存・表示に使う値から秘密情報を取り除く。 */
-function withoutSecrets(values: ConnectionValues): Record<string, unknown> {
-  const rest: Record<string, unknown> = { ...values };
-  delete rest.password;
-  delete rest.passphrase;
-  return rest;
-}
 
 const BAUD_RATES = [
   1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
@@ -227,7 +220,7 @@ export function ConnectionDialog({
         saveAs: {
           id: profileId || undefined,
           name,
-          values: withoutSecrets(values),
+          values: stripSecrets(values),
         },
       };
     }

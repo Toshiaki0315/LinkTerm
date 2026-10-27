@@ -497,6 +497,18 @@ describe("SettingsDialog", () => {
     });
   });
 
+  it("起動時に「前回のタブを復元」を選んで保存できる", async () => {
+    const { user, onSave } = setup();
+    await user.selectOptions(
+      screen.getByLabelText("起動時に開くターミナル"),
+      "restore",
+    );
+    expect(screen.queryByLabelText("起動時の接続")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].startup).toEqual({ kind: "restore" });
+  });
+
   it("キャンセルで保存せずに閉じる", async () => {
     const { user, onSave, onOpenChange } = setup();
     await user.click(screen.getByRole("button", { name: "キャンセル" }));

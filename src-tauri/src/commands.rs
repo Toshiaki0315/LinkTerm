@@ -21,6 +21,7 @@ use crate::session::{
     SerialSession, SessionLogger, SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession,
     TerminalError, TerminalSession, TerminalSize, TxNewline, list_ports,
 };
+use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
 
 pub const EVENT_DATA: &str = "terminal-data";
@@ -52,6 +53,8 @@ pub enum CommandError {
     Settings(#[from] SettingsError),
     #[error(transparent)]
     Font(#[from] FontError),
+    #[error(transparent)]
+    SessionState(#[from] SessionStateError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -157,6 +160,7 @@ pub struct AppState {
     log_paths: LogPathReserver,
     profiles: ProfileStore,
     settings: SettingsStore,
+    session_state: SessionStateStore,
 }
 
 impl AppState {
@@ -175,6 +179,7 @@ impl AppState {
             log_paths: LogPathReserver::default(),
             profiles: ProfileStore::new(dir.join("profiles.json")),
             settings: SettingsStore::new(dir.join("settings.json")),
+            session_state: SessionStateStore::new(dir.join("session_state.json")),
         })
     }
 }
@@ -521,6 +526,19 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
         .await
         .map_err(|e| CommandError::Invalid(format!("フォント一覧の取得が中断されました: {e}")))?
         .map_err(CommandError::from)
+}
+
+/// 前回終了時のタブ構成（接続先のみ）。
+#[tauri::command]
+pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
+    Ok(state.session_state.load()?)
+}
+
+/// タブ構成を保存する。パスワード類は保存されない。
+#[tauri::command]
+pub fn save_session_state(state: State<'_, AppState>, session: SessionState) -> CommandResult<()> {
+    state.session_state.save(session)?;
+    Ok(())
 }
 
 #[tauri::command]

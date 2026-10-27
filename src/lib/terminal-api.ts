@@ -64,6 +64,12 @@ export interface FontFamily {
   monospace: boolean;
 }
 
+/** 終了時のタブ構成（接続先のみ。パスワード類は含まれない）。 */
+export interface SessionState {
+  tabs: Array<{ title: string; values: Record<string, unknown> }>;
+  active: number | null;
+}
+
 export interface HostKeyRequest {
   requestId: string;
   host: string;
@@ -134,6 +140,11 @@ export const respondHostKey = (requestId: string, approved: boolean) =>
   invoke<void>("respond_host_key", { requestId, approved });
 
 export const listFonts = () => invoke<FontFamily[]>("list_fonts");
+
+export const getSessionState = () => invoke<SessionState>("get_session_state");
+
+export const saveSessionState = (session: SessionState) =>
+  invoke<void>("save_session_state", { session });
 
 export const getSettings = () => invoke<Settings>("get_settings");
 

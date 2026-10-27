@@ -39,6 +39,8 @@ interface Props {
   autoReconnect?: AutoReconnect;
   /** 増えたら検索バーを開く（⌘F）。 */
   findSignal?: number;
+  /** 復元したタブ: 自動では接続せず、「接続」ボタンで接続する。 */
+  deferStart?: boolean;
 }
 
 /** 1タブ = 1セッション。xterm とセッションをここで結び付ける。 */
@@ -53,6 +55,7 @@ export function TerminalTab({
   appearance,
   autoReconnect = DISABLED_AUTO_RECONNECT,
   findSignal = 0,
+  deferStart = false,
 }: Props) {
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
@@ -122,13 +125,13 @@ export function TerminalTab({
 
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。
-    if (startedRef.current) return;
+    if (startedRef.current || deferStart) return;
     startedRef.current = true;
     void start(
       toStartRequest(values, termRef.current?.size() ?? { cols: 80, rows: 24 }),
     );
     onSecretsConsumed(tabId);
-  }, [start, values, tabId, onSecretsConsumed]);
+  }, [start, values, tabId, onSecretsConsumed, deferStart]);
 
   useEffect(() => {
     onStatusChange(tabId, status);
@@ -165,11 +168,25 @@ export function TerminalTab({
       onEditAndReconnect(tabId);
       return;
     }
-    termRef.current?.write(new TextEncoder().encode("\r\n--- 再接続 ---\r\n"));
+    // 初回の接続（復元したタブ）では区切り線を出さない。
+    if (status !== "idle") {
+      termRef.current?.write(
+        new TextEncoder().encode("\r\n--- 再接続 ---\r\n"),
+      );
+    }
     void start(
       toStartRequest(values, termRef.current?.size() ?? { cols: 80, rows: 24 }),
     );
-  }, [needsSecret, onEditAndReconnect, tabId, start, values]);
+    onSecretsConsumed(tabId);
+  }, [
+    needsSecret,
+    onEditAndReconnect,
+    onSecretsConsumed,
+    tabId,
+    start,
+    values,
+    status,
+  ]);
 
   const auto = useAutoReconnect({
     enabled: autoReconnect.enabled,
@@ -246,6 +263,17 @@ export function TerminalTab({
             termRef.current?.focus();
           }}
         />
+      )}
+      {status === "idle" && deferStart && (
+        <div
+          role="status"
+          className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-neutral-900/90 px-3 py-2 text-sm text-neutral-200"
+        >
+          <span>前回のタブです（未接続）</span>
+          <Button size="sm" onClick={reconnect}>
+            接続
+          </Button>
+        </div>
       )}
       {(status === "error" || status === "closed") && (
         <div

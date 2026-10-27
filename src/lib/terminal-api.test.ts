@@ -19,7 +19,9 @@ import {
   setControlSignal,
   setDisplayMode,
   pendingHostKeyRequests,
+  getSessionState,
   getSettings,
+  saveSessionState,
   listFonts,
   onOpenSettings,
   saveSettings,
@@ -266,6 +268,23 @@ describe("シリアルの操作・表示モード", () => {
       ["serial_set_control", { id: "a", signal: "rts", on: true }],
       ["serial_send_break", { id: "a" }],
       ["set_display_mode", { id: "a", mode: "hex" }],
+    ]);
+  });
+});
+
+describe("タブ構成の保存", () => {
+  it("get / save", async () => {
+    const session = {
+      tabs: [{ title: "A", values: { type: "local" } }],
+      active: 0,
+    };
+    invoke.mockResolvedValueOnce(session);
+    await expect(getSessionState()).resolves.toEqual(session);
+    invoke.mockResolvedValueOnce(undefined);
+    await saveSessionState(session);
+    expect(invoke.mock.calls).toEqual([
+      ["get_session_state"],
+      ["save_session_state", { session }],
     ]);
   });
 });

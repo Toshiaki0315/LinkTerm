@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   listSerialPorts: vi.fn(),
   listProfiles: vi.fn(),
   getSettings: vi.fn(),
+  getSessionState: vi.fn(),
+  saveSessionState: vi.fn(),
   listFonts: vi.fn(),
   saveSettings: vi.fn(),
   onOpenSettings: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock("./components/TerminalTab", () => ({
   TerminalTab: ({
     tabId,
     appearance,
+    deferStart,
     findSignal,
     onEditAndReconnect,
     onSecretsConsumed,
@@ -33,6 +36,7 @@ vi.mock("./components/TerminalTab", () => ({
     tabId: string;
     appearance?: { fontSize: number; fontFamily: string };
     findSignal?: number;
+    deferStart?: boolean;
     onEditAndReconnect: (id: string) => void;
     onSecretsConsumed: (id: string) => void;
   }) => (
@@ -40,6 +44,7 @@ vi.mock("./components/TerminalTab", () => ({
       data-testid={`term-${tabId}`}
       data-font-size={appearance?.fontSize}
       data-find-signal={findSignal}
+      data-defer-start={deferStart ? "true" : "false"}
       data-font-family={appearance?.fontFamily}
     >
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
@@ -75,6 +80,8 @@ beforeEach(() => {
   api.listSerialPorts.mockResolvedValue([]);
   api.listProfiles.mockResolvedValue([]);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
+  api.getSessionState.mockResolvedValue({ tabs: [], active: null });
+  api.saveSessionState.mockResolvedValue(undefined);
   api.listFonts.mockResolvedValue([]);
   api.saveSettings.mockImplementation(async (s) => s);
   api.onOpenSettings.mockImplementation(async (cb) => {
@@ -657,6 +664,191 @@ describe("App", () => {
         dataTransfer,
       });
       expect(titles()).toEqual(["Local", "A"]);
+    });
+  });
+
+  describe("画面状態の復元", () => {
+    const restore = withStartup({ kind: "restore" });
+    const saved = (
+      tabs: Array<{ title: string; values: Record<string, unknown> }>,
+      active: number | null = 0,
+    ) => ({
+      tabs,
+      active,
+    });
+    const telnetValues = {
+      type: "telnet",
+      host: "192.168.0.1",
+      port: 23,
+      encoding: "UTF-8",
+    };
+    const titles = () => screen.getAllByRole("tab").map((t) => t.textContent);
+
+    it("前回のタブを、名前と順序のまま復元し、保存されていたアクティブなタブを選ぶ", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(
+        saved(
+          [
+            { title: "作業用", values: { type: "local", encoding: "UTF-8" } },
+            { title: "ルーター", values: telnetValues },
+          ],
+          1,
+        ),
+      );
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      expect(titles()).toEqual(["作業用", "ルーター"]);
+      expect(screen.getAllByRole("tab")[1]).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+
+    it("パスワード認証のSSHのタブは、自動接続せずに「接続」を待つ。他は自動で接続する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(
+        saved([
+          {
+            title: "ssh",
+            values: {
+              type: "ssh",
+              host: "h",
+              port: 22,
+              username: "u",
+              authKind: "password",
+              encoding: "UTF-8",
+            },
+          },
+          { title: "telnet", values: telnetValues },
+        ]),
+      );
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      const terms = screen.getAllByTestId(/^term-/);
+      expect(terms.map((t) => t.getAttribute("data-defer-start"))).toEqual([
+        "true",
+        "false",
+      ]);
+    });
+
+    it("復元できない（不正な）タブは飛ばして、その数を通知する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(
+        saved([
+          { title: "壊れた", values: { type: "ssh", host: "" } },
+          { title: "正常", values: telnetValues },
+          { title: "未知", values: { type: "ftp" } },
+        ]),
+      );
+      render(<App />);
+      expect(
+        await screen.findByText(/2個のタブを復元できませんでした/),
+      ).toBeInTheDocument();
+      expect(titles()).toEqual(["正常"]);
+    });
+
+    it("保存がなければ何も開かない", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      render(<App />);
+      await waitFor(() => expect(api.getSessionState).toHaveBeenCalled());
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    });
+
+    it("タブ構成の読み込みに失敗したら理由を通知する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockRejectedValue("壊れています");
+      render(<App />);
+      expect(
+        await screen.findByText(/タブ構成を読み込めません: 壊れています/),
+      ).toBeInTheDocument();
+    });
+
+    it("「復元」が選ばれていなければ、保存済みの構成を読み込まない・保存もしない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 700));
+      expect(api.getSessionState).not.toHaveBeenCalled();
+      expect(api.saveSessionState).not.toHaveBeenCalled();
+    });
+
+    it("タブを開く・閉じる・名前を変える・切り替えると、構成を保存する（秘密情報は含めない）", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.getSessionState).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.selectOptions(await screen.findByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "example.com");
+      await user.type(screen.getByLabelText("ユーザー名"), "alice");
+      await user.type(screen.getByLabelText("パスワード"), "top-secret");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await waitFor(() => expect(api.saveSessionState).toHaveBeenCalled(), {
+        timeout: 3000,
+      });
+      const calls = api.saveSessionState.mock.calls;
+      const last = calls[calls.length - 1][0];
+      expect(last.active).toBe(0);
+      expect(last.tabs).toHaveLength(1);
+      expect(last.tabs[0].title).toBe("alice@example.com");
+      expect(last.tabs[0].values).toMatchObject({
+        type: "ssh",
+        host: "example.com",
+        username: "alice",
+      });
+      expect(JSON.stringify(last)).not.toContain("top-secret");
+    });
+
+    it("全部のタブを閉じたら、空の構成を保存する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(
+        saved([{ title: "A", values: telnetValues }]),
+      );
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      api.saveSessionState.mockClear();
+      await user.click(screen.getByRole("button", { name: "A を閉じる" }));
+      await waitFor(
+        () =>
+          expect(api.saveSessionState).toHaveBeenLastCalledWith({
+            tabs: [],
+            active: null,
+          }),
+        {
+          timeout: 3000,
+        },
+      );
+    });
+
+    it("復元が終わるまでは保存しない（保存済みの構成を空で上書きしない）", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockReturnValue(new Promise(() => {}));
+      render(<App />);
+      await waitFor(() => expect(api.getSessionState).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 700));
+      expect(api.saveSessionState).not.toHaveBeenCalled();
+    });
+
+    it("保存に失敗したら理由を通知する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.saveSessionState.mockRejectedValue("書き込めません");
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.getSessionState).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText(
+          /タブ構成を保存できません: 書き込めません/,
+          {},
+          { timeout: 3000 },
+        ),
+      ).toBeInTheDocument();
     });
   });
 });

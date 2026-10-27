@@ -198,4 +198,13 @@ describe("tabsReducer", () => {
       expect(tabsReducer(s, { type: "move", id: "zzz", toIndex: 0 })).toBe(s);
     });
   });
+
+  it("deferStart を指定したタブは、その印を保つ（復元したタブを自動接続しないため）", () => {
+    const s = tabsReducer(initialTabsState, {
+      type: "add",
+      tab: { id: "a", title: "a", values: local, deferStart: true },
+    });
+    expect(s.tabs[0].deferStart).toBe(true);
+    expect(add(initialTabsState, "b").tabs[0].deferStart).toBeUndefined();
+  });
 });

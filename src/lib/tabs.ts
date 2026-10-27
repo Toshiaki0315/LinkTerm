@@ -6,6 +6,8 @@ export interface Tab {
   title: string;
   values: ConnectionValues;
   status: SessionStatus;
+  /** 復元したタブ。接続せずに表示し、「接続」を押したときに接続する。 */
+  deferStart?: boolean;
 }
 
 export interface TabsState {

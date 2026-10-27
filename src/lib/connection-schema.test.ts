@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectionSchema,
   connectionTitle,
+  parseSavedValues,
   defaultConnectionValues,
   toStartRequest,
 } from "./connection-schema";
@@ -276,5 +277,80 @@ describe("connectionTitle", () => {
       const r = connectionSchema.safeParse({ ...base, serialPort: bad });
       expect(r.success, bad).toBe(false);
     }
+  });
+});
+
+describe("parseSavedValues（保存済みの設定の読み込み）", () => {
+  it("秘密情報を含まない保存値を、そのまま接続設定として読む", () => {
+    const telnet = parseSavedValues({
+      type: "telnet",
+      host: "h",
+      port: 23,
+      encoding: "Shift_JIS",
+    });
+    expect(telnet).toMatchObject({
+      type: "telnet",
+      host: "h",
+      encoding: "Shift_JIS",
+      localEcho: "auto",
+    });
+    expect(parseSavedValues({ type: "local" })).toMatchObject({
+      type: "local",
+      encoding: "UTF-8",
+    });
+    expect(
+      parseSavedValues({
+        type: "ssh",
+        host: "h",
+        port: 22,
+        username: "u",
+        authKind: "agent",
+      }),
+    ).toMatchObject({ type: "ssh", authKind: "agent" });
+  });
+
+  it("パスワード認証のSSHは、パスワードなしで読める（空文字になる）", () => {
+    const v = parseSavedValues({
+      type: "ssh",
+      host: "h",
+      port: 22,
+      username: "u",
+      authKind: "password",
+    });
+    expect(v).toMatchObject({
+      type: "ssh",
+      authKind: "password",
+      password: "",
+      passphrase: "",
+    });
+  });
+
+  it("保存値に紛れた秘密情報は、読み込み時にも捨てる", () => {
+    const v = parseSavedValues({
+      type: "ssh",
+      host: "h",
+      port: 22,
+      username: "u",
+      authKind: "password",
+      password: "leaked",
+      passphrase: "leaked2",
+    });
+    expect(v).toMatchObject({ password: "", passphrase: "" });
+  });
+
+  it("不正な値（必須項目なし・不明な種別・オブジェクトでない）は null", () => {
+    expect(
+      parseSavedValues({
+        type: "ssh",
+        host: "",
+        username: "u",
+        authKind: "agent",
+        port: 22,
+      }),
+    ).toBeNull();
+    expect(parseSavedValues({ type: "ftp" })).toBeNull();
+    expect(parseSavedValues("x")).toBeNull();
+    expect(parseSavedValues(null)).toBeNull();
+    expect(parseSavedValues([])).toBeNull();
   });
 });

@@ -626,4 +626,66 @@ describe("TerminalTab", () => {
       expect(session.start).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("復元したタブ（接続を保留）", () => {
+    function mountDeferred(
+      values: ConnectionValues,
+      status: "idle" | "closed" = "idle",
+    ) {
+      // 接続を始める前のセッションは idle。
+      session.state = {
+        status,
+        sessionId: status === "idle" ? null : "s1",
+        error: null,
+        remoteEcho: null,
+      };
+      const props = {
+        findSignal: 0,
+        tabId: "t1",
+        title: "title",
+        values,
+        active: true,
+        deferStart: true,
+        onStatusChange: vi.fn(),
+        onSecretsConsumed: vi.fn(),
+        onEditAndReconnect: vi.fn(),
+      };
+      render(<TerminalTab {...props} />);
+      return props;
+    }
+
+    it("マウントしても自動では接続せず、未接続であることを示す", () => {
+      mountDeferred(telnet);
+      expect(session.start).not.toHaveBeenCalled();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "前回のタブです（未接続）",
+      );
+    });
+
+    it("「接続」で接続を開始する（区切り線は出さない）", async () => {
+      mountDeferred(telnet);
+      termWrite.mockClear();
+      await userEvent.click(screen.getByRole("button", { name: "接続" }));
+      expect(session.start).toHaveBeenCalledTimes(1);
+      expect(session.start).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "telnet" }),
+      );
+      expect(termWrite).not.toHaveBeenCalled();
+    });
+
+    it("パスワード認証のSSHは、「接続」でパスワード入力のダイアログを開く", async () => {
+      const props = mountDeferred({ ...sshPassword, password: "" });
+      await userEvent.click(screen.getByRole("button", { name: "接続" }));
+      expect(session.start).not.toHaveBeenCalled();
+      expect(props.onEditAndReconnect).toHaveBeenCalledWith("t1");
+    });
+
+    it("接続を始めたあとの切断では、通常どおり「再接続」を出す", () => {
+      mountDeferred(telnet, "closed");
+      expect(
+        screen.getByRole("button", { name: "再接続" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/前回のタブです/)).not.toBeInTheDocument();
+    });
+  });
 });

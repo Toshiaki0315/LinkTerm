@@ -51,6 +51,8 @@ pub enum Startup {
     Local,
     /// 保存済みの接続を開く。
     Profile { profile_id: String },
+    /// 前回終了時のタブ構成を復元する。
+    Restore,
 }
 
 /// 切断（エラー）時の自動再接続。
@@ -602,5 +604,24 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn startup_restore_roundtrips() {
+        let v = serde_json::to_value(Startup::Restore).unwrap();
+        assert_eq!(v, json!({"kind": "restore"}));
+        let back: Startup = serde_json::from_value(json!({"kind": "restore"})).unwrap();
+        assert_eq!(back, Startup::Restore);
+        let (s, path, dir) = store("restore");
+        s.save(Settings {
+            startup: Startup::Restore,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            SettingsStore::new(&path).load().unwrap().startup,
+            Startup::Restore
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

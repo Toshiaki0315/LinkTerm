@@ -49,6 +49,7 @@ export function TerminalWorkspace({
           <TerminalTab
             tabId={tab.id}
             title={tab.title}
+            deferStart={tab.deferStart}
             values={tab.values}
             active={tab.id === activeId}
             onStatusChange={onStatusChange}

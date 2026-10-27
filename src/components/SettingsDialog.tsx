@@ -38,7 +38,7 @@ const formSchema = z
     theme: z.enum(THEME_IDS),
     copyOnSelect: z.boolean(),
     autoReconnect: autoReconnectSchema,
-    startupKind: z.enum(["none", "local", "profile"]),
+    startupKind: z.enum(["none", "local", "restore", "profile"]),
     startupProfileId: z.string(),
   })
   .superRefine((v, ctx) => {
@@ -357,6 +357,7 @@ export function SettingsDialog({
               <Select id={id} {...register("startupKind")}>
                 <option value="none">何も開かない</option>
                 <option value="local">ローカルシェル</option>
+                <option value="restore">前回のタブを復元</option>
                 <option value="profile">保存済みの接続</option>
               </Select>
             )}
