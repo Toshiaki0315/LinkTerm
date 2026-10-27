@@ -25,7 +25,7 @@ use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
 use crate::ssh_config::{
     RequestedTarget, SshConfig as SshConfigFile, SshConfigError, build_jump_hosts,
-    default_config_path, pick_identity_file, resolve_target,
+    default_config_path, merge_forwards, pick_identity_file, resolve_target,
 };
 
 pub const EVENT_DATA: &str = "terminal-data";
@@ -277,6 +277,9 @@ pub struct StartSsh {
     /// ローカルポートフォワード（`-L`）。
     #[serde(default)]
     forwards: Vec<LocalForward>,
+    /// SOCKS5 プロキシ（`-D`）の待ち受けポート。
+    #[serde(default)]
+    dynamic_forwards: Vec<u16>,
 }
 
 fn default_true() -> bool {
@@ -340,6 +343,13 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
         },
         SshAuthRequest::Agent => SshAuth::Agent,
     };
+    // ~/.ssh/config の LocalForward / DynamicForward も合わせる（use_ssh_config が false なら空）。
+    let (forwards, dynamic_forwards) = merge_forwards(
+        req.forwards.clone(),
+        req.dynamic_forwards.clone(),
+        target.local_forwards.clone(),
+        target.dynamic_forwards.clone(),
+    );
     let session = SshSession::connect(
         SshConfig {
             host: target.hostname.clone(),
@@ -350,7 +360,8 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             term: DEFAULT_TERM.into(),
             keepalive_interval: Some(SSH_KEEPALIVE),
             jump_hosts: build_jump_hosts(&config, &target.jumps, &target.username),
-            forwards: req.forwards.clone(),
+            forwards,
+            dynamic_forwards,
         },
         state.known_hosts.clone(),
         state.approver.clone(),

@@ -98,6 +98,7 @@ describe("tabsReducer", () => {
       useSshConfig: true,
       jumpHosts: "",
       forwards: "",
+      socksPorts: "",
       authKind: "password",
       password: "secret",
       remember: false,

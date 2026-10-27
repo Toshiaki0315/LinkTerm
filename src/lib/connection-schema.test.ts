@@ -3,6 +3,7 @@ import {
   connectionSchema,
   connectionTitle,
   parseForwards,
+  parseSocksPorts,
   parseSavedValues,
   defaultConnectionValues,
   toStartRequest,
@@ -136,6 +137,7 @@ describe("toStartRequest", () => {
       useSshConfig: true,
       jumpHosts: "",
       forwards: [],
+      dynamicForwards: [],
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
@@ -496,5 +498,42 @@ describe("ssh ポートフォワード", () => {
   it("不正な指定は検証エラー", () => {
     const r = connectionSchema.safeParse({ ...base, forwards: "oops" });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("parseSocksPorts", () => {
+  it("空欄は指定なし、カンマ区切りのポートを読む", () => {
+    expect(parseSocksPorts("")).toEqual([]);
+    expect(parseSocksPorts("1080, 1081")).toEqual([1080, 1081]);
+  });
+
+  it("不正なポートは null", () => {
+    for (const bad of ["0", "x", "70000", "1080,", "1080:2"]) {
+      expect(parseSocksPorts(bad), bad).toBeNull();
+    }
+  });
+
+  it("ssh のリクエストに dynamicForwards として含める", () => {
+    const v = connectionSchema.parse({
+      ...defaultConnectionValues,
+      type: "ssh",
+      host: "h",
+      username: "u",
+      password: "pw",
+      socksPorts: "1080",
+    });
+    expect(toStartRequest(v, SIZE)).toMatchObject({
+      dynamicForwards: [1080],
+    });
+    expect(
+      connectionSchema.safeParse({
+        ...defaultConnectionValues,
+        type: "ssh",
+        host: "h",
+        username: "u",
+        password: "pw",
+        socksPorts: "oops",
+      }).success,
+    ).toBe(false);
   });
 });

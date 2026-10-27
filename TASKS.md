@@ -62,5 +62,5 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 - [x] SSH 補強（`~/.ssh/config` 別名解決、ProxyJump）。`Include`（ワイルドカード可）と `Match all/host/originalhost` に対応。他の `Match` 条件は未対応。
 - [x] 検索（⌘F）、タブ名変更・複製・並べ替え、配色テーマ、コピー便利機能、自動再接続、画面状態の復元。
 - [ ] 上記新機能の実機・GUI 確認（シリアル実機、踏み台経由の実サーバ）。
-- [x] SSH ローカルポートフォワード（`-L`、127.0.0.1 限定）。`-R` / `-D`（SOCKS）は未対応。
+- [x] SSH ポートフォワード（`-L`、`-D` SOCKS5（認証なし・CONNECTのみ）、127.0.0.1 限定。`~/.ssh/config` の `LocalForward` / `DynamicForward` 対応）。`-R` は未対応。
 - [x] シリアルの送受信改行変換。

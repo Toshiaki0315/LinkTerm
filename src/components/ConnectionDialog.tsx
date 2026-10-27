@@ -44,6 +44,7 @@ interface FormValues {
   useSshConfig: boolean;
   jumpHosts: string;
   forwards: string;
+  socksPorts: string;
   authKind: "password" | "keychain" | "keyFile" | "agent";
   password: string;
   remember: boolean;
@@ -398,6 +399,19 @@ export function ConnectionDialog({
                     autoComplete="off"
                     placeholder="8080:db.internal:5432,9000:localhost:80（この Mac の 127.0.0.1 のみ）"
                     {...register("forwards")}
+                  />
+                )}
+              </Field>
+              <Field
+                label="SOCKS プロキシ（-D）のポート"
+                error={message(errors, "socksPorts")}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    placeholder="1080（ブラウザのプロキシ設定に SOCKS5 127.0.0.1:1080）"
+                    {...register("socksPorts")}
                   />
                 )}
               </Field>

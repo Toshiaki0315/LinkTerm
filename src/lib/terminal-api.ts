@@ -37,6 +37,8 @@ export type StartRequest =
       useSshConfig?: boolean;
       /** 踏み台（`[user@]host[:port],...`）。空なら ~/.ssh/config の設定。 */
       jumpHosts?: string;
+      /** SOCKS5 プロキシ（-D）の待ち受けポート。127.0.0.1 のみ。 */
+      dynamicForwards?: number[];
       /** ローカルポートフォワード（-L）。127.0.0.1 でのみ待ち受ける。 */
       forwards?: Array<{
         bindPort: number;

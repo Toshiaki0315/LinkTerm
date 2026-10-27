@@ -237,6 +237,7 @@ fn config(port: u16, auth: SshAuth) -> SshConfig {
         keepalive_interval: Some(Duration::from_secs(30)),
         jump_hosts: vec![],
         forwards: vec![],
+        dynamic_forwards: vec![],
     }
 }
 
@@ -935,4 +936,100 @@ async fn local_forward_to_an_unreachable_destination_closes_only_that_connection
             .await
             .is_ok()
     );
+}
+
+// ---- ダイナミックフォワード (-D, SOCKS5) ----
+
+async fn connect_with_socks(h: &Harness) -> SshSession {
+    let mut cfg = config(h.port, password("secret"));
+    cfg.dynamic_forwards = vec![0];
+    SshSession::connect(
+        cfg,
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap()
+}
+
+/// SOCKS5 で `target_port` の 127.0.0.1 へ CONNECT を依頼し、応答コードと接続を返す。
+async fn socks_connect(proxy: u16, target_port: u16) -> (u8, tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", proxy))
+        .await
+        .unwrap();
+    c.write_all(&[5, 1, 0]).await.unwrap();
+    let mut sel = [0u8; 2];
+    c.read_exact(&mut sel).await.unwrap();
+    assert_eq!(sel, [5, 0]);
+    let mut req = vec![5, 1, 0, 3, 9];
+    req.extend_from_slice(b"127.0.0.1");
+    req.extend_from_slice(&target_port.to_be_bytes());
+    c.write_all(&req).await.unwrap();
+    let mut rep = [0u8; 10];
+    timeout(Duration::from_secs(5), c.read_exact(&mut rep))
+        .await
+        .unwrap()
+        .unwrap();
+    (rep[1], c)
+}
+
+#[tokio::test]
+async fn socks_proxy_relays_to_the_requested_destination() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let echo = echo_server().await;
+    let h = start_server_with(None, true).await;
+    let mut s = connect_with_socks(&h).await;
+    let proxy = s.forward_ports()[0];
+    assert!(s.forward_addrs()[0].ip().is_loopback());
+
+    let (code, mut c) = socks_connect(proxy, echo).await;
+    assert_eq!(code, 0);
+    c.write_all(b"via socks").await.unwrap();
+    let mut buf = [0u8; 9];
+    timeout(Duration::from_secs(5), c.read_exact(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf, b"via socks");
+    assert_eq!(
+        *h.state.direct.lock().unwrap(),
+        vec![("127.0.0.1".to_string(), echo as u32)]
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn socks_proxy_reports_an_unreachable_destination_and_keeps_working() {
+    let echo = echo_server().await;
+    let dead = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let h = start_server_with(None, true).await;
+    let s = connect_with_socks(&h).await;
+    let proxy = s.forward_ports()[0];
+    let (code, _) = socks_connect(proxy, dead).await;
+    assert_ne!(code, 0);
+    let (code, _) = socks_connect(proxy, echo).await;
+    assert_eq!(code, 0);
+}
+
+#[tokio::test]
+async fn socks_proxy_drops_clients_that_do_not_speak_socks5() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let h = start_server_with(None, true).await;
+    let s = connect_with_socks(&h).await;
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", s.forward_ports()[0]))
+        .await
+        .unwrap();
+    c.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+    let mut buf = [0u8; 16];
+    let n = timeout(Duration::from_secs(5), c.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    assert_eq!(n, 0);
 }

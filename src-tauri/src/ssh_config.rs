@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::session::LocalForward;
+
 /// 読み込む設定ファイルの大きさの上限（異常に大きなファイルでメモリを使い切らないため）。
 pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
@@ -101,6 +103,35 @@ pub struct ResolvedHost {
     /// 試す秘密鍵（`~` は展開済み）。設定の順。
     pub identity_files: Vec<PathBuf>,
     pub proxy_jump: Vec<JumpSpec>,
+    /// `LocalForward`（`-L`）。設定の順。待ち受けは常に 127.0.0.1（`bind_address` は無視する）。
+    pub local_forwards: Vec<LocalForward>,
+    /// `DynamicForward`（`-D`）の待ち受けポート。設定の順。
+    pub dynamic_forwards: Vec<u16>,
+}
+
+/// `[bind_address:]port` のポート部分（`DynamicForward` の引数）。不正なら `None`。
+fn parse_bind_port(value: &str) -> Option<u16> {
+    let port = value.rsplit(':').next()?;
+    parse_port(port)
+}
+
+/// `LocalForward [bind_address:]port host:hostport` を読む。IPv6 の `[...]` 表記や不正な値は読み飛ばす。
+fn parse_local_forward(value: &str) -> Option<LocalForward> {
+    let mut parts = value.split_whitespace();
+    let bind = parse_bind_port(parts.next()?)?;
+    let dest = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (host, port) = dest.rsplit_once(':')?;
+    if host.is_empty() || host.contains(['[', ']', ':']) {
+        return None;
+    }
+    Some(LocalForward {
+        bind_port: bind,
+        dest_host: host.to_owned(),
+        dest_port: parse_port(port)?,
+    })
 }
 
 /// 設定の1区画（`Host` 行から次の `Host` 行まで）。先頭のグローバル設定は全ホストに適用する。
@@ -118,6 +149,8 @@ enum Keyword {
     Port,
     IdentityFile,
     ProxyJump,
+    LocalForward,
+    DynamicForward,
 }
 
 #[derive(Debug, Default)]
@@ -362,12 +395,16 @@ impl SshConfig {
                         "port" => Keyword::Port,
                         "identityfile" => Keyword::IdentityFile,
                         "proxyjump" => Keyword::ProxyJump,
+                        "localforward" => Keyword::LocalForward,
+                        "dynamicforward" => Keyword::DynamicForward,
                         _ => continue,
                     };
                     if let Some(value) = args.first() {
                         // ProxyJump だけは、カンマ区切りの途中に空白がない1つの値として扱う。
                         let value = if keyword == Keyword::ProxyJump {
                             args.join("")
+                        } else if keyword == Keyword::LocalForward {
+                            args.join(" ")
                         } else {
                             value.clone()
                         };
@@ -421,6 +458,8 @@ impl SshConfig {
         let mut port: Option<u16> = None;
         let mut proxy_jump: Option<Vec<JumpSpec>> = None;
         let mut identity_files = Vec::new();
+        let mut local_forwards = Vec::new();
+        let mut dynamic_forwards = Vec::new();
         for block in &self.blocks {
             let applies = block
                 .patterns
@@ -444,6 +483,8 @@ impl SshConfig {
                         }
                     }
                     Keyword::IdentityFile => identity_files.push(self.expand_path(value)),
+                    Keyword::LocalForward => local_forwards.extend(parse_local_forward(value)),
+                    Keyword::DynamicForward => dynamic_forwards.extend(parse_bind_port(value)),
                     Keyword::ProxyJump => {
                         if proxy_jump.is_none() {
                             proxy_jump = parse_jump_list(value).ok();
@@ -458,6 +499,8 @@ impl SshConfig {
             port,
             identity_files,
             proxy_jump: proxy_jump.unwrap_or_default(),
+            local_forwards,
+            dynamic_forwards,
         }
     }
 
@@ -504,6 +547,10 @@ pub struct EffectiveTarget {
     pub identity_files: Vec<PathBuf>,
     /// 経由する踏み台。先頭から順に接続する。
     pub jumps: Vec<JumpSpec>,
+    /// `~/.ssh/config` の `LocalForward`。
+    pub local_forwards: Vec<LocalForward>,
+    /// `~/.ssh/config` の `DynamicForward`。
+    pub dynamic_forwards: Vec<u16>,
 }
 
 /// ダイアログの指定と設定ファイルから、実際の接続先を決める。
@@ -552,10 +599,44 @@ pub fn resolve_target(
         username,
         identity_files: resolved.identity_files,
         jumps,
+        local_forwards: resolved.local_forwards,
+        dynamic_forwards: resolved.dynamic_forwards,
     })
 }
 
 pub const DEFAULT_SSH_PORT: u16 = 22;
+
+/// ダイアログで指定したポートフォワードと、設定ファイルのものを合わせる。
+/// ダイアログの指定を先に並べ、同じローカルポートを待ち受ける設定ファイル側の項目は捨てる
+/// （同じポートを二重に待ち受けて接続が失敗するのを防ぐ）。
+pub fn merge_forwards(
+    dialog_local: Vec<LocalForward>,
+    dialog_dynamic: Vec<u16>,
+    config_local: Vec<LocalForward>,
+    config_dynamic: Vec<u16>,
+) -> (Vec<LocalForward>, Vec<u16>) {
+    let mut used: Vec<u16> = dialog_local
+        .iter()
+        .map(|f| f.bind_port)
+        .chain(dialog_dynamic.iter().copied())
+        .filter(|p| *p != 0)
+        .collect();
+    let mut local = dialog_local;
+    let mut dynamic = dialog_dynamic;
+    for f in config_local {
+        if !used.contains(&f.bind_port) {
+            used.push(f.bind_port);
+            local.push(f);
+        }
+    }
+    for p in config_dynamic {
+        if !used.contains(&p) {
+            used.push(p);
+            dynamic.push(p);
+        }
+    }
+    (local, dynamic)
+}
 
 /// 踏み台の指定（`[user@]host[:port]`）を、接続に使う踏み台へ解決する。
 ///
@@ -659,6 +740,8 @@ mod tests {
                 port: None,
                 identity_files: vec![],
                 proxy_jump: vec![],
+                local_forwards: vec![],
+                dynamic_forwards: vec![],
             }
         );
     }
@@ -916,6 +999,77 @@ mod tests {
             Err(SshConfigError::TooLarge { .. })
         ));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_and_dynamic_forwards_accumulate_in_order() {
+        let c = cfg(
+            "Host a\n  LocalForward 8080 db.internal:5432\n  LocalForward 127.0.0.1:9000 localhost:80\n  DynamicForward 1080\n  DynamicForward localhost:1081\nHost *\n  LocalForward 7000 x:7\n",
+        );
+        let r = c.resolve("a");
+        assert_eq!(
+            r.local_forwards,
+            vec![
+                LocalForward {
+                    bind_port: 8080,
+                    dest_host: "db.internal".into(),
+                    dest_port: 5432
+                },
+                LocalForward {
+                    bind_port: 9000,
+                    dest_host: "localhost".into(),
+                    dest_port: 80
+                },
+                LocalForward {
+                    bind_port: 7000,
+                    dest_host: "x".into(),
+                    dest_port: 7
+                },
+            ]
+        );
+        assert_eq!(r.dynamic_forwards, vec![1080, 1081]);
+        assert!(c.resolve("other").dynamic_forwards.is_empty());
+    }
+
+    #[test]
+    fn invalid_forward_values_are_skipped() {
+        let c = cfg(
+            "Host a\n  LocalForward 80\n  LocalForward x host:1\n  LocalForward 1 host\n  LocalForward 1 host:99999\n  LocalForward 1 [::1]:80\n  LocalForward 1 h:2 extra\n  DynamicForward abc\n  DynamicForward 0\n",
+        );
+        let r = c.resolve("a");
+        assert!(r.local_forwards.is_empty(), "{:?}", r.local_forwards);
+        assert!(r.dynamic_forwards.is_empty());
+    }
+
+    #[test]
+    fn resolve_target_carries_the_configured_forwards() {
+        let c = cfg("Host a\n  User u\n  LocalForward 1 h:2\n  DynamicForward 3\n");
+        let t = resolve_target(&c, &request("a", 22, "", "")).unwrap();
+        assert_eq!(t.local_forwards.len(), 1);
+        assert_eq!(t.dynamic_forwards, vec![3]);
+    }
+
+    fn fwd(bind_port: u16) -> LocalForward {
+        LocalForward {
+            bind_port,
+            dest_host: "h".into(),
+            dest_port: 1,
+        }
+    }
+
+    #[test]
+    fn merge_puts_dialog_forwards_first_and_drops_duplicate_ports() {
+        let (local, dynamic) = merge_forwards(
+            vec![fwd(8080)],
+            vec![1080],
+            vec![fwd(8080), fwd(9000)],
+            vec![1080, 1081],
+        );
+        assert_eq!(local, vec![fwd(8080), fwd(9000)]);
+        assert_eq!(dynamic, vec![1080, 1081]);
+        // 設定ファイル内の重複も1つにする。
+        let (local, _) = merge_forwards(vec![], vec![], vec![fwd(5), fwd(5)], vec![]);
+        assert_eq!(local, vec![fwd(5)]);
     }
 
     #[test]

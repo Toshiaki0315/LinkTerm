@@ -26,6 +26,7 @@ export const defaultConnectionValues = {
   useSshConfig: true,
   jumpHosts: "",
   forwards: "",
+  socksPorts: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -89,6 +90,14 @@ export function parseForwards(text: string): ForwardSpec[] | null {
   return result;
 }
 
+/** SOCKS プロキシ（-D）の待ち受けポート（カンマ区切り）を読む。空欄は指定なし、不正なら null。 */
+export function parseSocksPorts(text: string): number[] | null {
+  const spec = text.trim();
+  if (spec === "") return [];
+  const ports = spec.split(",").map((p) => toPort(p.trim()));
+  return ports.every((p) => p !== null) ? (ports as number[]) : null;
+}
+
 /** 踏み台の指定（`[user@]host[:port]` のカンマ区切り。空と `none` も可）。Rust 側の解析と同じ規則。 */
 export function isValidJumpList(text: string): boolean {
   const spec = text.trim();
@@ -141,6 +150,14 @@ const ssh = z
       .refine(
         (v) => parseForwards(v) !== null,
         "ポートフォワードは ローカルポート:転送先ホスト:転送先ポート の形式で指定してください",
+      ),
+    socksPorts: z
+      .string()
+      .trim()
+      .default("")
+      .refine(
+        (v) => parseSocksPorts(v) !== null,
+        "SOCKS プロキシのポートは 1〜65535 の数字をカンマ区切りで指定してください",
       ),
     authKind: z.enum(["password", "keychain", "keyFile", "agent"]),
     password: z.string().default(""),
@@ -231,6 +248,7 @@ export function toStartRequest(
         useSshConfig: v.useSshConfig,
         jumpHosts: v.jumpHosts,
         forwards: parseForwards(v.forwards ?? "") ?? [],
+        dynamicForwards: parseSocksPorts(v.socksPorts ?? "") ?? [],
         encoding: v.encoding,
         ...size,
       };
