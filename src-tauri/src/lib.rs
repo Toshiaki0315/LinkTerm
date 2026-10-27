@@ -8,6 +8,7 @@ pub mod profiles;
 pub mod session;
 pub mod session_state;
 pub mod settings;
+pub mod ssh_config;
 
 use tauri::Manager;
 
