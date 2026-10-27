@@ -227,6 +227,14 @@ describe("SettingsDialog", () => {
     });
   });
 
+  it("ウィンドウより高いときはダイアログ内をスクロールできる", async () => {
+    setup();
+    await fontsLoaded();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("overflow-y-auto");
+    expect(dialog.className).toContain("max-h-[calc(100vh-2rem)]");
+  });
+
   it("端末エミュレーションの設定（カーソルの形・バックスペース・Option）を保存できる", async () => {
     const { user, onSave } = setup();
     await fontsLoaded();
