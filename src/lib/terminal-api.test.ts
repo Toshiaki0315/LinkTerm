@@ -14,6 +14,7 @@ import {
   decodeBase64,
   defaultLogPath,
   onLogError,
+  onTerminalEcho,
   pendingHostKeyRequests,
   getSettings,
   listFonts,
@@ -234,5 +235,18 @@ describe("フォント一覧", () => {
     invoke.mockResolvedValueOnce(fonts);
     await expect(listFonts()).resolves.toEqual(fonts);
     expect(invoke).toHaveBeenCalledWith("list_fonts");
+  });
+});
+
+describe("エコー状態", () => {
+  it("terminal-echo を渡す", async () => {
+    listen.mockImplementation(async (_name, handler) => {
+      handler({ payload: { id: "a", remoteEcho: true } });
+      return () => {};
+    });
+    const cb = vi.fn();
+    await onTerminalEcho(cb);
+    expect(listen.mock.calls[0][0]).toBe("terminal-echo");
+    expect(cb).toHaveBeenCalledWith("a", true);
   });
 });

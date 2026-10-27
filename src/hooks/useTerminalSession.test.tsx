@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   closeSession: vi.fn(),
   onTerminalData: vi.fn(),
   onTerminalClosed: vi.fn(),
+  onTerminalEcho: vi.fn(),
 }));
 vi.mock("../lib/terminal-api", () => api);
 
@@ -18,6 +19,8 @@ import { useTerminalSession } from "./useTerminalSession";
 
 let emitData: DataCb;
 let emitClosed: ClosedCb;
+let emitEcho: (id: string, remote: boolean) => void;
+const unlistenEcho = vi.fn();
 const unlistenData = vi.fn();
 const unlistenClosed = vi.fn();
 
@@ -31,6 +34,12 @@ beforeEach(() => {
     emitClosed = cb;
     return unlistenClosed;
   });
+  api.onTerminalEcho.mockImplementation(
+    async (cb: (id: string, r: boolean) => void) => {
+      emitEcho = cb;
+      return unlistenEcho;
+    },
+  );
   api.writeToSession.mockResolvedValue(undefined);
   api.resizeSession.mockResolvedValue(undefined);
   api.closeSession.mockResolvedValue(undefined);
@@ -235,5 +244,70 @@ describe("useTerminalSession", () => {
     });
     unmount();
     expect(api.closeSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe("接続先のエコー状態", () => {
+    it("接続前は null、自分のセッションの通知で更新される", async () => {
+      api.startSession.mockResolvedValue("s1");
+      const { result } = await setup();
+      expect(result.current.remoteEcho).toBeNull();
+      await act(async () => {
+        await result.current.start(LOCAL);
+      });
+      expect(result.current.remoteEcho).toBeNull();
+      act(() => emitEcho("s1", false));
+      expect(result.current.remoteEcho).toBe(false);
+      act(() => emitEcho("s1", true));
+      expect(result.current.remoteEcho).toBe(true);
+    });
+
+    it("他のセッションの通知は無視する", async () => {
+      api.startSession.mockResolvedValue("s1");
+      const { result } = await setup();
+      await act(async () => {
+        await result.current.start(LOCAL);
+      });
+      act(() => emitEcho("other", true));
+      expect(result.current.remoteEcho).toBeNull();
+    });
+
+    it("start 完了前に届いた通知も取りこぼさない", async () => {
+      let resolve!: (id: string) => void;
+      api.startSession.mockReturnValue(
+        new Promise<string>((r) => (resolve = r)),
+      );
+      const { result } = await setup();
+      let p!: Promise<void>;
+      act(() => {
+        p = result.current.start(LOCAL);
+      });
+      act(() => emitEcho("s1", true));
+      await act(async () => {
+        resolve("s1");
+        await p;
+      });
+      expect(result.current.remoteEcho).toBe(true);
+    });
+
+    it("再接続（start のやり直し）で null に戻る", async () => {
+      api.startSession.mockResolvedValue("s1");
+      const { result } = await setup();
+      await act(async () => {
+        await result.current.start(LOCAL);
+      });
+      act(() => emitEcho("s1", true));
+      api.startSession.mockResolvedValue("s2");
+      await act(async () => {
+        await result.current.start(LOCAL);
+      });
+      expect(result.current.remoteEcho).toBeNull();
+    });
+
+    it("アンマウントでリスナーを解除する", async () => {
+      const { unmount } = await setup();
+      await waitFor(() => expect(api.onTerminalEcho).toHaveBeenCalled());
+      unmount();
+      await waitFor(() => expect(unlistenEcho).toHaveBeenCalled());
+    });
   });
 });

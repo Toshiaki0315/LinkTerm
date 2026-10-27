@@ -77,7 +77,7 @@ export function LogControl({ sessionId, title }: Props) {
   };
 
   return (
-    <div className="absolute right-3 top-2 z-10 flex items-center gap-2">
+    <div className="flex items-center gap-2">
       {error && (
         <p
           role="alert"

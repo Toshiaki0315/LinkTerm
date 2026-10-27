@@ -3,6 +3,7 @@ import {
   closeSession,
   onTerminalClosed,
   onTerminalData,
+  onTerminalEcho,
   resizeSession,
   startSession,
   writeToSession,
@@ -27,6 +28,8 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 接続先がエコーしているか。判定できない（未接続・シリアル等）間は `null`。 */
+  const [remoteEcho, setRemoteEcho] = useState<boolean | null>(null);
 
   const idRef = useRef<string | null>(null);
   const startingRef = useRef(false);
@@ -36,6 +39,7 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
   const onDataRef = useRef(onData);
   const earlyData = useRef(new Map<string, Uint8Array[]>());
   const earlyClosed = useRef(new Map<string, string | null>());
+  const earlyEcho = useRef(new Map<string, boolean>());
 
   useEffect(() => {
     onDataRef.current = onData;
@@ -94,6 +98,16 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
       }),
     );
 
+    register(
+      onTerminalEcho((id, echo) => {
+        if (id === idRef.current) {
+          setRemoteEcho(echo);
+        } else if (startingRef.current) {
+          earlyEcho.current.set(id, echo);
+        }
+      }),
+    );
+
     return () => {
       disposed = true;
       unlisteners.forEach((un) => un());
@@ -104,6 +118,7 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
     async (request: StartRequest) => {
       setStatus("connecting");
       setError(null);
+      setRemoteEcho(null);
       startingRef.current = true;
       try {
         const id = await startSession(request);
@@ -119,6 +134,9 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
         for (const chunk of earlyData.current.get(id) ?? []) {
           onDataRef.current(chunk);
         }
+        if (earlyEcho.current.has(id)) {
+          setRemoteEcho(earlyEcho.current.get(id) ?? null);
+        }
         if (earlyClosed.current.has(id)) {
           applyClosed(earlyClosed.current.get(id) ?? null);
         }
@@ -129,6 +147,7 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
         startingRef.current = false;
         earlyData.current.clear();
         earlyClosed.current.clear();
+        earlyEcho.current.clear();
       }
     },
     [applyClosed],
@@ -150,5 +169,14 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
     setStatus("closed");
   }, []);
 
-  return { status, sessionId, error, start, write, resize, close };
+  return {
+    status,
+    sessionId,
+    error,
+    remoteEcho,
+    start,
+    write,
+    resize,
+    close,
+  };
 }

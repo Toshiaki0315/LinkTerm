@@ -26,6 +26,7 @@ use crate::settings::{Settings, SettingsError, SettingsStore};
 pub const EVENT_DATA: &str = "terminal-data";
 pub const EVENT_CLOSED: &str = "terminal-closed";
 pub const EVENT_LOG_ERROR: &str = "terminal-log-error";
+pub const EVENT_ECHO: &str = "terminal-echo";
 pub const EVENT_HOST_KEY_REQUEST: &str = "ssh-host-key-request";
 
 const KEYCHAIN_SERVICE: &str = "com.linkterm.app";
@@ -77,6 +78,13 @@ struct ClosedPayload<'a> {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EchoPayload<'a> {
+    id: &'a str,
+    remote_echo: bool,
+}
+
+#[derive(Clone, Serialize)]
 struct LogErrorPayload<'a> {
     id: &'a str,
     message: &'a str,
@@ -98,6 +106,12 @@ impl EventSink for TauriSink {
     fn closed(&self, id: &str, reason: Option<String>) {
         if let Err(e) = self.0.emit(EVENT_CLOSED, ClosedPayload { id, reason }) {
             eprintln!("イベント送信に失敗しました ({EVENT_CLOSED}): {e}");
+        }
+    }
+
+    fn echo_changed(&self, id: &str, remote_echo: bool) {
+        if let Err(e) = self.0.emit(EVENT_ECHO, EchoPayload { id, remote_echo }) {
+            eprintln!("イベント送信に失敗しました ({EVENT_ECHO}): {e}");
         }
     }
 
@@ -643,6 +657,7 @@ mod tests {
         fn data(&self, _: &str, _: &[u8]) {}
         fn closed(&self, _: &str, _: Option<String>) {}
         fn log_error(&self, _: &str, _: &str) {}
+        fn echo_changed(&self, _: &str, _: bool) {}
     }
 
     fn log_config(path: PathBuf, append: bool) -> LogConfig {

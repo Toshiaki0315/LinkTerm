@@ -32,6 +32,7 @@ interface FormValues {
   profileName: string;
   type: ConnectionValues["type"];
   encoding: (typeof ENCODINGS)[number];
+  localEcho: "auto" | "on" | "off";
   host: string;
   port: number;
   username: string;
@@ -361,6 +362,24 @@ export function ConnectionDialog({
                 </>
               )}
             </>
+          )}
+
+          {(type === "telnet" || type === "serial") && (
+            <Field label="ローカルエコー">
+              {(id) => (
+                <Select id={id} {...register("localEcho")}>
+                  <option value="auto">
+                    自動（
+                    {type === "telnet"
+                      ? "サーバーがエコーしなければオン"
+                      : "シリアルはオフ"}
+                    ）
+                  </option>
+                  <option value="on">オン（入力を画面に表示する）</option>
+                  <option value="off">オフ</option>
+                </Select>
+              )}
+            </Field>
           )}
 
           {type === "telnet" && (

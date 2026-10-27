@@ -188,3 +188,11 @@ export const onLogError = (
   listen<{ id: string; message: string }>("terminal-log-error", (e) =>
     cb(e.payload.id, e.payload.message),
   );
+
+/** 接続先のエコー状態（Telnet の ECHO 交渉など）が変わった。 */
+export const onTerminalEcho = (
+  cb: (id: string, remoteEcho: boolean) => void,
+): Promise<UnlistenFn> =>
+  listen<{ id: string; remoteEcho: boolean }>("terminal-echo", (e) =>
+    cb(e.payload.id, e.payload.remoteEcho),
+  );

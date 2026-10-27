@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import {
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
+import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance } from "../lib/settings";
+import { EchoControl } from "./EchoControl";
 import { LogControl } from "./LogControl";
 import { Button } from "./ui/button";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
@@ -41,11 +43,17 @@ export function TerminalTab({
     (data: Uint8Array) => termRef.current?.write(data),
     [],
   );
-  const { status, sessionId, error, start, write, resize } = useTerminalSession(
-    {
-      onData,
-    },
+  const { status, sessionId, error, remoteEcho, start, write, resize } =
+    useTerminalSession({ onData });
+
+  /** ローカルエコー。Telnet / シリアルだけが対象で、接続設定の値で始め、実行中に切り替えられる。 */
+  const supportsEcho = values.type === "telnet" || values.type === "serial";
+  const [echoMode, setEchoMode] = useState<EchoMode>(
+    values.type === "telnet" || values.type === "serial"
+      ? values.localEcho
+      : "off",
   );
+  const localEcho = supportsEcho && isLocalEchoOn(echoMode, remoteEcho);
 
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。
@@ -63,11 +71,14 @@ export function TerminalTab({
 
   const onInput = useCallback(
     (data: string) => {
+      if (localEcho) {
+        termRef.current?.write(new TextEncoder().encode(echoFor(data)));
+      }
       write(data).catch((e: unknown) =>
         console.error("送信に失敗しました:", e),
       );
     },
-    [write],
+    [write, localEcho],
   );
   const onResize = useCallback(
     (cols: number, rows: number) => {
@@ -97,10 +108,19 @@ export function TerminalTab({
 
   return (
     <div className="relative h-full w-full">
-      <LogControl
-        sessionId={status === "connected" ? sessionId : null}
-        title={title}
-      />
+      <div className="absolute right-3 top-2 z-10 flex items-center gap-2">
+        {supportsEcho && (
+          <EchoControl
+            mode={echoMode}
+            effective={localEcho}
+            onChange={setEchoMode}
+          />
+        )}
+        <LogControl
+          sessionId={status === "connected" ? sessionId : null}
+          title={title}
+        />
+      </div>
       <TerminalView
         ref={termRef}
         active={active}

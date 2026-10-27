@@ -231,4 +231,28 @@ describe("connectionTitle", () => {
       ),
     ).toBe("cu.usbserial @9600");
   });
+
+  it("Telnet / シリアルのローカルエコー設定（既定は自動）", () => {
+    const telnet = connectionSchema.parse({
+      ...defaultConnectionValues,
+      type: "telnet",
+      host: "h",
+    });
+    expect(telnet).toMatchObject({ localEcho: "auto" });
+    const serial = connectionSchema.parse({
+      ...defaultConnectionValues,
+      type: "serial",
+      serialPort: "/dev/cu.x",
+      localEcho: "on",
+    });
+    expect(serial).toMatchObject({ localEcho: "on" });
+    expect(
+      connectionSchema.safeParse({
+        ...defaultConnectionValues,
+        type: "telnet",
+        host: "h",
+        localEcho: "maybe",
+      }).success,
+    ).toBe(false);
+  });
 });

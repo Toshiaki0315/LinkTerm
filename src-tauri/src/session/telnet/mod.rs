@@ -121,7 +121,13 @@ async fn pump(
                             _ => reply.extend(negotiator.handle(&event)),
                         }
                     }
-                    remote_echo.store(negotiator.remote_echo(), Ordering::Relaxed);
+                    let echo = negotiator.remote_echo();
+                    if remote_echo.swap(echo, Ordering::Relaxed) != echo {
+                        // データを伴わない交渉でも、呼び出し側が状態を確認できるよう空のチャンクで起こす。
+                        if output.send(Ok(Vec::new())).await.is_err() {
+                            return;
+                        }
+                    }
                     if !reply.is_empty() && write_all(&mut writer, &reply, &output).await.is_err() {
                         break;
                     }
@@ -198,6 +204,10 @@ impl TerminalSession for TelnetSession {
             let _ = self.commands.send(Command::Close).await;
         }
         Ok(())
+    }
+
+    fn echo_state(&self) -> Option<bool> {
+        Some(self.remote_echo())
     }
 }
 

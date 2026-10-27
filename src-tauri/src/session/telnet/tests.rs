@@ -203,3 +203,51 @@ async fn remote_echo_flag_follows_server_will_echo() {
     read_until(&mut s, b"x").await;
     assert!(s.remote_echo());
 }
+
+#[tokio::test]
+async fn echo_negotiation_alone_wakes_the_reader_with_an_empty_chunk() {
+    let (l, port) = listener().await;
+    tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        // データを伴わない ECHO 交渉だけを送る。
+        sock.write_all(&[IAC, WILL, OPT_ECHO]).await.unwrap();
+        let mut b = [0u8; 3];
+        let _ = sock.read_exact(&mut b).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+    let mut s = TelnetSession::connect(config(port)).await.unwrap();
+    assert_eq!(s.echo_state(), Some(false));
+    let chunk = timeout(Duration::from_secs(5), s.read())
+        .await
+        .expect("交渉だけでは読み取りが起きない")
+        .unwrap();
+    assert_eq!(chunk, Some(Vec::new()));
+    assert_eq!(s.echo_state(), Some(true));
+}
+
+#[tokio::test]
+async fn echo_state_follows_will_and_wont_echo() {
+    let (l, port) = listener().await;
+    tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        sock.write_all(&[IAC, WILL, OPT_ECHO]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        sock.write_all(&[IAC, WONT, OPT_ECHO]).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+    let mut s = TelnetSession::connect(config(port)).await.unwrap();
+    let wait_for = |s: &TelnetSession, want: bool| {
+        let got = s.echo_state();
+        got == Some(want)
+    };
+    timeout(Duration::from_secs(5), async {
+        while !wait_for(&s, true) {
+            s.read().await.unwrap();
+        }
+        while !wait_for(&s, false) {
+            s.read().await.unwrap();
+        }
+    })
+    .await
+    .expect("ECHO の ON/OFF が反映されない");
+}

@@ -19,6 +19,7 @@ export const ENCODINGS = [
 export const defaultConnectionValues = {
   type: "local",
   encoding: "UTF-8",
+  localEcho: "auto",
   host: "",
   port: 22,
   username: "",
@@ -47,6 +48,7 @@ const required = (label: string) =>
   z.string().trim().min(1, `${label}を入力してください`);
 
 const encoding = z.enum(ENCODINGS).default("UTF-8");
+const localEcho = z.enum(["auto", "on", "off"]).default("auto");
 
 const local = z.object({ type: z.literal("local"), encoding });
 
@@ -83,6 +85,7 @@ const ssh = z
 const telnet = z.object({
   type: z.literal("telnet"),
   encoding,
+  localEcho,
   host: required("ホスト"),
   port,
   txNewline: z.enum(["Cr", "Lf", "CrLf"]),
@@ -92,6 +95,7 @@ const telnet = z.object({
 const serial = z.object({
   type: z.literal("serial"),
   encoding,
+  localEcho,
   serialPort: required("ポート"),
   baudRate: z
     .number("ボーレートを入力してください")

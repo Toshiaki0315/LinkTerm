@@ -60,6 +60,12 @@ pub trait TerminalSession: Send {
     async fn resize(&mut self, size: TerminalSize) -> Result<(), TerminalError>;
     /// セッションを閉じる。複数回呼んでもエラーにしない。
     async fn close(&mut self) -> Result<(), TerminalError>;
+    /// 接続先がエコーを担当しているか。判定できないプロトコルは `None`。
+    ///
+    /// 変化したときは、読み取りが空のチャンクで起こされる（呼び出し側はその都度これを確認する）。
+    fn echo_state(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[cfg(test)]

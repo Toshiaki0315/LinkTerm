@@ -28,6 +28,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn closed(&self, id: &str, reason: Option<String>);
     /// ログ書き込みに失敗した（以後そのセッションのログは停止する）。
     fn log_error(&self, id: &str, message: &str);
+    /// 接続先のエコー状態が変わった（または最初に判明した）。
+    fn echo_changed(&self, id: &str, remote_echo: bool);
 }
 
 type Sessions = Arc<Mutex<HashMap<String, mpsc::Sender<Command>>>>;
@@ -185,7 +187,15 @@ async fn run_session(
     sessions: Sessions,
 ) {
     let mut logger = activate_logger(logger, &id, sink.as_ref());
+    let mut last_echo: Option<bool> = None;
     let reason = loop {
+        // 接続先のエコー状態が変わった（または初めて判明した）ら通知する。
+        if let Some(echo) = session.echo_state()
+            && last_echo != Some(echo)
+        {
+            last_echo = Some(echo);
+            sink.echo_changed(&id, echo);
+        }
         tokio::select! {
             read = session.read() => match read {
                 Ok(Some(data)) => {
@@ -259,6 +269,7 @@ mod tests {
         log_errors: StdMutex<Vec<(String, String)>>,
         data: StdMutex<Vec<(String, Vec<u8>)>>,
         closed: StdMutex<Vec<(String, Option<String>)>>,
+        echoes: StdMutex<Vec<(String, bool)>>,
     }
 
     impl EventSink for RecordingSink {
@@ -267,6 +278,9 @@ mod tests {
         }
         fn closed(&self, id: &str, reason: Option<String>) {
             self.closed.lock().unwrap().push((id.into(), reason));
+        }
+        fn echo_changed(&self, id: &str, remote_echo: bool) {
+            self.echoes.lock().unwrap().push((id.into(), remote_echo));
         }
         fn log_error(&self, id: &str, message: &str) {
             self.log_errors
@@ -325,9 +339,18 @@ mod tests {
         rx: mpsc::UnboundedReceiver<Result<Vec<u8>, TerminalError>>,
         size: Arc<StdMutex<Option<TerminalSize>>>,
         closed: Arc<StdMutex<bool>>,
+        echo: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
     impl EchoSession {
+        /// エコー状態を報告するセッション。返すフラグで状態を変えられる。
+        fn with_echo(initial: bool) -> (Self, Arc<std::sync::atomic::AtomicBool>) {
+            let flag = Arc::new(std::sync::atomic::AtomicBool::new(initial));
+            let (mut s, _, _) = Self::new();
+            s.echo = Some(flag.clone());
+            (s, flag)
+        }
+
         fn new() -> (Self, SharedSize, SharedFlag) {
             let (tx, rx) = mpsc::unbounded_channel();
             let size = Arc::new(StdMutex::new(None));
@@ -338,6 +361,7 @@ mod tests {
                     rx,
                     size: size.clone(),
                     closed: closed.clone(),
+                    echo: None,
                 },
                 size,
                 closed,
@@ -372,6 +396,11 @@ mod tests {
         async fn close(&mut self) -> Result<(), TerminalError> {
             *self.closed.lock().unwrap() = true;
             Ok(())
+        }
+        fn echo_state(&self) -> Option<bool> {
+            self.echo
+                .as_ref()
+                .map(|f| f.load(std::sync::atomic::Ordering::SeqCst))
         }
     }
 
@@ -664,5 +693,39 @@ mod tests {
         // 応答の時点で切り詰め済み（待たずに確認できる）。
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn echo_state_is_reported_initially_and_on_each_change_only() {
+        let (m, sink) = setup();
+        let (s, flag) = EchoSession::with_echo(false);
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        wait_for(|| *sink.echoes.lock().unwrap() == vec![(id.clone(), false)]).await;
+
+        // 変化しなければ通知しない。
+        m.write(&id, "a").await.unwrap();
+        wait_for(|| sink.received(&id) == b"a").await;
+        assert_eq!(sink.echoes.lock().unwrap().len(), 1);
+
+        // 変化したら、次に読み取りが起きたときに通知する。
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        m.write(&id, "b").await.unwrap();
+        wait_for(|| sink.echoes.lock().unwrap().len() == 2).await;
+        assert_eq!(sink.echoes.lock().unwrap()[1], (id.clone(), true));
+
+        flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        m.write(&id, "c").await.unwrap();
+        wait_for(|| sink.echoes.lock().unwrap().len() == 3).await;
+        assert_eq!(sink.echoes.lock().unwrap()[2], (id, false));
+    }
+
+    #[tokio::test]
+    async fn sessions_that_cannot_tell_report_no_echo_state() {
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        m.write(&id, "x").await.unwrap();
+        wait_for(|| sink.received(&id) == b"x").await;
+        assert!(sink.echoes.lock().unwrap().is_empty());
     }
 }
