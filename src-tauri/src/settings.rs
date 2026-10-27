@@ -72,6 +72,8 @@ pub struct Settings {
     pub scrollback: u32,
     pub cursor_blink: bool,
     pub theme: Theme,
+    /// 選択したテキストを自動的にクリップボードへコピーする。
+    pub copy_on_select: bool,
     pub startup: Startup,
 }
 
@@ -83,6 +85,7 @@ impl Default for Settings {
             scrollback: 10_000,
             cursor_blink: true,
             theme: Theme::default(),
+            copy_on_select: false,
             startup: Startup::None,
         }
     }
@@ -234,6 +237,7 @@ mod tests {
             scrollback: 50_000,
             cursor_blink: false,
             theme: Theme::Monokai,
+            copy_on_select: true,
             startup: Startup::Profile {
                 profile_id: "profile-1".into(),
             },
@@ -476,6 +480,30 @@ mod tests {
         assert_eq!(s.load().unwrap().theme, Theme::Dark);
         std::fs::write(&path, r#"{"theme": "neon-pink"}"#).unwrap();
         assert!(matches!(s.load(), Err(SettingsError::Parse { .. })));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn copy_on_select_defaults_to_off_and_roundtrips() {
+        assert!(!Settings::default().copy_on_select);
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(v["copyOnSelect"], false);
+        let (s, path, dir) = store("copy-on-select");
+        s.save(Settings {
+            copy_on_select: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(SettingsStore::new(&path).load().unwrap().copy_on_select);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_without_copy_on_select_uses_the_default() {
+        let (s, path, dir) = store("copy-default");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"fontSize": 14}"#).unwrap();
+        assert!(!s.load().unwrap().copy_on_select);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

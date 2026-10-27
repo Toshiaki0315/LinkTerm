@@ -16,6 +16,7 @@ pub fn run() {
         .menu(menu::build)
         .on_menu_event(menu::handle_event)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let state = commands::AppState::new(app.handle())?;
             app.manage(state);
@@ -55,4 +56,31 @@ pub fn run() {
             tauri::async_runtime::block_on(state.manager.close_all());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// フロントエンドが使う権限が capability に宣言されていること（宣言漏れは実行時にだけ失敗する）。
+    #[test]
+    fn capability_grants_exactly_the_clipboard_and_opener_permissions_the_ui_needs() {
+        let text = include_str!("../capabilities/default.json");
+        let json: serde_json::Value = serde_json::from_str(text).unwrap();
+        let permissions: Vec<&str> = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        for needed in [
+            "core:default",
+            "opener:default",
+            "clipboard-manager:allow-read-text",
+            "clipboard-manager:allow-write-text",
+        ] {
+            assert!(permissions.contains(&needed), "{needed} が未宣言");
+        }
+        // 画像などの余計なクリップボード権限は付けない。
+        assert!(!permissions.iter().any(|p| p.contains("image")));
+        assert!(!permissions.contains(&"clipboard-manager:default"));
+    }
 }

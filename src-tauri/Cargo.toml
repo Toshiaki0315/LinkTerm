@@ -33,6 +33,7 @@ tokio-serial = "5.5.0"
 base64 = "0.23.1"
 encoding_rs = "0.8.42"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+tauri-plugin-clipboard-manager = "2.5.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -1,14 +1,29 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, SlavePty, native_pty_system};
 use tokio::sync::mpsc;
 
 use super::{TerminalError, TerminalSession, TerminalSize};
 
 const READ_BUFFER_SIZE: usize = 8192;
 const CHANNEL_CAPACITY: usize = 64;
+/// 子プロセスが終了してから、PTYのスレーブ側を閉じるまでの猶予。
+///
+/// macOS ではスレーブ側を閉じた時点で、読み取り前の出力が破棄されることがある。
+/// 子が一瞬で終了しても、読み取りスレッドが出力を取り切れるよう、閉じるのを少し遅らせる。
+const EXIT_DRAIN_GRACE: Duration = Duration::from_millis(150);
+
+/// 親側が保持している PTY のスレーブ側。閉じると、読み取りスレッドが EOF を受け取る。
+type SlaveHolder = Arc<Mutex<Option<Box<dyn SlavePty + Send>>>>;
+
+fn release_slave(holder: &SlaveHolder) {
+    // ロックの毒化は保持データの整合性を壊さないため無視してよい。
+    holder.lock().unwrap_or_else(|e| e.into_inner()).take();
+}
 
 /// ローカルシェルの起動設定。ユーザー入力をシェルへ渡さず、引数配列で保持する。
 #[derive(Debug, Clone)]
@@ -47,7 +62,8 @@ pub const INHERITED_TERMINAL_VARS: &[&str] = &["TERM_SESSION_ID", "ITERM_SESSION
 pub struct LocalShellSession {
     master: Box<dyn MasterPty + Send>,
     writer: Option<Box<dyn Write + Send>>,
-    child: Box<dyn Child + Send + Sync>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    slave: SlaveHolder,
     rx: mpsc::Receiver<Vec<u8>>,
     closed: bool,
 }
@@ -84,11 +100,19 @@ impl LocalShellSession {
         if let Some(dir) = start_dir {
             cmd.cwd(dir);
         }
-        let child = pair.slave.spawn_command(cmd).map_err(|e| {
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| {
             TerminalError::ConnectionFailed(format!("{} を起動できません: {e}", config.program))
         })?;
-        // 子プロセス終了時にリーダーがEOFを受け取れるよう、スレーブ側を閉じる。
-        drop(pair.slave);
+        let killer = child.clone_killer();
+        // スレーブ側はすぐには閉じない（出力の取りこぼし防止）。子の終了を待つスレッドが、
+        // 猶予のあとで閉じ、読み取りスレッドが EOF を受け取れるようにする。
+        let slave: SlaveHolder = Arc::new(Mutex::new(Some(pair.slave)));
+        let waiter_slave = slave.clone();
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            std::thread::sleep(EXIT_DRAIN_GRACE);
+            release_slave(&waiter_slave);
+        });
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| {
             TerminalError::ConnectionFailed(format!("PTY読み取りを開始できません: {e}"))
@@ -116,7 +140,8 @@ impl LocalShellSession {
         Ok(Self {
             master: pair.master,
             writer: Some(writer),
-            child,
+            killer,
+            slave,
             rx,
             closed: false,
         })
@@ -153,8 +178,8 @@ impl TerminalSession for LocalShellSession {
         self.closed = true;
         self.writer = None;
         // 既に終了済みの場合のエラーは無視してよい。
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.killer.kill();
+        release_slave(&self.slave);
         self.rx.close();
         Ok(())
     }
@@ -163,8 +188,8 @@ impl TerminalSession for LocalShellSession {
 impl Drop for LocalShellSession {
     fn drop(&mut self) {
         if !self.closed {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            let _ = self.killer.kill();
+            release_slave(&self.slave);
         }
     }
 }
@@ -366,5 +391,31 @@ mod tests {
         assert!(out.contains("TERM_PROGRAM=LinkTerm"), "{out}");
         assert!(out.contains("TERM=xterm-256color"), "{out}");
         assert!(!out.contains("Apple_Terminal"), "{out}");
+    }
+
+    /// 起動してすぐ終了するプログラムの出力も、取りこぼさず受け取れること（負荷が高い環境でも）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn output_of_instantly_exiting_programs_is_never_lost() {
+        let mut lost = Vec::new();
+        for n in 0..150 {
+            let marker = format!("fast-exit-{n}");
+            let mut s = LocalShellSession::spawn(config("/bin/echo", &[marker.as_str()])).unwrap();
+            let got = timeout(Duration::from_secs(5), async {
+                let mut out = Vec::new();
+                while let Some(chunk) = s.read().await.unwrap() {
+                    out.extend(chunk);
+                    if String::from_utf8_lossy(&out).contains(&marker) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+            if !got {
+                lost.push(n);
+            }
+        }
+        assert!(lost.is_empty(), "出力が失われた回: {lost:?}");
     }
 }
