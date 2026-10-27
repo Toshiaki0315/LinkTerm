@@ -29,6 +29,7 @@
 - [ ] 「ポートフォワード」に `8080:localhost:80` を入れて接続 → Mac の `curl http://127.0.0.1:8080` がサーバ側の localhost:80 に届く。
 - [ ] 「SOCKS プロキシ」に `1080` を入れて接続 → `curl --socks5-hostname 127.0.0.1:1080 http://サーバ内のホスト` がサーバ経由で届く。
 - [ ] config に `LocalForward 8080 localhost:80` を書き、ダイアログは空 → 同様に転送される。
+- [ ] 「リモートフォワード」に `9000:localhost:3000` を入れて接続（Mac で `python3 -m http.server 3000`）→ サーバー上で `curl http://localhost:9000` が Mac の内容を返す。サーバーが `AllowTcpForwarding no` なら「許可しませんでした」と出る。
 - [ ] 使用中のポートを指定 → 「待ち受けできません」と出て接続しない。LAN 側の別端末からは繋がらない。
 
 ## 4. 検索・タブ

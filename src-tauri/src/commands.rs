@@ -17,15 +17,16 @@ use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::session::{
     Codec, ControlSignal, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore,
-    LocalForward, LocalShellConfig, LocalShellSession, LogConfig, LogError, RxNewline,
-    SerialConfig, SerialSession, SessionLogger, SshAuth, SshConfig, SshSession, TelnetConfig,
-    TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline, list_ports,
+    LocalForward, LocalShellConfig, LocalShellSession, LogConfig, LogError, RemoteForward,
+    RxNewline, SerialConfig, SerialSession, SessionLogger, SshAuth, SshConfig, SshSession,
+    TelnetConfig, TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline,
+    list_ports,
 };
 use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
 use crate::ssh_config::{
     RequestedTarget, SshConfig as SshConfigFile, SshConfigError, build_jump_hosts,
-    default_config_path, merge_forwards, pick_identity_file, resolve_target,
+    default_config_path, merge_forwards, merge_remote_forwards, pick_identity_file, resolve_target,
 };
 
 pub const EVENT_DATA: &str = "terminal-data";
@@ -280,6 +281,9 @@ pub struct StartSsh {
     /// SOCKS5 プロキシ（`-D`）の待ち受けポート。
     #[serde(default)]
     dynamic_forwards: Vec<u16>,
+    /// リモートフォワード（`-R`）。
+    #[serde(default)]
+    remote_forwards: Vec<RemoteForward>,
 }
 
 fn default_true() -> bool {
@@ -350,6 +354,8 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
         target.local_forwards.clone(),
         target.dynamic_forwards.clone(),
     );
+    let remote_forwards =
+        merge_remote_forwards(req.remote_forwards.clone(), target.remote_forwards.clone());
     let session = SshSession::connect(
         SshConfig {
             host: target.hostname.clone(),
@@ -362,6 +368,7 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             jump_hosts: build_jump_hosts(&config, &target.jumps, &target.username),
             forwards,
             dynamic_forwards,
+            remote_forwards,
         },
         state.known_hosts.clone(),
         state.approver.clone(),

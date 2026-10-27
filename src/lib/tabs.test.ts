@@ -99,6 +99,7 @@ describe("tabsReducer", () => {
       jumpHosts: "",
       forwards: "",
       socksPorts: "",
+      remoteForwards: "",
       authKind: "password",
       password: "secret",
       remember: false,

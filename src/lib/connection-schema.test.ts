@@ -138,6 +138,7 @@ describe("toStartRequest", () => {
       jumpHosts: "",
       forwards: [],
       dynamicForwards: [],
+      remoteForwards: [],
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
@@ -535,5 +536,39 @@ describe("parseSocksPorts", () => {
         socksPorts: "oops",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("ssh リモートフォワード(-R)", () => {
+  const base = {
+    ...defaultConnectionValues,
+    type: "ssh",
+    host: "h",
+    username: "u",
+    password: "pw",
+  };
+
+  it("リクエストに remoteForwards として含める", () => {
+    const v = connectionSchema.parse({
+      ...base,
+      remoteForwards: "9000:localhost:3000",
+    });
+    expect(toStartRequest(v, SIZE)).toMatchObject({
+      remoteForwards: [
+        { bindPort: 9000, destHost: "localhost", destPort: 3000 },
+      ],
+    });
+  });
+
+  it("不正な指定は検証エラー", () => {
+    expect(
+      connectionSchema.safeParse({ ...base, remoteForwards: "9000" }).success,
+    ).toBe(false);
+  });
+
+  it("未指定なら空配列", () => {
+    expect(toStartRequest(connectionSchema.parse(base), SIZE)).toMatchObject({
+      remoteForwards: [],
+    });
   });
 });

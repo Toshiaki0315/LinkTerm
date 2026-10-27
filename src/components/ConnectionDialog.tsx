@@ -45,6 +45,7 @@ interface FormValues {
   jumpHosts: string;
   forwards: string;
   socksPorts: string;
+  remoteForwards: string;
   authKind: "password" | "keychain" | "keyFile" | "agent";
   password: string;
   remember: boolean;
@@ -399,6 +400,19 @@ export function ConnectionDialog({
                     autoComplete="off"
                     placeholder="8080:db.internal:5432,9000:localhost:80（この Mac の 127.0.0.1 のみ）"
                     {...register("forwards")}
+                  />
+                )}
+              </Field>
+              <Field
+                label="リモートフォワード（-R）"
+                error={message(errors, "remoteForwards")}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    placeholder="9000:localhost:3000（サーバーの localhost:9000 → この Mac の localhost:3000）"
+                    {...register("remoteForwards")}
                   />
                 )}
               </Field>

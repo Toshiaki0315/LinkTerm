@@ -100,6 +100,7 @@ const sshPassword: ConnectionValues = {
   jumpHosts: "",
   forwards: "",
   socksPorts: "",
+  remoteForwards: "",
   authKind: "password",
   password: "pw",
   remember: false,

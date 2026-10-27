@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::session::LocalForward;
+use crate::session::{LocalForward, RemoteForward};
 
 /// 読み込む設定ファイルの大きさの上限（異常に大きなファイルでメモリを使い切らないため）。
 pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -107,6 +107,8 @@ pub struct ResolvedHost {
     pub local_forwards: Vec<LocalForward>,
     /// `DynamicForward`（`-D`）の待ち受けポート。設定の順。
     pub dynamic_forwards: Vec<u16>,
+    /// `RemoteForward`（`-R`）。設定の順。サーバー側の待ち受けは常にループバック。
+    pub remote_forwards: Vec<RemoteForward>,
 }
 
 /// `[bind_address:]port` のポート部分（`DynamicForward` の引数）。不正なら `None`。
@@ -151,6 +153,7 @@ enum Keyword {
     ProxyJump,
     LocalForward,
     DynamicForward,
+    RemoteForward,
 }
 
 #[derive(Debug, Default)]
@@ -397,13 +400,15 @@ impl SshConfig {
                         "proxyjump" => Keyword::ProxyJump,
                         "localforward" => Keyword::LocalForward,
                         "dynamicforward" => Keyword::DynamicForward,
+                        "remoteforward" => Keyword::RemoteForward,
                         _ => continue,
                     };
                     if let Some(value) = args.first() {
                         // ProxyJump だけは、カンマ区切りの途中に空白がない1つの値として扱う。
                         let value = if keyword == Keyword::ProxyJump {
                             args.join("")
-                        } else if keyword == Keyword::LocalForward {
+                        } else if matches!(keyword, Keyword::LocalForward | Keyword::RemoteForward)
+                        {
                             args.join(" ")
                         } else {
                             value.clone()
@@ -460,6 +465,7 @@ impl SshConfig {
         let mut identity_files = Vec::new();
         let mut local_forwards = Vec::new();
         let mut dynamic_forwards = Vec::new();
+        let mut remote_forwards = Vec::new();
         for block in &self.blocks {
             let applies = block
                 .patterns
@@ -484,6 +490,13 @@ impl SshConfig {
                     }
                     Keyword::IdentityFile => identity_files.push(self.expand_path(value)),
                     Keyword::LocalForward => local_forwards.extend(parse_local_forward(value)),
+                    Keyword::RemoteForward => {
+                        remote_forwards.extend(parse_local_forward(value).map(|f| RemoteForward {
+                            bind_port: f.bind_port,
+                            dest_host: f.dest_host,
+                            dest_port: f.dest_port,
+                        }));
+                    }
                     Keyword::DynamicForward => dynamic_forwards.extend(parse_bind_port(value)),
                     Keyword::ProxyJump => {
                         if proxy_jump.is_none() {
@@ -501,6 +514,7 @@ impl SshConfig {
             proxy_jump: proxy_jump.unwrap_or_default(),
             local_forwards,
             dynamic_forwards,
+            remote_forwards,
         }
     }
 
@@ -551,6 +565,8 @@ pub struct EffectiveTarget {
     pub local_forwards: Vec<LocalForward>,
     /// `~/.ssh/config` の `DynamicForward`。
     pub dynamic_forwards: Vec<u16>,
+    /// `~/.ssh/config` の `RemoteForward`。
+    pub remote_forwards: Vec<RemoteForward>,
 }
 
 /// ダイアログの指定と設定ファイルから、実際の接続先を決める。
@@ -601,10 +617,25 @@ pub fn resolve_target(
         jumps,
         local_forwards: resolved.local_forwards,
         dynamic_forwards: resolved.dynamic_forwards,
+        remote_forwards: resolved.remote_forwards,
     })
 }
 
 pub const DEFAULT_SSH_PORT: u16 = 22;
+
+/// リモートフォワードを合わせる。ダイアログの指定が先で、同じサーバー側ポートの設定ファイル側は捨てる。
+pub fn merge_remote_forwards(
+    dialog: Vec<RemoteForward>,
+    config: Vec<RemoteForward>,
+) -> Vec<RemoteForward> {
+    let mut merged = dialog;
+    for f in config {
+        if f.bind_port == 0 || !merged.iter().any(|m| m.bind_port == f.bind_port) {
+            merged.push(f);
+        }
+    }
+    merged
+}
 
 /// ダイアログで指定したポートフォワードと、設定ファイルのものを合わせる。
 /// ダイアログの指定を先に並べ、同じローカルポートを待ち受ける設定ファイル側の項目は捨てる
@@ -742,6 +773,7 @@ mod tests {
                 proxy_jump: vec![],
                 local_forwards: vec![],
                 dynamic_forwards: vec![],
+                remote_forwards: vec![],
             }
         );
     }
@@ -1055,6 +1087,27 @@ mod tests {
             dest_host: "h".into(),
             dest_port: 1,
         }
+    }
+
+    #[test]
+    fn remote_forward_is_read_and_merged_with_dialog_first() {
+        let c = cfg(
+            "Host a\n  RemoteForward 9000 localhost:3000\n  RemoteForward 9001 h:1\n  RemoteForward bad\n",
+        );
+        let r = c.resolve("a");
+        assert_eq!(r.remote_forwards.len(), 2);
+        assert_eq!(r.remote_forwards[0].bind_port, 9000);
+        assert_eq!(r.remote_forwards[0].dest_host, "localhost");
+        assert!(r.local_forwards.is_empty());
+        let dialog = vec![RemoteForward {
+            bind_port: 9000,
+            dest_host: "x".into(),
+            dest_port: 1,
+        }];
+        let merged = merge_remote_forwards(dialog, r.remote_forwards);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].dest_host, "x");
+        assert_eq!(merged[1].bind_port, 9001);
     }
 
     #[test]

@@ -24,6 +24,10 @@ struct ServerState {
     forwarded: Mutex<std::collections::HashSet<ChannelId>>,
     /// パスワード認証の試行回数（踏み台にパスワードが送られていないことの確認用）。
     password_attempts: std::sync::atomic::AtomicUsize,
+    /// 受けた tcpip-forward 要求 `(address, port)`。
+    remote_requests: Mutex<Vec<(String, u32)>>,
+    /// サーバー側で実際に待ち受けたポート。
+    remote_listen: Mutex<Vec<u16>>,
 }
 
 #[derive(Clone)]
@@ -110,6 +114,55 @@ impl server::Handler for MockServer {
             Err(_) => reply.reject(ChannelOpenFailure::ConnectFailed).await,
         }
         Ok(())
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        self.state
+            .remote_requests
+            .lock()
+            .unwrap()
+            .push((address.to_owned(), *port));
+        if !self.allow_forwarding {
+            return Ok(false);
+        }
+        let Ok(listener) = TcpListener::bind(("127.0.0.1", *port as u16)).await else {
+            return Ok(false);
+        };
+        *port = u32::from(listener.local_addr().unwrap().port());
+        self.state.remote_listen.lock().unwrap().push(*port as u16);
+        let handle = session.handle();
+        let state = self.state.clone();
+        let address = address.to_owned();
+        let connected_port = *port;
+        tokio::spawn(async move {
+            while let Ok((mut tcp, peer)) = listener.accept().await {
+                let handle = handle.clone();
+                let state = state.clone();
+                let address = address.clone();
+                tokio::spawn(async move {
+                    let Ok(channel) = handle
+                        .channel_open_forwarded_tcpip(
+                            address,
+                            connected_port,
+                            "127.0.0.1",
+                            u32::from(peer.port()),
+                        )
+                        .await
+                    else {
+                        return;
+                    };
+                    state.forwarded.lock().unwrap().insert(channel.id());
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                });
+            }
+        });
+        Ok(true)
     }
 
     async fn pty_request(
@@ -238,6 +291,7 @@ fn config(port: u16, auth: SshAuth) -> SshConfig {
         jump_hosts: vec![],
         forwards: vec![],
         dynamic_forwards: vec![],
+        remote_forwards: vec![],
     }
 }
 
@@ -1032,4 +1086,102 @@ async fn socks_proxy_drops_clients_that_do_not_speak_socks5() {
         .unwrap()
         .unwrap_or(0);
     assert_eq!(n, 0);
+}
+
+// ---- リモートフォワード (-R) ----
+
+fn remote(bind_port: u16, dest_port: u16) -> RemoteForward {
+    RemoteForward {
+        bind_port,
+        dest_host: "127.0.0.1".into(),
+        dest_port,
+    }
+}
+
+async fn connect_with_remote(
+    h: &Harness,
+    forwards: Vec<RemoteForward>,
+) -> Result<SshSession, TerminalError> {
+    let mut cfg = config(h.port, password("secret"));
+    cfg.remote_forwards = forwards;
+    SshSession::connect(
+        cfg,
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn remote_forward_relays_server_side_connections_to_a_local_destination() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let echo = echo_server().await;
+    let h = start_server_with(None, true).await;
+    let mut s = connect_with_remote(&h, vec![remote(0, echo)])
+        .await
+        .unwrap();
+    let server_port = s.remote_ports()[0];
+    assert_ne!(server_port, 0);
+    // サーバー側はループバックで待ち受けるよう要求している。
+    assert_eq!(h.state.remote_requests.lock().unwrap()[0].0, "localhost");
+
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", server_port))
+        .await
+        .unwrap();
+    c.write_all(b"from server").await.unwrap();
+    let mut buf = [0u8; 11];
+    timeout(Duration::from_secs(5), c.read_exact(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf, b"from server");
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_forward_denied_by_the_server_fails_the_connection_with_the_port() {
+    let h = start_server_with(None, false).await;
+    match connect_with_remote(&h, vec![remote(9123, 1)]).await {
+        Err(TerminalError::ConnectionFailed(m)) => assert!(m.contains("9123"), "{m}"),
+        other => panic!("{:?}", other.err()),
+    }
+}
+
+#[tokio::test]
+async fn remote_forward_to_an_unreachable_local_destination_only_closes_that_connection() {
+    use tokio::io::AsyncReadExt;
+    let echo = echo_server().await;
+    let dead = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let h = start_server_with(None, true).await;
+    let s = connect_with_remote(&h, vec![remote(0, dead), remote(0, echo)])
+        .await
+        .unwrap();
+    let ports = s.remote_ports().to_vec();
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", ports[0]))
+        .await
+        .unwrap();
+    let mut buf = [0u8; 1];
+    let n = timeout(Duration::from_secs(5), c.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    assert_eq!(n, 0);
+    // 別のフォワードは使える。
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", ports[1]))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn no_remote_forwards_means_no_server_requests() {
+    let h = start_server_with(None, true).await;
+    let _s = connect_with_remote(&h, vec![]).await.unwrap();
+    assert!(h.state.remote_requests.lock().unwrap().is_empty());
 }

@@ -39,6 +39,12 @@ export type StartRequest =
       jumpHosts?: string;
       /** SOCKS5 プロキシ（-D）の待ち受けポート。127.0.0.1 のみ。 */
       dynamicForwards?: number[];
+      /** リモートフォワード（-R）。サーバー側のループバックで待ち受ける。 */
+      remoteForwards?: Array<{
+        bindPort: number;
+        destHost: string;
+        destPort: number;
+      }>;
       /** ローカルポートフォワード（-L）。127.0.0.1 でのみ待ち受ける。 */
       forwards?: Array<{
         bindPort: number;

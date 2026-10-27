@@ -27,6 +27,7 @@ export const defaultConnectionValues = {
   jumpHosts: "",
   forwards: "",
   socksPorts: "",
+  remoteForwards: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -151,6 +152,14 @@ const ssh = z
         (v) => parseForwards(v) !== null,
         "ポートフォワードは ローカルポート:転送先ホスト:転送先ポート の形式で指定してください",
       ),
+    remoteForwards: z
+      .string()
+      .trim()
+      .default("")
+      .refine(
+        (v) => parseForwards(v) !== null,
+        "リモートフォワードは サーバー側ポート:転送先ホスト:転送先ポート の形式で指定してください",
+      ),
     socksPorts: z
       .string()
       .trim()
@@ -248,6 +257,7 @@ export function toStartRequest(
         useSshConfig: v.useSshConfig,
         jumpHosts: v.jumpHosts,
         forwards: parseForwards(v.forwards ?? "") ?? [],
+        remoteForwards: parseForwards(v.remoteForwards ?? "") ?? [],
         dynamicForwards: parseSocksPorts(v.socksPorts ?? "") ?? [],
         encoding: v.encoding,
         ...size,

@@ -60,6 +60,19 @@ pub struct SshConfig {
     pub forwards: Vec<LocalForward>,
     /// SOCKS5 プロキシ（`-D`）の待ち受けポート。127.0.0.1 のみ。
     pub dynamic_forwards: Vec<u16>,
+    /// リモートフォワード（`-R`）。
+    pub remote_forwards: Vec<RemoteForward>,
+}
+
+/// リモートフォワード（`ssh -R bind_port:dest_host:dest_port`）。
+/// サーバー側の `localhost:bind_port` への接続を、このMacから `dest_host:dest_port` へ中継する。
+/// サーバー側の待ち受けはループバックに限る。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForward {
+    pub bind_port: u16,
+    pub dest_host: String,
+    pub dest_port: u16,
 }
 
 /// ローカルポートフォワード（`ssh -L bind_port:dest_host:dest_port`）。
@@ -79,10 +92,45 @@ struct ClientHandler {
     known_hosts: Arc<dyn KnownHostsStore>,
     approver: Arc<dyn HostKeyApprover>,
     rejection: Arc<Mutex<Option<TerminalError>>>,
+    /// リモートフォワード（`-R`）で、サーバーが開くチャネルの中継先。キーはサーバー側の待ち受けポート。
+    remote_forwards: RemoteTable,
 }
+
+/// サーバー側のポート → このMac側の中継先 `(ホスト, ポート)`。
+type RemoteTable = Arc<Mutex<std::collections::HashMap<u32, (String, u16)>>>;
 
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let destination = self
+            .remote_forwards
+            .lock()
+            .ok()
+            .and_then(|table| table.get(&connected_port).cloned());
+        // 登録のないポートへの要求は拒否する（`reply` を破棄すると拒否になる）。
+        let Some((host, port)) = destination else {
+            return Ok(());
+        };
+        tokio::spawn(async move {
+            let Ok(mut local) = tokio::net::TcpStream::connect((host.as_str(), port)).await else {
+                return;
+            };
+            reply.accept().await;
+            let mut stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut local, &mut stream).await;
+        });
+        Ok(())
+    }
 
     async fn check_server_key(
         &mut self,
@@ -124,6 +172,7 @@ enum Command {
 type Output = Result<Vec<u8>, TerminalError>;
 
 pub struct SshSession {
+    remote_ports: Vec<u16>,
     forward_addrs: Vec<std::net::SocketAddr>,
     commands: mpsc::Sender<Command>,
     output: mpsc::Receiver<Output>,
@@ -302,6 +351,7 @@ async fn open_hop(
     client_config: Arc<client::Config>,
     known_hosts: Arc<dyn KnownHostsStore>,
     approver: Arc<dyn HostKeyApprover>,
+    remote_forwards: RemoteTable,
 ) -> Result<Handle<ClientHandler>, TerminalError> {
     let (host, port) = hop.address();
     let rejection = Arc::new(Mutex::new(None));
@@ -311,6 +361,7 @@ async fn open_hop(
         known_hosts,
         approver,
         rejection: rejection.clone(),
+        remote_forwards,
     };
     let connected = match via {
         None => client::connect(client_config, (host, port), handler).await,
@@ -338,6 +389,11 @@ impl SshSession {
     /// ローカルポートフォワードの実際の待ち受けアドレス（設定の順）。
     pub fn forward_addrs(&self) -> &[std::net::SocketAddr] {
         &self.forward_addrs
+    }
+
+    /// リモートフォワードで、サーバー側が実際に待ち受けているポート（設定の順）。
+    pub fn remote_ports(&self) -> &[u16] {
+        &self.remote_ports
     }
 
     /// ローカルポートフォワードの実際の待ち受けポート（設定の順）。
@@ -371,12 +427,14 @@ impl SshSession {
                 client_config.clone(),
                 known_hosts.clone(),
                 approver.clone(),
+                RemoteTable::default(),
             )
             .await?;
             authenticate_jump(&mut handle, hop, &config.auth).await?;
             jumps.push(handle);
         }
         let via = jumps.last().zip(config.jump_hosts.last());
+        let remote_table = RemoteTable::default();
         let mut handle = open_hop(
             via,
             Hop::Target {
@@ -386,10 +444,13 @@ impl SshSession {
             client_config,
             known_hosts,
             approver,
+            remote_table.clone(),
         )
         .await?;
 
         authenticate(&mut handle, &config.username, &config.auth).await?;
+        let remote_ports =
+            start_remote_forwards(&handle, &config.remote_forwards, &remote_table).await?;
 
         let channel = handle
             .channel_open_session()
@@ -422,6 +483,7 @@ impl SshSession {
 
         Ok(Self {
             forward_addrs,
+            remote_ports,
             commands: cmd_tx,
             output: out_rx,
             closed: false,
@@ -465,6 +527,38 @@ async fn start_forwards(
         )));
     }
     Ok((tasks, addrs))
+}
+
+/// リモートフォワードをサーバーに要求し、中継先を登録する。サーバーが拒否したらエラー。
+/// 戻り値は、サーバー側で実際に待ち受けているポート（設定の順）。
+async fn start_remote_forwards(
+    handle: &Handle<ClientHandler>,
+    forwards: &[RemoteForward],
+    table: &RemoteTable,
+) -> Result<Vec<u16>, TerminalError> {
+    let mut ports = Vec::new();
+    for forward in forwards {
+        let granted = handle
+            .tcpip_forward("localhost", u32::from(forward.bind_port))
+            .await
+            .map_err(|e| {
+                TerminalError::ConnectionFailed(format!(
+                    "サーバーがリモートフォワード（ポート {}）を許可しませんでした: {e}",
+                    forward.bind_port
+                ))
+            })?;
+        // ポート 0 を指定したときは、サーバーが割り当てたポートが返る。
+        let actual = if forward.bind_port == 0 {
+            granted
+        } else {
+            u32::from(forward.bind_port)
+        };
+        if let Ok(mut t) = table.lock() {
+            t.insert(actual, (forward.dest_host.clone(), forward.dest_port));
+        }
+        ports.push(u16::try_from(actual).unwrap_or(forward.bind_port));
+    }
+    Ok(ports)
 }
 
 /// 待ち受けの種類。
