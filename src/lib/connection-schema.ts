@@ -25,6 +25,7 @@ export const defaultConnectionValues = {
   username: "",
   useSshConfig: true,
   jumpHosts: "",
+  forwards: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -53,6 +54,40 @@ const encoding = z.enum(ENCODINGS).default("UTF-8");
 const localEcho = z.enum(["auto", "on", "off"]).default("auto");
 
 const local = z.object({ type: z.literal("local"), encoding });
+
+/** `-L` 形式のポートフォワード1件。 */
+export interface ForwardSpec {
+  bindPort: number;
+  destHost: string;
+  destPort: number;
+}
+
+const toPort = (text: string): number | null => {
+  if (!/^\d{1,5}$/.test(text)) return null;
+  const n = Number(text);
+  return n >= 1 && n <= 65535 ? n : null;
+};
+
+/**
+ * ポートフォワードの指定（`ローカルポート:転送先ホスト:転送先ポート` のカンマ区切り）を読む。
+ * 空欄は転送なし。形式が正しくなければ null。
+ */
+export function parseForwards(text: string): ForwardSpec[] | null {
+  const spec = text.trim();
+  if (spec === "") return [];
+  const result: ForwardSpec[] = [];
+  for (const raw of spec.split(",")) {
+    const parts = raw.trim().split(":");
+    if (parts.length !== 3) return null;
+    const [bind, destHost, dest] = parts;
+    const bindPort = toPort(bind);
+    const destPort = toPort(dest);
+    if (bindPort === null || destPort === null) return null;
+    if (!/^[A-Za-z0-9._-]+$/.test(destHost)) return null;
+    result.push({ bindPort, destHost, destPort });
+  }
+  return result;
+}
 
 /** 踏み台の指定（`[user@]host[:port]` のカンマ区切り。空と `none` も可）。Rust 側の解析と同じ規則。 */
 export function isValidJumpList(text: string): boolean {
@@ -99,6 +134,14 @@ const ssh = z
       .trim()
       .default("")
       .refine(isValidJumpList, "踏み台の指定が正しくありません"),
+    forwards: z
+      .string()
+      .trim()
+      .default("")
+      .refine(
+        (v) => parseForwards(v) !== null,
+        "ポートフォワードは ローカルポート:転送先ホスト:転送先ポート の形式で指定してください",
+      ),
     authKind: z.enum(["password", "keychain", "keyFile", "agent"]),
     password: z.string().default(""),
     remember: z.boolean().default(false),
@@ -187,6 +230,7 @@ export function toStartRequest(
         username: v.username,
         useSshConfig: v.useSshConfig,
         jumpHosts: v.jumpHosts,
+        forwards: parseForwards(v.forwards ?? "") ?? [],
         encoding: v.encoding,
         ...size,
       };

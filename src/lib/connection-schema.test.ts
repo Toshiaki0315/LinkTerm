@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectionSchema,
   connectionTitle,
+  parseForwards,
   parseSavedValues,
   defaultConnectionValues,
   toStartRequest,
@@ -134,6 +135,7 @@ describe("toStartRequest", () => {
       username: "alice",
       useSshConfig: true,
       jumpHosts: "",
+      forwards: [],
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
@@ -434,7 +436,65 @@ describe("parseSavedValues（保存済みの設定の読み込み）", () => {
       expect(toStartRequest(off, SIZE)).toMatchObject({
         useSshConfig: false,
         jumpHosts: "",
+        forwards: [],
       });
     });
+  });
+});
+
+describe("parseForwards", () => {
+  it("空欄は転送なし", () => {
+    expect(parseForwards("")).toEqual([]);
+    expect(parseForwards("  ")).toEqual([]);
+  });
+
+  it("ローカルポート:転送先ホスト:転送先ポートをカンマ区切りで読む", () => {
+    expect(parseForwards("8080:db.internal:5432, 9000:localhost:90")).toEqual([
+      { bindPort: 8080, destHost: "db.internal", destPort: 5432 },
+      { bindPort: 9000, destHost: "localhost", destPort: 90 },
+    ]);
+  });
+
+  it("不正な形式・範囲外のポートは null", () => {
+    for (const bad of [
+      "8080",
+      "8080:host",
+      "x:host:80",
+      "0:host:80",
+      "8080:host:70000",
+      "8080::80",
+      "8080:host:80,",
+      "8080:ho st:80",
+    ]) {
+      expect(parseForwards(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("ssh ポートフォワード", () => {
+  const base = {
+    ...defaultConnectionValues,
+    type: "ssh",
+    host: "h",
+    username: "u",
+    keyPath: "",
+    password: "pw",
+  };
+
+  it("リクエストに forwards として含める", () => {
+    const v = connectionSchema.parse({
+      ...base,
+      forwards: "8080:db:5432",
+    });
+    const req = toStartRequest(v, SIZE);
+    expect(req).toMatchObject({
+      type: "ssh",
+      forwards: [{ bindPort: 8080, destHost: "db", destPort: 5432 }],
+    });
+  });
+
+  it("不正な指定は検証エラー", () => {
+    const r = connectionSchema.safeParse({ ...base, forwards: "oops" });
+    expect(r.success).toBe(false);
   });
 });

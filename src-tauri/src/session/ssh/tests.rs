@@ -236,6 +236,7 @@ fn config(port: u16, auth: SshAuth) -> SshConfig {
         term: "xterm-256color".into(),
         keepalive_interval: Some(Duration::from_secs(30)),
         jump_hosts: vec![],
+        forwards: vec![],
     }
 }
 
@@ -758,4 +759,180 @@ async fn a_changed_host_key_on_a_jump_host_is_rejected() {
     .await;
     assert!(matches!(r, Err(TerminalError::HostKeyRejected(_))));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---- ローカルポートフォワード (-L) ----
+
+async fn echo_server() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = sock.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    port
+}
+
+fn forward(bind_port: u16, dest_port: u16) -> LocalForward {
+    LocalForward {
+        bind_port,
+        dest_host: "127.0.0.1".into(),
+        dest_port,
+    }
+}
+
+async fn connect_with_forwards(
+    h: &Harness,
+    forwards: Vec<LocalForward>,
+) -> Result<SshSession, TerminalError> {
+    let mut cfg = config(h.port, password("secret"));
+    cfg.forwards = forwards;
+    SshSession::connect(
+        cfg,
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn local_forward_relays_tcp_through_the_ssh_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let echo = echo_server().await;
+    let h = start_server_with(None, true).await;
+    let mut s = connect_with_forwards(&h, vec![forward(0, echo)])
+        .await
+        .unwrap();
+    let ports = s.forward_ports();
+    assert_eq!(ports.len(), 1);
+
+    let mut client = tokio::net::TcpStream::connect(("127.0.0.1", ports[0]))
+        .await
+        .unwrap();
+    client.write_all(b"hello").await.unwrap();
+    let mut buf = [0u8; 5];
+    timeout(Duration::from_secs(5), client.read_exact(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf, b"hello");
+    assert_eq!(
+        *h.state.direct.lock().unwrap(),
+        vec![("127.0.0.1".to_string(), echo as u32)]
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn local_forward_handles_several_connections_and_forwards() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (e1, e2) = (echo_server().await, echo_server().await);
+    let h = start_server_with(None, true).await;
+    let s = connect_with_forwards(&h, vec![forward(0, e1), forward(0, e2)])
+        .await
+        .unwrap();
+    let ports = s.forward_ports();
+    assert_eq!(ports.len(), 2);
+    for (i, port) in ports.iter().enumerate() {
+        for _ in 0..2 {
+            let mut c = tokio::net::TcpStream::connect(("127.0.0.1", *port))
+                .await
+                .unwrap();
+            let msg = format!("m{i}");
+            c.write_all(msg.as_bytes()).await.unwrap();
+            let mut buf = vec![0u8; msg.len()];
+            timeout(Duration::from_secs(5), c.read_exact(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(buf, msg.as_bytes());
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_forward_listens_on_loopback_only() {
+    let echo = echo_server().await;
+    let h = start_server_with(None, true).await;
+    let s = connect_with_forwards(&h, vec![forward(0, echo)])
+        .await
+        .unwrap();
+    // 127.0.0.1 では繋がる。ワイルドカードで待ち受けていれば、他のIPでも同じポートで繋がってしまう。
+    let port = s.forward_ports()[0];
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+    );
+    assert!(s.forward_addrs().iter().all(|a| a.ip().is_loopback()));
+}
+
+#[tokio::test]
+async fn local_forward_bind_failure_names_the_port() {
+    let echo = echo_server().await;
+    let busy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let busy_port = busy.local_addr().unwrap().port();
+    let h = start_server_with(None, true).await;
+    match connect_with_forwards(&h, vec![forward(busy_port, echo)]).await {
+        Err(TerminalError::ConnectionFailed(m)) => {
+            assert!(m.contains(&busy_port.to_string()), "{m}")
+        }
+        other => panic!("{:?}", other.err()),
+    }
+}
+
+#[tokio::test]
+async fn local_forward_stops_when_the_session_closes() {
+    let echo = echo_server().await;
+    let h = start_server_with(None, true).await;
+    let mut s = connect_with_forwards(&h, vec![forward(0, echo)])
+        .await
+        .unwrap();
+    let port = s.forward_ports()[0];
+    s.close().await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        while tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("待ち受けが閉じない");
+}
+
+#[tokio::test]
+async fn local_forward_to_an_unreachable_destination_closes_only_that_connection() {
+    use tokio::io::AsyncReadExt;
+    let h = start_server_with(None, true).await;
+    // 何も待ち受けていないポート
+    let dead = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let s = connect_with_forwards(&h, vec![forward(0, dead)])
+        .await
+        .unwrap();
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", s.forward_ports()[0]))
+        .await
+        .unwrap();
+    let mut buf = [0u8; 1];
+    let n = timeout(Duration::from_secs(5), c.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap_or(0);
+    assert_eq!(n, 0);
+    // セッションは生きている
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", s.forward_ports()[0]))
+            .await
+            .is_ok()
+    );
 }

@@ -17,9 +17,9 @@ use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::session::{
     Codec, ControlSignal, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore,
-    LocalShellConfig, LocalShellSession, LogConfig, LogError, RxNewline, SerialConfig,
-    SerialSession, SessionLogger, SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession,
-    TerminalError, TerminalSession, TerminalSize, TxNewline, list_ports,
+    LocalForward, LocalShellConfig, LocalShellSession, LogConfig, LogError, RxNewline,
+    SerialConfig, SerialSession, SessionLogger, SshAuth, SshConfig, SshSession, TelnetConfig,
+    TelnetSession, TerminalError, TerminalSession, TerminalSize, TxNewline, list_ports,
 };
 use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
@@ -274,6 +274,9 @@ pub struct StartSsh {
     /// 踏み台（`[user@]host[:port],...`）。空なら `~/.ssh/config` の ProxyJump を使う。
     #[serde(default)]
     jump_hosts: String,
+    /// ローカルポートフォワード（`-L`）。
+    #[serde(default)]
+    forwards: Vec<LocalForward>,
 }
 
 fn default_true() -> bool {
@@ -347,6 +350,7 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             term: DEFAULT_TERM.into(),
             keepalive_interval: Some(SSH_KEEPALIVE),
             jump_hosts: build_jump_hosts(&config, &target.jumps, &target.username),
+            forwards: req.forwards.clone(),
         },
         state.known_hosts.clone(),
         state.approver.clone(),

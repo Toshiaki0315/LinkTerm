@@ -43,6 +43,7 @@ interface FormValues {
   username: string;
   useSshConfig: boolean;
   jumpHosts: string;
+  forwards: string;
   authKind: "password" | "keychain" | "keyFile" | "agent";
   password: string;
   remember: boolean;
@@ -384,6 +385,19 @@ export function ConnectionDialog({
                     autoComplete="off"
                     placeholder="user@bastion:22,gateway（空欄なら ~/.ssh/config の設定）"
                     {...register("jumpHosts")}
+                  />
+                )}
+              </Field>
+              <Field
+                label="ポートフォワード（-L）"
+                error={message(errors, "forwards")}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    placeholder="8080:db.internal:5432,9000:localhost:80（この Mac の 127.0.0.1 のみ）"
+                    {...register("forwards")}
                   />
                 )}
               </Field>

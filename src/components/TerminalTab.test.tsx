@@ -98,6 +98,7 @@ const sshPassword: ConnectionValues = {
   username: "u",
   useSshConfig: true,
   jumpHosts: "",
+  forwards: "",
   authKind: "password",
   password: "pw",
   remember: false,

@@ -37,6 +37,12 @@ export type StartRequest =
       useSshConfig?: boolean;
       /** 踏み台（`[user@]host[:port],...`）。空なら ~/.ssh/config の設定。 */
       jumpHosts?: string;
+      /** ローカルポートフォワード（-L）。127.0.0.1 でのみ待ち受ける。 */
+      forwards?: Array<{
+        bindPort: number;
+        destHost: string;
+        destPort: number;
+      }>;
     }
   | {
       type: "telnet";

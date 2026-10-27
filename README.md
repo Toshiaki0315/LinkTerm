@@ -16,7 +16,7 @@ macOS向けのモダンなマルチプロトコルターミナルエミュレー
 - **設定**: メニューバー「LinkTerm → 設定…」（⌘,）でフォント（インストール済みのフォントからリストで選択）・サイズ・スクロールバック・カーソル点滅・起動時に開くターミナル（なし／ローカルシェル／保存済みの接続）を変更。保存先は `~/Library/Application Support/com.linkterm.app/settings.json`
 - **ローカルエコー**: 接続ごと／実行中に 自動・オン・オフを切替（Telnet は `remote_echo()` を自動判定）
 - **シリアル**: 送受信の改行変換、手入力のポート名、HEX ダンプ表示、DTR/RTS 操作、ブレーク送信
-- **SSH**: `~/.ssh/config` のホスト別名・User・Port・IdentityFile の解決（`Include`・`Match host` 対応）、踏み台（ProxyJump、複数段可）。踏み台にはパスワードを送らず、Agent → 鍵の順で認証
+- **SSH**: `~/.ssh/config` のホスト別名・User・Port・IdentityFile の解決（`Include`・`Match host` 対応）、踏み台（ProxyJump、複数段可）。踏み台にはパスワードを送らず、Agent → 鍵の順で認証。ローカルポートフォワード（`-L`、127.0.0.1 のみ待ち受け）
 - **検索・タブ**: ⌘F 検索、タブの名前変更・複製・並べ替え
 - **配色テーマ**: 暗い／明るい／Solarized など 6 種
 - **コピー**: 選択でコピー、右クリックメニュー、URL クリックで開く

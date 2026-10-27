@@ -56,6 +56,18 @@ pub struct SshConfig {
     pub keepalive_interval: Option<Duration>,
     /// 経由する踏み台。先頭から順に接続する。
     pub jump_hosts: Vec<JumpHost>,
+    /// ローカルポートフォワード（`-L`）。
+    pub forwards: Vec<LocalForward>,
+}
+
+/// ローカルポートフォワード（`ssh -L bind_port:dest_host:dest_port`）。
+/// 待ち受けは安全のため 127.0.0.1 に限る。`bind_port` が 0 なら空いているポートが割り当てられる。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalForward {
+    pub bind_port: u16,
+    pub dest_host: String,
+    pub dest_port: u16,
 }
 
 /// ホスト鍵を検証するクライアントハンドラ。拒否理由は呼び出し側へ伝えるため共有する。
@@ -110,6 +122,7 @@ enum Command {
 type Output = Result<Vec<u8>, TerminalError>;
 
 pub struct SshSession {
+    forward_addrs: Vec<std::net::SocketAddr>,
     commands: mpsc::Sender<Command>,
     output: mpsc::Receiver<Output>,
     closed: bool,
@@ -320,6 +333,16 @@ async fn open_hop(
 }
 
 impl SshSession {
+    /// ローカルポートフォワードの実際の待ち受けアドレス（設定の順）。
+    pub fn forward_addrs(&self) -> &[std::net::SocketAddr] {
+        &self.forward_addrs
+    }
+
+    /// ローカルポートフォワードの実際の待ち受けポート（設定の順）。
+    pub fn forward_ports(&self) -> Vec<u16> {
+        self.forward_addrs.iter().map(|a| a.port()).collect()
+    }
+
     pub async fn connect(
         config: SshConfig,
         known_hosts: Arc<dyn KnownHostsStore>,
@@ -387,15 +410,90 @@ impl SshSession {
             .await
             .map_err(|e| TerminalError::ConnectionFailed(format!("シェル要求に失敗: {e}")))?;
 
+        let handle = Arc::new(handle);
+        let (forwarders, forward_addrs) = start_forwards(&handle, &config.forwards).await?;
+
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (out_tx, out_rx) = mpsc::channel(OUTPUT_CAPACITY);
-        tokio::spawn(pump(handle, jumps, channel, cmd_rx, out_tx));
+        tokio::spawn(pump(handle, jumps, forwarders, channel, cmd_rx, out_tx));
 
         Ok(Self {
+            forward_addrs,
             commands: cmd_tx,
             output: out_rx,
             closed: false,
         })
+    }
+}
+
+/// ローカルポートフォワードの待ち受けを始める。全部の待ち受けに成功しなければエラー。
+async fn start_forwards(
+    handle: &Arc<Handle<ClientHandler>>,
+    forwards: &[LocalForward],
+) -> Result<(Vec<tokio::task::JoinHandle<()>>, Vec<std::net::SocketAddr>), TerminalError> {
+    let mut listeners = Vec::new();
+    for forward in forwards {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", forward.bind_port))
+            .await
+            .map_err(|e| {
+                TerminalError::ConnectionFailed(format!(
+                    "ポートフォワード 127.0.0.1:{} を待ち受けできません: {e}",
+                    forward.bind_port
+                ))
+            })?;
+        listeners.push((listener, forward.clone()));
+    }
+    let mut tasks = Vec::new();
+    let mut addrs = Vec::new();
+    for (listener, forward) in listeners {
+        addrs.push(
+            listener
+                .local_addr()
+                .map_err(|e| TerminalError::io("ポートフォワードの待ち受けアドレスの取得", e))?,
+        );
+        tasks.push(tokio::spawn(forward_accept_loop(
+            listener,
+            forward,
+            handle.clone(),
+        )));
+    }
+    Ok((tasks, addrs))
+}
+
+/// 接続を受け付け、1接続ごとにSSHのdirect-tcpipチャネルへ中継する。
+/// このタスクが止まると、`JoinSet` の破棄で中継中の接続もまとめて止まる。
+async fn forward_accept_loop(
+    listener: tokio::net::TcpListener,
+    forward: LocalForward,
+    handle: Arc<Handle<ClientHandler>>,
+) {
+    let mut connections = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let Ok((mut socket, peer)) = accepted else { break };
+                let handle = handle.clone();
+                let forward = forward.clone();
+                connections.spawn(async move {
+                    // 転送先に繋がらなければ、この接続だけを閉じる。
+                    let Ok(channel) = handle
+                        .channel_open_direct_tcpip(
+                            forward.dest_host.as_str(),
+                            u32::from(forward.dest_port),
+                            "127.0.0.1",
+                            u32::from(peer.port()),
+                        )
+                        .await
+                    else {
+                        return;
+                    };
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                });
+            }
+            // 終わった接続のタスクを回収する。
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+        }
     }
 }
 
@@ -404,9 +502,11 @@ impl SshSession {
 /// 正常終了（リモートの `Close`、またはこちらからの終了要求）では `output` を閉じるだけにし、
 /// 送信失敗や予期しない切断はエラーとして `output` へ流して読み取り側へ理由を伝える。
 async fn pump(
-    handle: Handle<ClientHandler>,
+    handle: Arc<Handle<ClientHandler>>,
     // 目的のホストへの通り道。セッションが終わるまで保持する（閉じるとトンネルが切れる）。
     jumps: Vec<Handle<ClientHandler>>,
+    // ポートフォワードの待ち受け。セッションの終了とともに止める。
+    forwarders: Vec<tokio::task::JoinHandle<()>>,
     mut channel: Channel<Msg>,
     mut commands: mpsc::Receiver<Command>,
     output: mpsc::Sender<Output>,
@@ -449,6 +549,9 @@ async fn pump(
     if let Some(e) = failure {
         // 読み取り側が既にいなければ通知先はない。
         let _ = output.send(Err(e)).await;
+    }
+    for forwarder in &forwarders {
+        forwarder.abort();
     }
     let _ = channel.close().await;
     let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
