@@ -23,6 +23,13 @@ import {
   type ConnectionValues,
 } from "./lib/connection-schema";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
+import {
+  MAX_RECENT,
+  parseRecent,
+  recordRecent,
+  toStoredRecent,
+  type RecentEntry,
+} from "./lib/recent";
 import { shortcutFor } from "./lib/shortcuts";
 import { initialTabsState, tabsReducer } from "./lib/tabs";
 import {
@@ -34,7 +41,9 @@ import {
   onOpenSettings,
   pendingHostKeyRequests,
   respondHostKey,
+  getRecentConnections,
   saveProfile,
+  saveRecentConnections,
   saveSessionState,
   saveSettings,
   type HostKeyRequest,
@@ -67,6 +76,43 @@ function App() {
       setNotice(`保存済みの接続を読み込めません: ${describe(e)}`);
     }
   }, []);
+
+  /** 最近使った接続先（新しい順）。`dirty` は読み込み後に変更があり、保存が要ること。 */
+  const [recent, setRecent] = useState<{ list: RecentEntry[]; dirty: boolean }>(
+    { list: [], dirty: false },
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    getRecentConnections()
+      .then((raw) => {
+        // 読み込み前に接続した分は、履歴の先頭に残したまま古い履歴をつなぐ。
+        if (!cancelled)
+          setRecent((r) => ({
+            list: [...r.list, ...parseRecent(raw)].slice(0, MAX_RECENT),
+            dirty: r.dirty,
+          }));
+      })
+      .catch((e: unknown) => {
+        if (!cancelled)
+          setNotice(`最近使った接続を読み込めません: ${describe(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const recentPayload = JSON.stringify(toStoredRecent(recent.list));
+  const recentDirty = recent.dirty;
+  useEffect(() => {
+    if (!recentDirty) return;
+    const timer = setTimeout(() => {
+      saveRecentConnections(JSON.parse(recentPayload)).catch((e: unknown) =>
+        setNotice(`最近使った接続を保存できません: ${describe(e)}`),
+      );
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [recentDirty, recentPayload]);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -307,6 +353,10 @@ function App() {
         dispatch({ type: "close", id: dialog.replaceTabId });
       }
       openTab(values);
+      setRecent((r) => ({
+        list: recordRecent(r.list, values, Date.now()),
+        dirty: true,
+      }));
       if (options?.saveAs) {
         saveProfile(options.saveAs)
           .then(reloadProfiles)
@@ -316,6 +366,24 @@ function App() {
       }
     },
     [dialog, openTab, reloadProfiles],
+  );
+
+  /** 履歴から接続する。パスワードが要るSSHは、入力用のダイアログを開く。 */
+  const onOpenRecent = useCallback(
+    (entry: RecentEntry) => {
+      const v = entry.values;
+      if (v.type === "ssh" && v.authKind === "password") {
+        setDialog({ initialValues: v });
+        return;
+      }
+      addTab(v);
+    },
+    [addTab],
+  );
+
+  const onClearRecents = useCallback(
+    () => setRecent({ list: [], dirty: true }),
+    [],
   );
 
   const onDeleteProfile = useCallback(
@@ -396,6 +464,9 @@ function App() {
         onDuplicate={onDuplicateTab}
         onMove={onMoveTab}
         onColor={(id, color) => dispatch({ type: "setColor", id, color })}
+        recents={recent.list}
+        onOpenRecent={onOpenRecent}
+        onClearRecents={onClearRecents}
       />
       {notice && (
         <div
@@ -429,6 +500,7 @@ function App() {
         onSubmit={addTab}
         profiles={profiles}
         onDeleteProfile={onDeleteProfile}
+        recents={recent.list}
       />
       <SettingsDialog
         open={settingsOpen}

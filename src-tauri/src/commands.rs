@@ -15,6 +15,7 @@ use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::fonts::{FontError, FontFamily};
 use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
+use crate::recent::{RecentConnection, RecentError, RecentStore};
 use crate::session::{
     Codec, ControlSignal, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore,
     LocalForward, LocalShellConfig, LocalShellSession, LogConfig, LogError, RemoteForward,
@@ -62,6 +63,8 @@ pub enum CommandError {
     SshConfig(#[from] SshConfigError),
     #[error(transparent)]
     SessionState(#[from] SessionStateError),
+    #[error(transparent)]
+    Recent(#[from] RecentError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -168,6 +171,7 @@ pub struct AppState {
     profiles: ProfileStore,
     settings: SettingsStore,
     session_state: SessionStateStore,
+    recent: RecentStore,
 }
 
 impl AppState {
@@ -187,6 +191,7 @@ impl AppState {
             profiles: ProfileStore::new(dir.join("profiles.json")),
             settings: SettingsStore::new(dir.join("settings.json")),
             session_state: SessionStateStore::new(dir.join("session_state.json")),
+            recent: RecentStore::new(dir.join("recent.json")),
         })
     }
 }
@@ -600,6 +605,22 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
 #[tauri::command]
 pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
     Ok(state.session_state.load()?)
+}
+
+/// 最近使った接続先（新しい順）。
+#[tauri::command]
+pub fn get_recent_connections(state: State<'_, AppState>) -> CommandResult<Vec<RecentConnection>> {
+    Ok(state.recent.load()?)
+}
+
+/// 最近使った接続先を保存する。パスワード類は保存されない。
+#[tauri::command]
+pub fn save_recent_connections(
+    state: State<'_, AppState>,
+    entries: Vec<RecentConnection>,
+) -> CommandResult<()> {
+    state.recent.save(entries)?;
+    Ok(())
 }
 
 /// タブ構成を保存する。パスワード類は保存されない。

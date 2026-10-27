@@ -1,7 +1,8 @@
-import { Plus, X } from "lucide-react";
+import { ChevronDown, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Tab } from "../lib/tabs";
+import { recentLabel, type RecentEntry } from "../lib/recent";
 import { TAB_COLORS, tabColorHex, type TabColorId } from "../lib/tab-colors";
 import { cn } from "../lib/utils";
 import { ContextMenu } from "./ContextMenu";
@@ -21,6 +22,10 @@ interface Props {
   onMove?: (id: string, toIndex: number) => void;
   /** タブの色の変更（`undefined` で色なし）。渡さなければ色のメニューを出さない。 */
   onColor?: (id: string, color: TabColorId | undefined) => void;
+  /** 最近使った接続先（新しい順）。空なら「最近使った接続」ボタンを出さない。 */
+  recents?: RecentEntry[];
+  onOpenRecent?: (entry: RecentEntry) => void;
+  onClearRecents?: () => void;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -98,9 +103,15 @@ export function TabBar({
   onDuplicate,
   onMove,
   onColor,
+  recents = [],
+  onOpenRecent,
+  onClearRecents,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
+    null,
+  );
+  const [recentMenu, setRecentMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
   const [dragId, setDragId] = useState<string | null>(null);
@@ -246,6 +257,36 @@ export function TabBar({
       >
         <Plus className="h-4 w-4" />
       </Button>
+      {recents.length > 0 && onOpenRecent && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="最近使った接続"
+          aria-haspopup="menu"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setRecentMenu({ x: rect.left, y: rect.bottom });
+          }}
+        >
+          <ChevronDown className="h-4 w-4" />
+        </Button>
+      )}
+      {recentMenu && onOpenRecent && (
+        <ContextMenu
+          x={recentMenu.x}
+          y={recentMenu.y}
+          items={[
+            ...recents.map((entry) => ({
+              label: recentLabel(entry.values),
+              onSelect: () => onOpenRecent(entry),
+            })),
+            ...(onClearRecents
+              ? [{ label: "履歴を消去", onSelect: onClearRecents }]
+              : []),
+          ]}
+          onClose={() => setRecentMenu(null)}
+        />
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}

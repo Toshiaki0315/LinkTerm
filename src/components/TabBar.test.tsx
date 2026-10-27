@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { connectionSchema } from "../lib/connection-schema";
 import type { Tab } from "../lib/tabs";
 import { TabBar } from "./TabBar";
 
@@ -263,6 +264,93 @@ describe("TabBar", () => {
       expect(
         screen.queryByRole("menuitem", { name: "色を外す" }),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("最近使った接続", () => {
+    const entries = [
+      {
+        values: connectionSchema.parse({
+          type: "ssh",
+          host: "web",
+          port: 22,
+          username: "alice",
+          authKind: "agent",
+        }),
+        usedAt: 2,
+      },
+      {
+        values: connectionSchema.parse({
+          type: "telnet",
+          host: "router",
+          port: 23,
+        }),
+        usedAt: 1,
+      },
+    ];
+
+    it("履歴がなければボタンを出さない", () => {
+      render(
+        <TabBar
+          tabs={[]}
+          activeId={null}
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          recents={[]}
+          onOpenRecent={() => {}}
+        />,
+      );
+      expect(
+        screen.queryByRole("button", { name: "最近使った接続" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("ボタンから一覧を開き、選んだ接続先を通知する", async () => {
+      const user = userEvent.setup();
+      const onOpenRecent = vi.fn();
+      render(
+        <TabBar
+          tabs={[]}
+          activeId={null}
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          recents={entries}
+          onOpenRecent={onOpenRecent}
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "最近使った接続" }));
+      const items = screen.getAllByRole("menuitem");
+      expect(items.map((i) => i.textContent)).toEqual([
+        "alice@web",
+        "telnet://router:23",
+      ]);
+      await user.click(
+        screen.getByRole("menuitem", { name: "telnet://router:23" }),
+      );
+      expect(onOpenRecent).toHaveBeenCalledWith(entries[1]);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("履歴を消去できる", async () => {
+      const user = userEvent.setup();
+      const onClearRecents = vi.fn();
+      render(
+        <TabBar
+          tabs={[]}
+          activeId={null}
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          recents={entries}
+          onOpenRecent={() => {}}
+          onClearRecents={onClearRecents}
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "最近使った接続" }));
+      await user.click(screen.getByRole("menuitem", { name: "履歴を消去" }));
+      expect(onClearRecents).toHaveBeenCalled();
     });
   });
 });

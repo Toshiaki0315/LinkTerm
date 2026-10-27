@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
   pendingHostKeyRequests: vi.fn(),
   listSerialPorts: vi.fn(),
   listProfiles: vi.fn(),
+  getRecentConnections: vi.fn(),
+  saveRecentConnections: vi.fn(),
   getSettings: vi.fn(),
   getSessionState: vi.fn(),
   saveSessionState: vi.fn(),
@@ -80,6 +82,8 @@ beforeEach(() => {
   api.pendingHostKeyRequests.mockResolvedValue([]);
   api.listSerialPorts.mockResolvedValue([]);
   api.listProfiles.mockResolvedValue([]);
+  api.getRecentConnections.mockResolvedValue([]);
+  api.saveRecentConnections.mockResolvedValue(undefined);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
   api.getSessionState.mockResolvedValue({ tabs: [], active: null });
   api.saveSessionState.mockResolvedValue(undefined);
@@ -851,6 +855,112 @@ describe("App", () => {
           { timeout: 3000 },
         ),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe("最近使った接続", () => {
+    const telnetRecent = {
+      values: {
+        type: "telnet",
+        encoding: "UTF-8",
+        host: "router",
+        port: 23,
+        txNewline: "Cr",
+        rxNewline: "Raw",
+      },
+      usedAt: 10,
+    };
+    const sshPasswordRecent = {
+      values: {
+        type: "ssh",
+        encoding: "UTF-8",
+        host: "web",
+        port: 22,
+        username: "alice",
+        authKind: "password",
+      },
+      usedAt: 9,
+    };
+
+    it("履歴から選ぶとその接続先のタブが開き、履歴の先頭へ移る", async () => {
+      api.getRecentConnections.mockResolvedValue([
+        sshPasswordRecent,
+        telnetRecent,
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(
+        await screen.findByRole("button", { name: "最近使った接続" }),
+      );
+      await user.click(
+        screen.getByRole("menuitem", { name: "telnet://router:23" }),
+      );
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(screen.getAllByRole("tab")[0]).toHaveTextContent(
+        "telnet://router:23",
+      );
+      await waitFor(() => expect(api.saveRecentConnections).toHaveBeenCalled());
+      const saved = api.saveRecentConnections.mock.lastCall?.[0];
+      expect(
+        saved.map((e: { values: { host: string } }) => e.values.host),
+      ).toEqual(["router", "web"]);
+    });
+
+    it("パスワード認証のSSHは、接続ダイアログを開いてパスワードの入力を待つ", async () => {
+      api.getRecentConnections.mockResolvedValue([sshPasswordRecent]);
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(
+        await screen.findByRole("button", { name: "最近使った接続" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "alice@web" }));
+      expect(await screen.findByLabelText("ホスト")).toHaveValue("web");
+      expect(screen.getByLabelText("パスワード")).toHaveValue("");
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    });
+
+    it("ダイアログから接続すると履歴に残る（パスワードは残さない）。ローカルシェルは残さない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(api.saveRecentConnections).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.selectOptions(await screen.findByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "web");
+      await user.type(screen.getByLabelText("ユーザー名"), "alice");
+      await user.type(screen.getByLabelText("パスワード"), "hunter2");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(api.saveRecentConnections).toHaveBeenCalled());
+      const saved = api.saveRecentConnections.mock.lastCall?.[0];
+      expect(saved).toHaveLength(1);
+      expect(JSON.stringify(saved)).not.toContain("hunter2");
+    });
+
+    it("履歴を消去すると空で保存する", async () => {
+      api.getRecentConnections.mockResolvedValue([telnetRecent]);
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(
+        await screen.findByRole("button", { name: "最近使った接続" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "履歴を消去" }));
+      await waitFor(() =>
+        expect(api.saveRecentConnections).toHaveBeenLastCalledWith([]),
+      );
+      expect(
+        screen.queryByRole("button", { name: "最近使った接続" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("履歴を読み込めなくても使い続けられ、理由を表示する", async () => {
+      api.getRecentConnections.mockRejectedValue(new Error("壊れています"));
+      render(<App />);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        /最近使った接続を読み込めません/,
+      );
     });
   });
 });

@@ -19,6 +19,7 @@ import {
   listSshHosts,
   type SavedProfile,
 } from "../lib/terminal-api";
+import { connectionKey, recentLabel, type RecentEntry } from "../lib/recent";
 import { TAB_COLORS } from "../lib/tab-colors";
 import { Button } from "./ui/button";
 import {
@@ -77,6 +78,8 @@ interface Props {
   loadSshHosts?: () => Promise<string[]>;
   profiles?: SavedProfile[];
   onDeleteProfile?: (id: string) => void;
+  /** 最近使った接続先。選ぶと入力欄に反映する（パスワード類は含まない）。 */
+  recents?: RecentEntry[];
 }
 
 /** 接続と同時に保存する場合の指定。`values` にパスワード類は含まれない。 */
@@ -133,6 +136,7 @@ export function ConnectionDialog({
   loadSshHosts = listSshHosts,
   profiles = [],
   onDeleteProfile,
+  recents = [],
 }: Props) {
   const {
     register,
@@ -235,6 +239,16 @@ export function ConnectionDialog({
     });
   };
 
+  const loadRecent = (index: number) => {
+    const entry = recents[index];
+    if (!entry) return;
+    reset({
+      ...defaultConnectionValues,
+      ...EXTRA_DEFAULTS,
+      ...(entry.values as Partial<FormValues>),
+    });
+  };
+
   const submit = handleSubmit((values) => {
     // ~/.ssh/config を使う場合、ユーザー名は設定ファイルの User で補える。別名でなければ入力が必要。
     if (
@@ -273,6 +287,27 @@ export function ConnectionDialog({
           接続先の設定を入力してください
         </DialogDescription>
         <form onSubmit={submit} className="mt-4 grid gap-3" noValidate>
+          {recents.length > 0 && (
+            <Field label="最近使った接続">
+              {(id) => (
+                <Select
+                  id={id}
+                  value=""
+                  onChange={(e) => loadRecent(Number(e.target.value))}
+                >
+                  <option value="" disabled hidden>
+                    （選んで入力欄に反映）
+                  </option>
+                  {recents.map((r, i) => (
+                    <option key={connectionKey(r.values)} value={i}>
+                      {recentLabel(r.values)}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )}
+
           {profiles.length > 0 && (
             <div className="grid grid-cols-[1fr_auto] items-end gap-2">
               <Field label="保存済みの接続">

@@ -27,7 +27,9 @@ import {
   onOpenSettings,
   saveSettings,
   deleteProfile,
+  getRecentConnections,
   listProfiles,
+  saveRecentConnections,
   saveProfile,
   startSessionLog,
   stopSessionLog,
@@ -179,6 +181,20 @@ describe("未応答のホスト鍵承認要求", () => {
     invoke.mockResolvedValue([req]);
     await expect(pendingHostKeyRequests()).resolves.toEqual([req]);
     expect(invoke).toHaveBeenCalledWith("pending_host_key_requests");
+  });
+});
+
+describe("最近使った接続", () => {
+  it("取得と保存は、対応するコマンドを呼ぶ", async () => {
+    const entry = { values: { type: "telnet", host: "h" }, usedAt: 1 };
+    invoke.mockResolvedValueOnce([entry]);
+    await expect(getRecentConnections()).resolves.toEqual([entry]);
+    expect(invoke).toHaveBeenCalledWith("get_recent_connections");
+    invoke.mockResolvedValueOnce(undefined);
+    await saveRecentConnections([entry]);
+    expect(invoke).toHaveBeenCalledWith("save_recent_connections", {
+      entries: [entry],
+    });
   });
 });
 

@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { connectionSchema } from "../lib/connection-schema";
 import { ConnectionDialog } from "./ConnectionDialog";
 
 function setup(
@@ -577,5 +578,59 @@ describe("ConnectionDialog", () => {
     await user.click(screen.getByRole("button", { name: "接続" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0][0].tabColor).toBeUndefined();
+  });
+
+  describe("最近使った接続", () => {
+    const recents = [
+      {
+        values: connectionSchema.parse({
+          type: "telnet",
+          host: "router",
+          port: 2323,
+        }),
+        usedAt: 2,
+      },
+      {
+        values: connectionSchema.parse({
+          type: "ssh",
+          host: "web",
+          port: 22,
+          username: "alice",
+          authKind: "agent",
+        }),
+        usedAt: 1,
+      },
+    ];
+
+    it("履歴がなければ選択欄を出さない", () => {
+      render(
+        <ConnectionDialog open onOpenChange={() => {}} onSubmit={() => {}} />,
+      );
+      expect(screen.queryByLabelText("最近使った接続")).not.toBeInTheDocument();
+    });
+
+    it("選ぶと、その接続先が入力欄に入り、そのまま接続できる", async () => {
+      const onSubmit = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={() => {}}
+          onSubmit={onSubmit}
+          recents={recents}
+        />,
+      );
+      await user.selectOptions(screen.getByLabelText("最近使った接続"), "0");
+      expect(screen.getByLabelText("接続種別")).toHaveValue("telnet");
+      expect(screen.getByLabelText("ホスト")).toHaveValue("router");
+      expect(screen.getByLabelText("ポート")).toHaveValue(2323);
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        type: "telnet",
+        host: "router",
+        port: 2323,
+      });
+    });
   });
 });

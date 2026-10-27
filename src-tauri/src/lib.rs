@@ -5,6 +5,7 @@ pub mod fonts;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
+pub mod recent;
 pub mod session;
 pub mod session_state;
 pub mod settings;
@@ -48,6 +49,8 @@ pub fn run() {
             commands::list_fonts,
             commands::get_session_state,
             commands::save_session_state,
+            commands::get_recent_connections,
+            commands::save_recent_connections,
             commands::get_settings,
             commands::save_settings,
         ])

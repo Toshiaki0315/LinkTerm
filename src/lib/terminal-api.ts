@@ -178,6 +178,17 @@ export const saveSettings = (settings: Settings) =>
 export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
   listen<null>("menu-open-settings", () => cb());
 
+/** 最近使った接続先（新しい順）。 */
+export const getRecentConnections = () =>
+  invoke<Array<{ values: Record<string, unknown>; usedAt: number }>>(
+    "get_recent_connections",
+  );
+
+/** 最近使った接続先を保存する（パスワード類は渡さない）。 */
+export const saveRecentConnections = (
+  entries: Array<{ values: Record<string, unknown>; usedAt: number }>,
+) => invoke<void>("save_recent_connections", { entries });
+
 export const listProfiles = () => invoke<SavedProfile[]>("list_profiles");
 
 export const saveProfile = (profile: {
