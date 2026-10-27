@@ -24,8 +24,10 @@ describe("connectionSchema", () => {
     expect(connectionSchema.safeParse({ type: "local" }).success).toBe(true);
   });
 
-  it("ssh: ホストとユーザー名は必須", () => {
-    const r = connectionSchema.safeParse(ssh({ host: "", username: "" }));
+  it("ssh: ホストは必須。~/.ssh/config を使わないならユーザー名も必須", () => {
+    const r = connectionSchema.safeParse(
+      ssh({ host: "", username: "", useSshConfig: false }),
+    );
     expect(r.success).toBe(false);
     if (!r.success) {
       const paths = r.error.issues.map((i) => i.path[0]);
@@ -46,8 +48,9 @@ describe("connectionSchema", () => {
 
   it("ssh: 鍵認証では鍵パスが必須、agent/keychain は不要", () => {
     expect(
-      connectionSchema.safeParse(ssh({ authKind: "keyFile", keyPath: "" }))
-        .success,
+      connectionSchema.safeParse(
+        ssh({ authKind: "keyFile", keyPath: "", useSshConfig: false }),
+      ).success,
     ).toBe(false);
     expect(
       connectionSchema.safeParse(
@@ -129,6 +132,8 @@ describe("toStartRequest", () => {
       host: "example.com",
       port: 22,
       username: "alice",
+      useSshConfig: true,
+      jumpHosts: "",
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
       ...SIZE,
@@ -352,5 +357,80 @@ describe("parseSavedValues（保存済みの設定の読み込み）", () => {
     expect(parseSavedValues("x")).toBeNull();
     expect(parseSavedValues(null)).toBeNull();
     expect(parseSavedValues([])).toBeNull();
+  });
+
+  describe("~/.ssh/config と踏み台", () => {
+    it("既定では ~/.ssh/config を使い、ユーザー名・秘密鍵のパスは空でもよい（設定ファイルから補う）", () => {
+      expect(defaultConnectionValues.useSshConfig).toBe(true);
+      expect(connectionSchema.safeParse(ssh({ username: "" })).success).toBe(
+        true,
+      );
+      expect(
+        connectionSchema.safeParse(
+          ssh({ authKind: "keyFile", keyPath: "", username: "" }),
+        ).success,
+      ).toBe(true);
+    });
+
+    it("~/.ssh/config を使わないなら、ユーザー名と秘密鍵のパスは必須", () => {
+      const noUser = connectionSchema.safeParse(
+        ssh({ username: "", useSshConfig: false }),
+      );
+      expect(noUser.success).toBe(false);
+      const noKey = connectionSchema.safeParse(
+        ssh({ authKind: "keyFile", keyPath: "", useSshConfig: false }),
+      );
+      expect(noKey.success).toBe(false);
+      if (!noKey.success) expect(noKey.error.issues[0].path[0]).toBe("keyPath");
+    });
+
+    it("踏み台は [user@]host[:port] のカンマ区切り。空と none も可", () => {
+      for (const ok of [
+        "",
+        "none",
+        "bastion",
+        "a@h1:22, h2",
+        "u@[::1]:2200",
+        "  gw  ",
+      ]) {
+        expect(
+          connectionSchema.safeParse(ssh({ jumpHosts: ok })).success,
+          ok,
+        ).toBe(true);
+      }
+      for (const bad of [
+        "a b",
+        "h:99999",
+        "h:abc",
+        "@h",
+        "a@",
+        ",",
+        "h1,,h2",
+        "h:",
+      ]) {
+        const r = connectionSchema.safeParse(ssh({ jumpHosts: bad }));
+        expect(r.success, bad).toBe(false);
+        if (!r.success)
+          expect(r.error.issues[0].message).toBe(
+            "踏み台の指定が正しくありません",
+          );
+      }
+    });
+
+    it("接続要求に ~/.ssh/config の利用と踏み台（前後の空白は除く）を含める", () => {
+      const v = connectionSchema.parse(
+        ssh({ jumpHosts: "  user@bastion:22  " }),
+      );
+      expect(toStartRequest(v, SIZE)).toMatchObject({
+        type: "ssh",
+        useSshConfig: true,
+        jumpHosts: "user@bastion:22",
+      });
+      const off = connectionSchema.parse(ssh({ useSshConfig: false }));
+      expect(toStartRequest(off, SIZE)).toMatchObject({
+        useSshConfig: false,
+        jumpHosts: "",
+      });
+    });
   });
 });

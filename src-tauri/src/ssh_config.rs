@@ -290,11 +290,7 @@ impl SshConfig {
     }
 
     fn expand_path(&self, value: &str) -> PathBuf {
-        match (&self.home, value.strip_prefix("~/"), value) {
-            (Some(home), Some(rest), _) => home.join(rest),
-            (Some(home), None, "~") => home.clone(),
-            _ => PathBuf::from(value),
-        }
+        expand_tilde(value, self.home.as_deref())
     }
 
     /// `host`（別名）を解決する。
@@ -439,6 +435,66 @@ pub fn resolve_target(
 }
 
 pub const DEFAULT_SSH_PORT: u16 = 22;
+
+/// 踏み台の指定（`[user@]host[:port]`）を、接続に使う踏み台へ解決する。
+///
+/// ホスト名は設定ファイルの別名として解決する。ユーザー名・ポートは、指定 > 設定ファイル の順。
+/// どちらにもユーザー名がなければ `default_user`（目的のホストのユーザー名）を使う。
+pub fn build_jump_hosts(
+    config: &SshConfig,
+    specs: &[JumpSpec],
+    default_user: &str,
+) -> Vec<crate::session::JumpHost> {
+    specs
+        .iter()
+        .map(|spec| {
+            let resolved = config.resolve(&spec.host);
+            crate::session::JumpHost {
+                host: resolved.hostname,
+                port: spec.port.or(resolved.port).unwrap_or(DEFAULT_SSH_PORT),
+                username: spec
+                    .user
+                    .clone()
+                    .or(resolved.user)
+                    .unwrap_or_else(|| default_user.to_owned()),
+                identity_files: resolved.identity_files,
+            }
+        })
+        .collect()
+}
+
+/// 鍵のパスを決める。指定があればそれ（`~` は展開）、空なら設定ファイルの `IdentityFile` のうち
+/// 最初に存在するもの。
+pub fn pick_identity_file(
+    typed: &Path,
+    candidates: &[PathBuf],
+    home: Option<&Path>,
+) -> Result<PathBuf, SshConfigError> {
+    let typed_text = typed.to_string_lossy();
+    let typed_text = typed_text.trim();
+    if !typed_text.is_empty() {
+        return Ok(expand_tilde(typed_text, home));
+    }
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .ok_or_else(|| {
+            SshConfigError::InvalidTarget(
+                "秘密鍵のパスが指定されておらず、~/.ssh/config の IdentityFile にも使える鍵がありません"
+                    .into(),
+            )
+        })
+}
+
+/// `~/` で始まるパスをホームディレクトリへ展開する。ホームが不明ならそのまま。
+fn expand_tilde(value: &str, home: Option<&Path>) -> PathBuf {
+    match (home, value.strip_prefix("~/"), value) {
+        (Some(home), Some(rest), _) => home.join(rest),
+        (Some(home), None, "~") => home.to_path_buf(),
+        _ => PathBuf::from(value),
+    }
+}
 
 /// 設定ファイルの既定の場所（`~/.ssh/config`）。
 pub fn default_config_path(home: &Path) -> PathBuf {
@@ -800,5 +856,107 @@ mod tests {
             default_config_path(Path::new("/Users/a")),
             PathBuf::from("/Users/a/.ssh/config")
         );
+    }
+
+    #[test]
+    fn jump_hosts_resolve_aliases_with_explicit_values_taking_priority() {
+        let c = cfg(
+            "Host bastion\n  HostName gw.example.com\n  User gwuser\n  Port 2200\n  IdentityFile ~/.ssh/gw\n",
+        );
+        let spec = |user: Option<&str>, host: &str, port: Option<u16>| JumpSpec {
+            user: user.map(String::from),
+            host: host.into(),
+            port,
+        };
+        let jumps = build_jump_hosts(
+            &c,
+            &[
+                spec(None, "bastion", None),
+                spec(Some("me"), "bastion", Some(2022)),
+                spec(None, "plain.example.com", None),
+            ],
+            "target-user",
+        );
+        assert_eq!(jumps.len(), 3);
+        assert_eq!(
+            (
+                jumps[0].host.as_str(),
+                jumps[0].port,
+                jumps[0].username.as_str()
+            ),
+            ("gw.example.com", 2200, "gwuser")
+        );
+        assert_eq!(
+            jumps[0].identity_files,
+            vec![PathBuf::from("/Users/alice/.ssh/gw")]
+        );
+        assert_eq!(
+            (
+                jumps[1].host.as_str(),
+                jumps[1].port,
+                jumps[1].username.as_str()
+            ),
+            ("gw.example.com", 2022, "me")
+        );
+        // 設定ファイルにない踏み台は、そのまま・22番・目的のホストのユーザー名。
+        assert_eq!(
+            (
+                jumps[2].host.as_str(),
+                jumps[2].port,
+                jumps[2].username.as_str()
+            ),
+            ("plain.example.com", 22, "target-user")
+        );
+        assert!(jumps[2].identity_files.is_empty());
+    }
+
+    #[test]
+    fn no_jump_specs_means_no_jump_hosts() {
+        assert!(build_jump_hosts(&cfg(""), &[], "u").is_empty());
+    }
+
+    #[test]
+    fn identity_file_typed_in_the_dialog_wins_and_expands_tilde() {
+        let candidates = vec![PathBuf::from("/from/config")];
+        assert_eq!(
+            pick_identity_file(Path::new("/typed/key"), &candidates, Some(Path::new(HOME)))
+                .unwrap(),
+            PathBuf::from("/typed/key")
+        );
+        assert_eq!(
+            pick_identity_file(
+                Path::new("~/.ssh/typed"),
+                &candidates,
+                Some(Path::new(HOME))
+            )
+            .unwrap(),
+            PathBuf::from("/Users/alice/.ssh/typed")
+        );
+    }
+
+    #[test]
+    fn empty_identity_file_uses_the_first_existing_one_from_the_config() {
+        let dir = std::env::temp_dir().join(format!("linkterm-idfile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("id_ok");
+        std::fs::write(&existing, "k").unwrap();
+        let candidates = vec![
+            dir.join("missing"),
+            existing.clone(),
+            dir.join("also-missing"),
+        ];
+        assert_eq!(
+            pick_identity_file(Path::new(""), &candidates, None).unwrap(),
+            existing
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn empty_identity_file_without_any_existing_candidate_is_an_error() {
+        let err = pick_identity_file(Path::new("  "), &[PathBuf::from("/nonexistent/key")], None)
+            .unwrap_err();
+        assert!(err.to_string().contains("IdentityFile"), "{err}");
+        assert!(pick_identity_file(Path::new(""), &[], None).is_err());
     }
 }

@@ -14,7 +14,11 @@ import {
   stripSecrets,
   type ConnectionValues,
 } from "../lib/connection-schema";
-import { listSerialPorts, type SavedProfile } from "../lib/terminal-api";
+import {
+  listSerialPorts,
+  listSshHosts,
+  type SavedProfile,
+} from "../lib/terminal-api";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -37,6 +41,8 @@ interface FormValues {
   host: string;
   port: number;
   username: string;
+  useSshConfig: boolean;
+  jumpHosts: string;
   authKind: "password" | "keychain" | "keyFile" | "agent";
   password: string;
   remember: boolean;
@@ -61,6 +67,8 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: ConnectionValues, options?: SubmitOptions) => void;
   loadSerialPorts?: () => Promise<string[]>;
+  /** ~/.ssh/config の Host の別名（ホスト名の候補）。 */
+  loadSshHosts?: () => Promise<string[]>;
   profiles?: SavedProfile[];
   onDeleteProfile?: (id: string) => void;
 }
@@ -116,6 +124,7 @@ export function ConnectionDialog({
   onOpenChange,
   onSubmit,
   loadSerialPorts = listSerialPorts,
+  loadSshHosts = listSshHosts,
   profiles = [],
   onDeleteProfile,
 }: Props) {
@@ -148,6 +157,7 @@ export function ConnectionDialog({
     loaded: false,
   });
   const { ports, error: portsError, loaded: portsLoaded } = portList;
+  const [sshHosts, setSshHosts] = useState<string[]>([]);
   const serialPort = useWatch({ control, name: "serialPort" });
   const serialPortManual = useWatch({ control, name: "serialPortManual" });
   /** 手入力を選んだ場合、または（保存済みの接続などで）一覧にないポート名の場合。 */
@@ -170,6 +180,18 @@ export function ConnectionDialog({
     if (type === "telnet" && port === 22) setValue("port", 23);
     if (type === "ssh" && port === 23) setValue("port", 22);
   }, [type, getValues, setValue]);
+
+  useEffect(() => {
+    if (!open || type !== "ssh") return;
+    let cancelled = false;
+    // 一覧が取れなくても入力は続けられる（候補が出ないだけ）。
+    loadSshHosts()
+      .then((hosts) => !cancelled && setSshHosts(hosts))
+      .catch(() => !cancelled && setSshHosts([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, type, loadSshHosts]);
 
   useEffect(() => {
     if (!open || type !== "serial") return;
@@ -208,6 +230,15 @@ export function ConnectionDialog({
   };
 
   const submit = handleSubmit((values) => {
+    // ~/.ssh/config を使う場合、ユーザー名は設定ファイルの User で補える。別名でなければ入力が必要。
+    if (
+      values.type === "ssh" &&
+      values.username === "" &&
+      !sshHosts.includes(values.host.trim())
+    ) {
+      setError("username", { message: "ユーザー名を入力してください" });
+      return;
+    }
     const { profileId, saveProfile, profileName } = getValues();
     let options: SubmitOptions | undefined;
     if (saveProfile) {
@@ -298,7 +329,21 @@ export function ConnectionDialog({
             <div className="grid grid-cols-[1fr_6rem] gap-2">
               <Field label="ホスト" error={message(errors, "host")}>
                 {(id) => (
-                  <Input id={id} autoComplete="off" {...register("host")} />
+                  <>
+                    <Input
+                      id={id}
+                      autoComplete="off"
+                      list={type === "ssh" ? "ssh-host-suggestions" : undefined}
+                      {...register("host")}
+                    />
+                    {type === "ssh" && (
+                      <datalist id="ssh-host-suggestions">
+                        {sshHosts.map((h) => (
+                          <option key={h} value={h} />
+                        ))}
+                      </datalist>
+                    )}
+                  </>
                 )}
               </Field>
               <Field label="ポート" error={message(errors, "port")}>
@@ -317,7 +362,29 @@ export function ConnectionDialog({
             <>
               <Field label="ユーザー名" error={message(errors, "username")}>
                 {(id) => (
-                  <Input id={id} autoComplete="off" {...register("username")} />
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    placeholder="空欄なら ~/.ssh/config の User"
+                    {...register("username")}
+                  />
+                )}
+              </Field>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" {...register("useSshConfig")} />
+                ~/.ssh/config を使う
+              </label>
+              <Field
+                label="踏み台（ProxyJump）"
+                error={message(errors, "jumpHosts")}
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    placeholder="user@bastion:22,gateway（空欄なら ~/.ssh/config の設定）"
+                    {...register("jumpHosts")}
+                  />
                 )}
               </Field>
               <Field label="認証方式">
@@ -359,7 +426,7 @@ export function ConnectionDialog({
                     {(id) => (
                       <Input
                         id={id}
-                        placeholder="~/.ssh/id_ed25519"
+                        placeholder="~/.ssh/id_ed25519（空欄なら ~/.ssh/config の IdentityFile）"
                         {...register("keyPath")}
                       />
                     )}

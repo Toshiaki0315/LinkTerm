@@ -23,6 +23,8 @@ export const defaultConnectionValues = {
   host: "",
   port: 22,
   username: "",
+  useSshConfig: true,
+  jumpHosts: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -52,13 +54,51 @@ const localEcho = z.enum(["auto", "on", "off"]).default("auto");
 
 const local = z.object({ type: z.literal("local"), encoding });
 
+/** 踏み台の指定（`[user@]host[:port]` のカンマ区切り。空と `none` も可）。Rust 側の解析と同じ規則。 */
+export function isValidJumpList(text: string): boolean {
+  const spec = text.trim();
+  if (spec === "" || spec.toLowerCase() === "none") return true;
+  return spec.split(",").every((raw) => {
+    const part = raw.trim();
+    if (part === "" || /\s/.test(part)) return false;
+    const at = part.indexOf("@");
+    if (at === 0) return false;
+    const rest = at < 0 ? part : part.slice(at + 1);
+    let host: string;
+    let port: string | undefined;
+    if (rest.startsWith("[")) {
+      const end = rest.indexOf("]");
+      if (end < 0) return false;
+      host = rest.slice(1, end);
+      const after = rest.slice(end + 1);
+      if (after !== "" && !after.startsWith(":")) return false;
+      port = after === "" ? undefined : after.slice(1);
+    } else {
+      const colon = rest.indexOf(":");
+      if (colon >= 0 && rest.indexOf(":", colon + 1) >= 0) return false;
+      host = colon < 0 ? rest : rest.slice(0, colon);
+      port = colon < 0 ? undefined : rest.slice(colon + 1);
+    }
+    if (host === "") return false;
+    if (port === undefined) return true;
+    return /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+  });
+}
+
 const ssh = z
   .object({
     type: z.literal("ssh"),
     encoding,
     host: required("ホスト"),
     port,
-    username: required("ユーザー名"),
+    // ~/.ssh/config を使うなら、空でもよい（設定ファイルの User を使う）。
+    username: z.string().trim().default(""),
+    useSshConfig: z.boolean().default(true),
+    jumpHosts: z
+      .string()
+      .trim()
+      .default("")
+      .refine(isValidJumpList, "踏み台の指定が正しくありません"),
     authKind: z.enum(["password", "keychain", "keyFile", "agent"]),
     password: z.string().default(""),
     remember: z.boolean().default(false),
@@ -66,6 +106,13 @@ const ssh = z
     passphrase: z.string().default(""),
   })
   .superRefine((v, ctx) => {
+    if (!v.useSshConfig && v.username === "") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["username"],
+        message: "ユーザー名を入力してください",
+      });
+    }
     if (v.authKind === "password" && v.password === "") {
       ctx.addIssue({
         code: "custom",
@@ -73,7 +120,11 @@ const ssh = z
         message: "パスワードを入力してください",
       });
     }
-    if (v.authKind === "keyFile" && v.keyPath.trim() === "") {
+    if (
+      v.authKind === "keyFile" &&
+      !v.useSshConfig &&
+      v.keyPath.trim() === ""
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["keyPath"],
@@ -132,6 +183,8 @@ export function toStartRequest(
         host: v.host,
         port: v.port,
         username: v.username,
+        useSshConfig: v.useSshConfig,
+        jumpHosts: v.jumpHosts,
         encoding: v.encoding,
         ...size,
       };

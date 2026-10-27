@@ -23,6 +23,7 @@ import {
   getSettings,
   saveSessionState,
   listFonts,
+  listSshHosts,
   onOpenSettings,
   saveSettings,
   deleteProfile,
@@ -286,5 +287,13 @@ describe("タブ構成の保存", () => {
       ["get_session_state"],
       ["save_session_state", { session }],
     ]);
+  });
+});
+
+describe("~/.ssh/config のホスト名", () => {
+  it("list_ssh_hosts を呼ぶ", async () => {
+    invoke.mockResolvedValueOnce(["prod", "staging"]);
+    await expect(listSshHosts()).resolves.toEqual(["prod", "staging"]);
+    expect(invoke).toHaveBeenCalledWith("list_ssh_hosts");
   });
 });

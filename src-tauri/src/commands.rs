@@ -23,6 +23,10 @@ use crate::session::{
 };
 use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
+use crate::ssh_config::{
+    RequestedTarget, SshConfig as SshConfigFile, SshConfigError, build_jump_hosts,
+    default_config_path, pick_identity_file, resolve_target,
+};
 
 pub const EVENT_DATA: &str = "terminal-data";
 pub const EVENT_CLOSED: &str = "terminal-closed";
@@ -53,6 +57,8 @@ pub enum CommandError {
     Settings(#[from] SettingsError),
     #[error(transparent)]
     Font(#[from] FontError),
+    #[error(transparent)]
+    SshConfig(#[from] SshConfigError),
     #[error(transparent)]
     SessionState(#[from] SessionStateError),
     #[error("認証情報の操作に失敗しました: {0}")]
@@ -262,12 +268,50 @@ pub struct StartSsh {
     cols: u16,
     rows: u16,
     encoding: Option<String>,
+    /// `~/.ssh/config` を使う（別名・User・Port・IdentityFile・ProxyJump の解決）。
+    #[serde(default = "default_true")]
+    use_ssh_config: bool,
+    /// 踏み台（`[user@]host[:port],...`）。空なら `~/.ssh/config` の ProxyJump を使う。
+    #[serde(default)]
+    jump_hosts: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// `~/.ssh/config` を読む。使わない設定・ホームが不明な場合は空の設定。
+fn load_ssh_config(enabled: bool) -> Result<SshConfigFile, SshConfigError> {
+    match (enabled, home_dir()) {
+        (true, Some(home)) => SshConfigFile::load(&default_config_path(&home), Some(&home)),
+        _ => Ok(SshConfigFile::default()),
+    }
+}
+
+/// ダイアログのホスト名の候補にする、`~/.ssh/config` の別名。
+#[tauri::command]
+pub fn list_ssh_hosts() -> CommandResult<Vec<String>> {
+    Ok(load_ssh_config(true)?.host_aliases())
 }
 
 #[tauri::command]
 pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResult<String> {
     let codec = codec_for(req.encoding.as_deref())?;
-    let account = credential_account(&req.username, &req.host, req.port);
+    let config = load_ssh_config(req.use_ssh_config)?;
+    let target = resolve_target(
+        &config,
+        &RequestedTarget {
+            host: req.host.clone(),
+            port: req.port,
+            username: req.username.clone(),
+            jump_hosts: req.jump_hosts.clone(),
+        },
+    )?;
+    let account = credential_account(&target.username, &target.hostname, target.port);
     let mut remember: Option<Zeroizing<String>> = None;
     let auth = match req.auth {
         SshAuthRequest::Password {
@@ -287,21 +331,22 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             SshAuth::Password(saved)
         }
         SshAuthRequest::KeyFile { path, passphrase } => SshAuth::PrivateKey {
-            path,
+            // 空なら、`~/.ssh/config` の IdentityFile から選ぶ。
+            path: pick_identity_file(&path, &target.identity_files, home_dir().as_deref())?,
             passphrase: passphrase.map(Zeroizing::new),
         },
         SshAuthRequest::Agent => SshAuth::Agent,
     };
     let session = SshSession::connect(
         SshConfig {
-            host: req.host,
-            port: req.port,
-            username: req.username,
+            host: target.hostname.clone(),
+            port: target.port,
+            username: target.username.clone(),
             auth,
             size: size(req.cols, req.rows)?,
             term: DEFAULT_TERM.into(),
             keepalive_interval: Some(SSH_KEEPALIVE),
-            jump_hosts: vec![],
+            jump_hosts: build_jump_hosts(&config, &target.jumps, &target.username),
         },
         state.known_hosts.clone(),
         state.approver.clone(),

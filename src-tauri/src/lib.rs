@@ -27,6 +27,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::start_local_shell,
             commands::start_ssh,
+            commands::list_ssh_hosts,
             commands::start_telnet,
             commands::start_serial,
             commands::list_serial_ports,

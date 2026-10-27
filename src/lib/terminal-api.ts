@@ -31,6 +31,10 @@ export type StartRequest =
       cols: number;
       rows: number;
       encoding?: string;
+      /** ~/.ssh/config を使う（別名・User・IdentityFile・ProxyJump の解決）。 */
+      useSshConfig?: boolean;
+      /** 踏み台（`[user@]host[:port],...`）。空なら ~/.ssh/config の設定。 */
+      jumpHosts?: string;
     }
   | {
       type: "telnet";
@@ -145,6 +149,9 @@ export const getSessionState = () => invoke<SessionState>("get_session_state");
 
 export const saveSessionState = (session: SessionState) =>
   invoke<void>("save_session_state", { session });
+
+/** ~/.ssh/config の Host の別名（接続ダイアログのホスト名の候補）。 */
+export const listSshHosts = () => invoke<string[]>("list_ssh_hosts");
 
 export const getSettings = () => invoke<Settings>("get_settings");
 

@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   getSessionState: vi.fn(),
   saveSessionState: vi.fn(),
   listFonts: vi.fn(),
+  listSshHosts: vi.fn(),
   saveSettings: vi.fn(),
   onOpenSettings: vi.fn(),
   saveProfile: vi.fn(),
@@ -83,6 +84,7 @@ beforeEach(() => {
   api.getSessionState.mockResolvedValue({ tabs: [], active: null });
   api.saveSessionState.mockResolvedValue(undefined);
   api.listFonts.mockResolvedValue([]);
+  api.listSshHosts.mockResolvedValue([]);
   api.saveSettings.mockImplementation(async (s) => s);
   api.onOpenSettings.mockImplementation(async (cb) => {
     openSettingsFromMenu = cb;

@@ -40,9 +40,6 @@ describe("ConnectionDialog", () => {
       await screen.findByText("ホストを入力してください"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("ユーザー名を入力してください"),
-    ).toBeInTheDocument();
-    expect(
       screen.getByText("パスワードを入力してください"),
     ).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
@@ -439,6 +436,129 @@ describe("ConnectionDialog", () => {
       expect(
         screen.queryByLabelText("ポート名（手入力）"),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("~/.ssh/config と踏み台", () => {
+    const aliases = ["prod", "staging"];
+    function setupSsh(loadSshHosts = vi.fn().mockResolvedValue(aliases)) {
+      const onSubmit = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={vi.fn()}
+          onSubmit={onSubmit}
+          loadSerialPorts={vi.fn().mockResolvedValue([])}
+          loadSshHosts={loadSshHosts}
+        />,
+      );
+      return { onSubmit, user, loadSshHosts };
+    }
+
+    it("SSH を選ぶと、~/.ssh/config のホスト名が候補に出る", async () => {
+      const { user, loadSshHosts } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await waitFor(() => expect(loadSshHosts).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll("#ssh-host-suggestions option"),
+        ).toHaveLength(2),
+      );
+      expect(screen.getByLabelText("ホスト")).toHaveAttribute(
+        "list",
+        "ssh-host-suggestions",
+      );
+    });
+
+    it("設定ファイルの別名なら、ユーザー名は空のままでも接続できる", async () => {
+      const { user, onSubmit } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      await user.type(screen.getByLabelText("ホスト"), "prod");
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll("#ssh-host-suggestions option"),
+        ).toHaveLength(2),
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        host: "prod",
+        username: "",
+        useSshConfig: true,
+      });
+    });
+
+    it("別名でないホストでユーザー名が空なら、エラーにする", async () => {
+      const { user, onSubmit } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      await user.type(screen.getByLabelText("ホスト"), "unknown.example.com");
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll("#ssh-host-suggestions option"),
+        ).toHaveLength(2),
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText("ユーザー名を入力してください"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("~/.ssh/config を使わない設定にすると、ユーザー名が必須になる", async () => {
+      const { user, onSubmit } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      await user.type(screen.getByLabelText("ホスト"), "prod");
+      await user.click(screen.getByLabelText("~/.ssh/config を使う"));
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText("ユーザー名を入力してください"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("踏み台を指定して接続できる。不正な指定はエラー", async () => {
+      const { user, onSubmit } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      await user.type(screen.getByLabelText("ホスト"), "inner.example.com");
+      await user.type(screen.getByLabelText("ユーザー名"), "alice");
+      await user.type(screen.getByLabelText("踏み台（ProxyJump）"), "a b");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText("踏み台の指定が正しくありません"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+      await user.clear(screen.getByLabelText("踏み台（ProxyJump）"));
+      await user.type(
+        screen.getByLabelText("踏み台（ProxyJump）"),
+        "bob@bastion:2222",
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        jumpHosts: "bob@bastion:2222",
+      });
+    });
+
+    it("ホスト名の一覧を取得できなくても、入力・接続はできる", async () => {
+      const { user } = setupSsh(vi.fn().mockRejectedValue("読めません"));
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.type(screen.getByLabelText("ホスト"), "h");
+      expect(screen.getByLabelText("ホスト")).toHaveValue("h");
+    });
+
+    it("鍵のパスは、~/.ssh/config を使うなら空でもよいと案内する", async () => {
+      const { user } = setupSsh();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "keyFile");
+      expect(screen.getByLabelText("秘密鍵のパス")).toHaveAttribute(
+        "placeholder",
+        expect.stringContaining("IdentityFile"),
+      );
     });
   });
 });

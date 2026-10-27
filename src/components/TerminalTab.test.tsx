@@ -96,6 +96,8 @@ const sshPassword: ConnectionValues = {
   host: "h",
   port: 22,
   username: "u",
+  useSshConfig: true,
+  jumpHosts: "",
   authKind: "password",
   password: "pw",
   remember: false,
