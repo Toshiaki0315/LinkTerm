@@ -360,4 +360,85 @@ describe("ConnectionDialog", () => {
       expect(screen.getByLabelText("保存済みの接続")).toHaveValue("");
     });
   });
+
+  describe("シリアルポート名の手入力", () => {
+    it("一覧にない機器は「手入力」で指定できる", async () => {
+      const { user, onSubmit } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
+      await screen.findByRole("option", { name: "/dev/cu.usbserial-1" });
+      expect(
+        screen.queryByLabelText("ポート名（手入力）"),
+      ).not.toBeInTheDocument();
+      await user.selectOptions(
+        screen.getByLabelText("シリアルポート"),
+        "手入力…",
+      );
+      await user.type(
+        screen.getByLabelText("ポート名（手入力）"),
+        "/dev/cu.custom-device",
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        type: "serial",
+        serialPort: "/dev/cu.custom-device",
+      });
+    });
+
+    it("/dev/ 以外のパスはエラーにする", async () => {
+      const { user, onSubmit } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
+      await screen.findByRole("option", { name: "手入力…" });
+      await user.selectOptions(
+        screen.getByLabelText("シリアルポート"),
+        "手入力…",
+      );
+      await user.type(
+        screen.getByLabelText("ポート名（手入力）"),
+        "/etc/passwd",
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(await screen.findByText(/\/dev\/ から始まる/)).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("一覧にないポート名（保存済みの接続など）は、最初から手入力欄に表示される", async () => {
+      const onSubmit = vi.fn();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={vi.fn()}
+          onSubmit={onSubmit}
+          loadSerialPorts={vi.fn().mockResolvedValue(["/dev/cu.usbserial-1"])}
+          initialValues={{
+            type: "serial",
+            serialPort: "/dev/cu.gone-device",
+            baudRate: 9600,
+          }}
+        />,
+      );
+      expect(await screen.findByLabelText("ポート名（手入力）")).toHaveValue(
+        "/dev/cu.gone-device",
+      );
+      expect(screen.getByLabelText("シリアルポート")).toHaveValue("__manual__");
+    });
+
+    it("一覧から選ぶと手入力欄は消える", async () => {
+      const { user } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
+      await screen.findByRole("option", { name: "/dev/cu.usbserial-1" });
+      await user.selectOptions(
+        screen.getByLabelText("シリアルポート"),
+        "手入力…",
+      );
+      expect(screen.getByLabelText("ポート名（手入力）")).toBeInTheDocument();
+      await user.selectOptions(
+        screen.getByLabelText("シリアルポート"),
+        "/dev/cu.usbserial-1",
+      );
+      expect(
+        screen.queryByLabelText("ポート名（手入力）"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });

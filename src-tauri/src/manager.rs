@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::session::hex::HexDumper;
 use crate::session::{
-    Codec, LogError, SessionLogger, TerminalError, TerminalSession, TerminalSize,
+    Codec, ControlSignal, LogError, SessionLogger, TerminalError, TerminalSession, TerminalSize,
 };
 
 #[derive(Debug, Error)]
@@ -36,8 +37,27 @@ type Sessions = Arc<Mutex<HashMap<String, mpsc::Sender<Command>>>>;
 
 const COMMAND_CAPACITY: usize = 256;
 
+/// 受信データの表示方法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayMode {
+    /// 文字コード変換した通常の表示。
+    Text,
+    /// 16進ダンプ（`hexdump -C` 形式）。ログには影響しない。
+    Hex,
+}
+
+type Reply = oneshot::Sender<Result<(), TerminalError>>;
+
 enum Command {
     Write(String),
+    Control {
+        signal: ControlSignal,
+        on: bool,
+        reply: Reply,
+    },
+    Break(Reply),
+    Display(DisplayMode),
     /// 登録の確定（切り詰め）結果を `reply` で呼び出し元へ返す。
     SetLogger(Option<SessionLogger>, oneshot::Sender<Result<(), LogError>>),
     Resize(TerminalSize),
@@ -129,6 +149,41 @@ impl SessionManager {
             .map_err(ManagerError::from)
     }
 
+    /// 制御信号（DTR/RTS）を設定する。対応しない接続は `Unsupported`。
+    pub async fn set_control(
+        &self,
+        id: &str,
+        signal: ControlSignal,
+        on: bool,
+    ) -> Result<(), ManagerError> {
+        let (reply, ack) = oneshot::channel();
+        self.send(id, Command::Control { signal, on, reply })
+            .await?;
+        Self::acknowledged(id, ack).await
+    }
+
+    /// ブレーク信号を送る。対応しない接続は `Unsupported`。
+    pub async fn send_break(&self, id: &str) -> Result<(), ManagerError> {
+        let (reply, ack) = oneshot::channel();
+        self.send(id, Command::Break(reply)).await?;
+        Self::acknowledged(id, ack).await
+    }
+
+    /// 受信データの表示方法を切り替える。
+    pub async fn set_display(&self, id: &str, mode: DisplayMode) -> Result<(), ManagerError> {
+        self.send(id, Command::Display(mode)).await
+    }
+
+    async fn acknowledged(
+        id: &str,
+        ack: oneshot::Receiver<Result<(), TerminalError>>,
+    ) -> Result<(), ManagerError> {
+        // 応答前にセッションが終了した場合は、操作されなかったものとして扱う。
+        ack.await
+            .map_err(|_| ManagerError::UnknownSession(id.to_owned()))?
+            .map_err(ManagerError::from)
+    }
+
     /// セッションを閉じる。以降そのIDへの操作は `UnknownSession` になる。
     pub async fn close(&self, id: &str) -> Result<(), ManagerError> {
         let tx = self
@@ -188,6 +243,8 @@ async fn run_session(
 ) {
     let mut logger = activate_logger(logger, &id, sink.as_ref());
     let mut last_echo: Option<bool> = None;
+    let mut display = DisplayMode::Text;
+    let mut hex = HexDumper::new();
     let reason = loop {
         // 接続先のエコー状態が変わった（または初めて判明した）ら通知する。
         if let Some(echo) = session.echo_state()
@@ -207,9 +264,16 @@ async fn run_session(
                         logger = None;
                         sink.log_error(&id, &e.to_string());
                     }
-                    // マルチバイト文字の途中で切れた場合は次回に持ち越すため空になりうる。
-                    if !text.is_empty() {
-                        sink.data(&id, text.as_bytes());
+                    match display {
+                        // マルチバイト文字の途中で切れた場合は次回に持ち越すため空になりうる。
+                        DisplayMode::Text if !text.is_empty() => sink.data(&id, text.as_bytes()),
+                        DisplayMode::Hex => {
+                            let dump = hex.feed(&data);
+                            if !dump.is_empty() {
+                                sink.data(&id, dump.as_bytes());
+                            }
+                        }
+                        DisplayMode::Text => {}
                     }
                 }
                 Ok(None) => break None,
@@ -219,6 +283,25 @@ async fn run_session(
                 Some(Command::Write(text)) => {
                     if let Err(e) = session.write(&codec.encode(&text)).await {
                         break Some(e.to_string());
+                    }
+                }
+                Some(Command::Control { signal, on, reply }) => {
+                    let _ = reply.send(session.set_control(signal, on).await);
+                }
+                Some(Command::Break(reply)) => {
+                    let _ = reply.send(session.send_break().await);
+                }
+                Some(Command::Display(mode)) => {
+                    if mode != display {
+                        if display == DisplayMode::Hex {
+                            // 描きかけの16進の行を閉じてから通常表示へ戻る。
+                            let closing = hex.finish();
+                            if !closing.is_empty() {
+                                sink.data(&id, closing.as_bytes());
+                            }
+                        }
+                        hex.reset();
+                        display = mode;
                     }
                 }
                 Some(Command::SetLogger(new_logger, reply)) => {
@@ -340,9 +423,18 @@ mod tests {
         size: Arc<StdMutex<Option<TerminalSize>>>,
         closed: Arc<StdMutex<bool>>,
         echo: Option<Arc<std::sync::atomic::AtomicBool>>,
+        controls: Option<Arc<StdMutex<Vec<String>>>>,
     }
 
     impl EchoSession {
+        /// 制御信号・ブレークの呼び出しを記録するセッション。
+        fn with_controls() -> (Self, Arc<StdMutex<Vec<String>>>) {
+            let log = Arc::new(StdMutex::new(Vec::new()));
+            let (mut s, _, _) = Self::new();
+            s.controls = Some(log.clone());
+            (s, log)
+        }
+
         /// エコー状態を報告するセッション。返すフラグで状態を変えられる。
         fn with_echo(initial: bool) -> (Self, Arc<std::sync::atomic::AtomicBool>) {
             let flag = Arc::new(std::sync::atomic::AtomicBool::new(initial));
@@ -362,6 +454,7 @@ mod tests {
                     size: size.clone(),
                     closed: closed.clone(),
                     echo: None,
+                    controls: None,
                 },
                 size,
                 closed,
@@ -396,6 +489,28 @@ mod tests {
         async fn close(&mut self) -> Result<(), TerminalError> {
             *self.closed.lock().unwrap() = true;
             Ok(())
+        }
+        async fn set_control(
+            &mut self,
+            signal: crate::session::ControlSignal,
+            on: bool,
+        ) -> Result<(), TerminalError> {
+            match &self.controls {
+                Some(log) => {
+                    log.lock().unwrap().push(format!("{signal:?}={on}"));
+                    Ok(())
+                }
+                None => Err(TerminalError::Unsupported("制御信号の操作".into())),
+            }
+        }
+        async fn send_break(&mut self) -> Result<(), TerminalError> {
+            match &self.controls {
+                Some(log) => {
+                    log.lock().unwrap().push("break".into());
+                    Ok(())
+                }
+                None => Err(TerminalError::Unsupported("ブレーク送信".into())),
+            }
         }
         fn echo_state(&self) -> Option<bool> {
             self.echo
@@ -727,5 +842,88 @@ mod tests {
         m.write(&id, "x").await.unwrap();
         wait_for(|| sink.received(&id) == b"x").await;
         assert!(sink.echoes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn control_signals_and_break_reach_the_session() {
+        use crate::session::ControlSignal;
+        let (m, _) = setup();
+        let (s, log) = EchoSession::with_controls();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        m.set_control(&id, ControlSignal::Dtr, false).await.unwrap();
+        m.set_control(&id, ControlSignal::Rts, true).await.unwrap();
+        m.send_break(&id).await.unwrap();
+        assert_eq!(*log.lock().unwrap(), vec!["Dtr=false", "Rts=true", "break"]);
+    }
+
+    #[tokio::test]
+    async fn unsupported_control_is_reported_to_the_caller() {
+        use crate::session::ControlSignal;
+        let (m, _) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        let r = m.set_control(&id, ControlSignal::Dtr, true).await;
+        assert!(matches!(
+            r,
+            Err(ManagerError::Session(TerminalError::Unsupported(_)))
+        ));
+        assert!(matches!(
+            m.send_break(&id).await,
+            Err(ManagerError::Session(TerminalError::Unsupported(_)))
+        ));
+        // セッションは継続する。
+        m.write(&id, "ok").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn control_on_unknown_session_is_an_error() {
+        use crate::session::ControlSignal;
+        let (m, _) = setup();
+        assert!(matches!(
+            m.set_control("nope", ControlSignal::Dtr, true).await,
+            Err(ManagerError::UnknownSession(_))
+        ));
+        assert!(matches!(
+            m.send_break("nope").await,
+            Err(ManagerError::UnknownSession(_))
+        ));
+        assert!(matches!(
+            m.set_display("nope", DisplayMode::Hex).await,
+            Err(ManagerError::UnknownSession(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn hex_display_formats_received_bytes_and_text_mode_restores_normal_output() {
+        use crate::session::hex::format_line;
+        let (m, sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        m.write(&id, "plain").await.unwrap();
+        wait_for(|| sink.received(&id) == b"plain").await;
+
+        m.set_display(&id, DisplayMode::Hex).await.unwrap();
+        m.write(&id, "Hi").await.unwrap();
+        let expected_hex = format_line(0, b"Hi");
+        wait_for(|| String::from_utf8_lossy(&sink.received(&id)).ends_with(expected_hex.as_str()))
+            .await;
+
+        // テキストへ戻すと、描きかけの16進の行を閉じて、以後は通常表示。
+        m.set_display(&id, DisplayMode::Text).await.unwrap();
+        m.write(&id, "back").await.unwrap();
+        wait_for(|| String::from_utf8_lossy(&sink.received(&id)).ends_with("\r\nback")).await;
+    }
+
+    #[tokio::test]
+    async fn hex_display_does_not_affect_the_raw_log() {
+        let (m, _) = setup();
+        let (s, _, _) = EchoSession::new();
+        let buf = SharedBuf::default();
+        let id = m
+            .start_with_logger(Box::new(s), Codec::utf8(), Some(logger(&buf, LogMode::Raw)))
+            .await;
+        m.set_display(&id, DisplayMode::Hex).await.unwrap();
+        m.write(&id, "AB").await.unwrap();
+        wait_for(|| *buf.0.lock().unwrap() == b"AB").await;
     }
 }

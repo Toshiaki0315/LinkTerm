@@ -13,13 +13,13 @@ use zeroize::Zeroizing;
 
 use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::fonts::{FontError, FontFamily};
-use crate::manager::{EventSink, ManagerError, SessionManager};
+use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::session::{
-    Codec, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore, LocalShellConfig,
-    LocalShellSession, LogConfig, LogError, RxNewline, SerialConfig, SerialSession, SessionLogger,
-    SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession, TerminalError, TerminalSession,
-    TerminalSize, TxNewline, list_ports,
+    Codec, ControlSignal, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore,
+    LocalShellConfig, LocalShellSession, LogConfig, LogError, RxNewline, SerialConfig,
+    SerialSession, SessionLogger, SshAuth, SshConfig, SshSession, TelnetConfig, TelnetSession,
+    TerminalError, TerminalSession, TerminalSize, TxNewline, list_ports,
 };
 use crate::settings::{Settings, SettingsError, SettingsStore};
 
@@ -371,6 +371,33 @@ pub async fn terminal_resize(
     rows: u16,
 ) -> CommandResult<()> {
     Ok(state.manager.resize(&id, size(cols, rows)?).await?)
+}
+
+/// シリアルの制御信号（DTR/RTS）を設定する。
+#[tauri::command]
+pub async fn serial_set_control(
+    state: State<'_, AppState>,
+    id: String,
+    signal: ControlSignal,
+    on: bool,
+) -> CommandResult<()> {
+    Ok(state.manager.set_control(&id, signal, on).await?)
+}
+
+/// シリアルにブレーク信号を送る。
+#[tauri::command]
+pub async fn serial_send_break(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+    Ok(state.manager.send_break(&id).await?)
+}
+
+/// 受信データの表示方法（テキスト／16進ダンプ）を切り替える。
+#[tauri::command]
+pub async fn set_display_mode(
+    state: State<'_, AppState>,
+    id: String,
+    mode: DisplayMode,
+) -> CommandResult<()> {
+    Ok(state.manager.set_display(&id, mode).await?)
 }
 
 #[tauri::command]

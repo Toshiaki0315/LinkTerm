@@ -3,6 +3,7 @@
 mod codec;
 mod credentials;
 mod error;
+pub mod hex;
 mod known_hosts;
 mod local_shell;
 mod log;
@@ -24,12 +25,22 @@ pub use local_shell::{LocalShellConfig, LocalShellSession};
 pub use log::{Clock, LogConfig, LogError, LogMode, SessionLogger};
 pub use newline::{IncomingConverter, RxNewline, TxNewline, convert_outgoing};
 pub use serial::{
-    DataBits, FlowControl, Parity, SerialConfig, SerialSession, StopBits, list_ports,
+    DataBits, FlowControl, Parity, SerialConfig, SerialControl, SerialSession, StopBits, list_ports,
 };
 pub use ssh::{SshAuth, SshConfig, SshSession};
 pub use telnet::{TelnetConfig, TelnetSession};
 
 use async_trait::async_trait;
+
+/// シリアルの制御信号。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ControlSignal {
+    /// Data Terminal Ready
+    Dtr,
+    /// Request To Send
+    Rts,
+}
 
 /// ターミナルのウィンドウサイズ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +76,18 @@ pub trait TerminalSession: Send {
     /// 変化したときは、読み取りが空のチャンクで起こされる（呼び出し側はその都度これを確認する）。
     fn echo_state(&self) -> Option<bool> {
         None
+    }
+    /// 制御信号（DTR/RTS）を設定する。対応しない接続は `Unsupported`。
+    async fn set_control(
+        &mut self,
+        _signal: ControlSignal,
+        _on: bool,
+    ) -> Result<(), TerminalError> {
+        Err(TerminalError::Unsupported("制御信号の操作".into()))
+    }
+    /// ブレーク信号を送る。対応しない接続は `Unsupported`。
+    async fn send_break(&mut self) -> Result<(), TerminalError> {
+        Err(TerminalError::Unsupported("ブレーク送信".into()))
     }
 }
 

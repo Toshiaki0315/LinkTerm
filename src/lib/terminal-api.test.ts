@@ -15,6 +15,9 @@ import {
   defaultLogPath,
   onLogError,
   onTerminalEcho,
+  sendBreak,
+  setControlSignal,
+  setDisplayMode,
   pendingHostKeyRequests,
   getSettings,
   listFonts,
@@ -248,5 +251,21 @@ describe("エコー状態", () => {
     await onTerminalEcho(cb);
     expect(listen.mock.calls[0][0]).toBe("terminal-echo");
     expect(cb).toHaveBeenCalledWith("a", true);
+  });
+});
+
+describe("シリアルの操作・表示モード", () => {
+  it("制御信号・ブレーク・表示モード", async () => {
+    invoke.mockResolvedValue(undefined);
+    await setControlSignal("a", "dtr", false);
+    await setControlSignal("a", "rts", true);
+    await sendBreak("a");
+    await setDisplayMode("a", "hex");
+    expect(invoke.mock.calls).toEqual([
+      ["serial_set_control", { id: "a", signal: "dtr", on: false }],
+      ["serial_set_control", { id: "a", signal: "rts", on: true }],
+      ["serial_send_break", { id: "a" }],
+      ["set_display_mode", { id: "a", mode: "hex" }],
+    ]);
   });
 });

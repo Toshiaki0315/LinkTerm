@@ -196,3 +196,21 @@ export const onTerminalEcho = (
   listen<{ id: string; remoteEcho: boolean }>("terminal-echo", (e) =>
     cb(e.payload.id, e.payload.remoteEcho),
   );
+
+export type ControlSignal = "dtr" | "rts";
+export type DisplayMode = "text" | "hex";
+
+/** シリアルの制御信号（DTR/RTS）を設定する。 */
+export const setControlSignal = (
+  id: string,
+  signal: ControlSignal,
+  on: boolean,
+) => invoke<void>("serial_set_control", { id, signal, on });
+
+/** シリアルにブレーク信号を送る。 */
+export const sendBreak = (id: string) =>
+  invoke<void>("serial_send_break", { id });
+
+/** 受信データの表示方法（テキスト／16進ダンプ）。 */
+export const setDisplayMode = (id: string, mode: DisplayMode) =>
+  invoke<void>("set_display_mode", { id, mode });

@@ -5,10 +5,10 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio_serial::SerialPortBuilderExt;
+use tokio::sync::{mpsc, oneshot};
+use tokio_serial::{SerialPort, SerialPortBuilderExt};
 
-use super::{TerminalError, TerminalSession, TerminalSize};
+use super::{ControlSignal, TerminalError, TerminalSession, TerminalSize};
 
 const READ_BUFFER_SIZE: usize = 4096;
 const OUTPUT_CAPACITY: usize = 64;
@@ -71,6 +71,17 @@ impl SerialConfig {
                 "シリアルポート名が空です".into(),
             ));
         }
+        // 手入力されたパスで任意のファイルを開かないよう、デバイスファイル（/dev 以下）に限る。
+        let under_dev = self
+            .port
+            .strip_prefix("/dev/")
+            .is_some_and(|rest| !rest.is_empty());
+        if !under_dev || self.port.contains("..") || self.port.contains('\0') {
+            return Err(TerminalError::ConnectionFailed(format!(
+                "シリアルポートは /dev/ 以下のデバイスを指定してください: {}",
+                self.port.escape_debug()
+            )));
+        }
         if self.baud_rate == 0 {
             return Err(TerminalError::ConnectionFailed(
                 "ボーレートは1以上で指定してください".into(),
@@ -131,8 +142,44 @@ pub fn list_ports() -> Result<Vec<String>, TerminalError> {
     Ok(ports.into_iter().map(|p| p.port_name).collect())
 }
 
+/// シリアルポートの制御信号の操作。
+pub trait SerialControl: Send {
+    fn set_dtr(&mut self, on: bool) -> std::io::Result<()>;
+    fn set_rts(&mut self, on: bool) -> std::io::Result<()>;
+    fn set_break(&mut self, on: bool) -> std::io::Result<()>;
+}
+
+/// 制御信号に対応しないストリーム用（テストの PTY など）。
+struct NoControl;
+
+impl SerialControl for NoControl {
+    fn set_dtr(&mut self, _: bool) -> std::io::Result<()> {
+        Err(std::io::Error::other("対応していません"))
+    }
+    fn set_rts(&mut self, _: bool) -> std::io::Result<()> {
+        Err(std::io::Error::other("対応していません"))
+    }
+    fn set_break(&mut self, _: bool) -> std::io::Result<()> {
+        Err(std::io::Error::other("対応していません"))
+    }
+}
+
+/// ブレーク信号を出し続ける既定の時間。
+pub const DEFAULT_BREAK: std::time::Duration = std::time::Duration::from_millis(250);
+
+type Reply = oneshot::Sender<Result<(), TerminalError>>;
+
 enum Command {
     Data(Vec<u8>),
+    Control {
+        signal: ControlSignal,
+        on: bool,
+        reply: Reply,
+    },
+    Break {
+        duration: std::time::Duration,
+        reply: Reply,
+    },
     Close,
 }
 
@@ -156,7 +203,12 @@ impl SerialSession {
             .map_err(|e| {
                 TerminalError::ConnectionFailed(format!("{} を開けません: {e}", config.port))
             })?;
-        Ok(Self::from_stream(stream))
+        // 制御信号の操作は、読み書きと同時に行えるよう複製したハンドルで行う。
+        let control = stream
+            .try_clone()
+            .map(|port| Box::new(NativeControl(port)) as Box<dyn SerialControl>)
+            .unwrap_or_else(|_| Box::new(NoControl));
+        Ok(Self::from_stream_with_control(stream, control))
     }
 
     /// 任意の非同期ストリームからセッションを作る（テストでPTYペアを使うため公開）。
@@ -164,9 +216,17 @@ impl SerialSession {
     where
         S: AsyncRead + AsyncWrite + Send + 'static,
     {
+        Self::from_stream_with_control(stream, Box::new(NoControl))
+    }
+
+    /// 制御信号の操作つきでセッションを作る。
+    pub fn from_stream_with_control<S>(stream: S, control: Box<dyn SerialControl>) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Send + 'static,
+    {
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (out_tx, out_rx) = mpsc::channel(OUTPUT_CAPACITY);
-        tokio::spawn(pump(stream, cmd_rx, out_tx));
+        tokio::spawn(pump(stream, control, cmd_rx, out_tx));
         Self {
             commands: cmd_tx,
             output: out_rx,
@@ -175,8 +235,12 @@ impl SerialSession {
     }
 }
 
-async fn pump<S>(stream: S, mut commands: mpsc::Receiver<Command>, output: mpsc::Sender<Output>)
-where
+async fn pump<S>(
+    stream: S,
+    mut control: Box<dyn SerialControl>,
+    mut commands: mpsc::Receiver<Command>,
+    output: mpsc::Sender<Output>,
+) where
     S: AsyncRead + AsyncWrite,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
@@ -202,9 +266,87 @@ where
                         break;
                     }
                 }
+                Some(Command::Control { signal, on, reply }) => {
+                    let (name, result) = match signal {
+                        ControlSignal::Dtr => ("DTR", control.set_dtr(on)),
+                        ControlSignal::Rts => ("RTS", control.set_rts(on)),
+                    };
+                    let _ = reply.send(
+                        result.map_err(|e| TerminalError::io(format!("{name}の設定"), e)),
+                    );
+                }
+                Some(Command::Break { duration, reply }) => {
+                    let result = send_break(control.as_mut(), duration).await;
+                    let _ = reply.send(result);
+                }
                 Some(Command::Close) | None => break,
             },
         }
+    }
+}
+
+/// ブレークを出して `duration` 待ち、解除する。途中で失敗しても解除を試みる。
+async fn send_break(
+    control: &mut dyn SerialControl,
+    duration: std::time::Duration,
+) -> Result<(), TerminalError> {
+    control
+        .set_break(true)
+        .map_err(|e| TerminalError::io("ブレーク送信", e))?;
+    tokio::time::sleep(duration).await;
+    control
+        .set_break(false)
+        .map_err(|e| TerminalError::io("ブレークの解除", e))
+}
+
+/// `tokio-serial` のポート（複製したハンドル）による制御信号の操作。
+struct NativeControl(Box<dyn tokio_serial::SerialPort>);
+
+impl SerialControl for NativeControl {
+    fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+        self.0
+            .write_data_terminal_ready(on)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+    fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+        self.0
+            .write_request_to_send(on)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+    fn set_break(&mut self, on: bool) -> std::io::Result<()> {
+        let result = if on {
+            self.0.set_break()
+        } else {
+            self.0.clear_break()
+        };
+        result.map_err(|e| std::io::Error::other(e.to_string()))
+    }
+}
+
+impl SerialSession {
+    /// 指定した長さのブレーク信号を送る。
+    pub async fn send_break_for(
+        &mut self,
+        duration: std::time::Duration,
+    ) -> Result<(), TerminalError> {
+        let (reply, ack) = oneshot::channel();
+        self.send_control(Command::Break { duration, reply }, ack)
+            .await
+    }
+
+    async fn send_control(
+        &mut self,
+        command: Command,
+        ack: oneshot::Receiver<Result<(), TerminalError>>,
+    ) -> Result<(), TerminalError> {
+        if self.closed {
+            return Err(TerminalError::Closed);
+        }
+        self.commands
+            .send(command)
+            .await
+            .map_err(|_| TerminalError::Closed)?;
+        ack.await.map_err(|_| TerminalError::Closed)?
     }
 }
 
@@ -239,6 +381,16 @@ impl TerminalSession for SerialSession {
         }
         Ok(())
     }
+
+    async fn set_control(&mut self, signal: ControlSignal, on: bool) -> Result<(), TerminalError> {
+        let (reply, ack) = oneshot::channel();
+        self.send_control(Command::Control { signal, on, reply }, ack)
+            .await
+    }
+
+    async fn send_break(&mut self) -> Result<(), TerminalError> {
+        self.send_break_for(DEFAULT_BREAK).await
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +420,133 @@ mod tests {
         .await
         .expect("タイムアウト");
         out
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    use super::super::ControlSignal;
+
+    #[derive(Clone, Default)]
+    struct Calls(Arc<Mutex<Vec<(String, std::time::Instant)>>>);
+
+    struct MockControl {
+        calls: Calls,
+        fail: bool,
+    }
+
+    impl MockControl {
+        fn record(&self, what: String) -> std::io::Result<()> {
+            if self.fail {
+                return Err(std::io::Error::other("ioctl failed"));
+            }
+            self.calls
+                .0
+                .lock()
+                .unwrap()
+                .push((what, std::time::Instant::now()));
+            Ok(())
+        }
+    }
+
+    impl SerialControl for MockControl {
+        fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+            self.record(format!("dtr={on}"))
+        }
+        fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+            self.record(format!("rts={on}"))
+        }
+        fn set_break(&mut self, on: bool) -> std::io::Result<()> {
+            self.record(format!("break={on}"))
+        }
+    }
+
+    fn controlled(fail: bool) -> (SerialSession, SerialStream, Calls) {
+        let (a, b) = SerialStream::pair().unwrap();
+        let calls = Calls::default();
+        let control = MockControl {
+            calls: calls.clone(),
+            fail,
+        };
+        (
+            SerialSession::from_stream_with_control(a, Box::new(control)),
+            b,
+            calls,
+        )
+    }
+
+    fn names(calls: &Calls) -> Vec<String> {
+        calls
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn dtr_and_rts_are_forwarded_to_the_port() {
+        let (mut s, _dev, calls) = controlled(false);
+        s.set_control(ControlSignal::Dtr, false).await.unwrap();
+        s.set_control(ControlSignal::Rts, true).await.unwrap();
+        s.set_control(ControlSignal::Dtr, true).await.unwrap();
+        assert_eq!(names(&calls), vec!["dtr=false", "rts=true", "dtr=true"]);
+    }
+
+    #[tokio::test]
+    async fn break_is_asserted_then_released_after_the_duration() {
+        let (mut s, _dev, calls) = controlled(false);
+        s.send_break_for(std::time::Duration::from_millis(60))
+            .await
+            .unwrap();
+        assert_eq!(names(&calls), vec!["break=true", "break=false"]);
+        let times: Vec<_> = calls.0.lock().unwrap().iter().map(|(_, t)| *t).collect();
+        assert!(times[1] - times[0] >= std::time::Duration::from_millis(55));
+    }
+
+    #[tokio::test]
+    async fn default_break_uses_the_standard_duration() {
+        let (mut s, _dev, calls) = controlled(false);
+        let started = std::time::Instant::now();
+        s.send_break().await.unwrap();
+        assert!(started.elapsed() >= DEFAULT_BREAK);
+        assert_eq!(names(&calls), vec!["break=true", "break=false"]);
+    }
+
+    #[tokio::test]
+    async fn streams_without_control_report_unsupported_or_an_io_error() {
+        let (mut s, _dev) = pair();
+        assert!(s.set_control(ControlSignal::Dtr, true).await.is_err());
+        assert!(s.send_break().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn control_failures_are_reported_with_context() {
+        let (mut s, _dev, _calls) = controlled(true);
+        let err = s.set_control(ControlSignal::Rts, true).await.unwrap_err();
+        assert!(err.to_string().contains("RTS"), "{err}");
+        assert!(err.to_string().contains("ioctl failed"), "{err}");
+        let err = s.send_break().await.unwrap_err();
+        assert!(err.to_string().contains("ioctl failed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn control_after_close_is_an_error() {
+        let (mut s, _dev, _calls) = controlled(false);
+        s.close().await.unwrap();
+        assert!(matches!(
+            s.set_control(ControlSignal::Dtr, true).await,
+            Err(TerminalError::Closed)
+        ));
+        assert!(matches!(s.send_break().await, Err(TerminalError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn data_still_flows_after_control_operations() {
+        let (mut s, mut dev, _calls) = controlled(false);
+        s.set_control(ControlSignal::Dtr, false).await.unwrap();
+        dev.write_all(b"OK").await.unwrap();
+        assert_eq!(read_until(&mut s, b"OK").await, b"OK");
     }
 
     #[tokio::test]
@@ -343,6 +622,28 @@ mod tests {
     async fn invalid_config_is_rejected_before_opening() {
         assert!(SerialSession::open(&SerialConfig::new("", 115200)).is_err());
         assert!(SerialSession::open(&SerialConfig::new("/dev/null", 0)).is_err());
+    }
+
+    #[test]
+    fn manually_typed_port_names_must_be_device_files_under_dev() {
+        for bad in [
+            "/etc/passwd",
+            "relative/path",
+            "COM3",
+            "/dev/../etc/passwd",
+            "/dev/",
+            "/dev",
+            "/devices/x",
+            "/dev/tty\u{0}x",
+        ] {
+            let r = SerialSession::open(&SerialConfig::new(bad, 115200));
+            match r {
+                Err(TerminalError::ConnectionFailed(m)) => {
+                    assert!(m.contains("/dev/"), "{bad}: {m}")
+                }
+                other => panic!("{bad} が受理された: {:?}", other.err()),
+            }
+        }
     }
 
     #[test]

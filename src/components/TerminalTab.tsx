@@ -8,6 +8,7 @@ import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance } from "../lib/settings";
 import { EchoControl } from "./EchoControl";
 import { LogControl } from "./LogControl";
+import { SerialControls } from "./SerialControls";
 import { Button } from "./ui/button";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
 import type { SessionStatus } from "../hooks/useTerminalSession";
@@ -109,6 +110,12 @@ export function TerminalTab({
   return (
     <div className="relative h-full w-full">
       <div className="absolute right-3 top-2 z-10 flex items-center gap-2">
+        {values.type === "serial" && (
+          <SerialControls
+            key={sessionId ?? "none"}
+            sessionId={status === "connected" ? sessionId : null}
+          />
+        )}
         {supportsEcho && (
           <EchoControl
             mode={echoMode}

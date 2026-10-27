@@ -44,6 +44,8 @@ interface FormValues {
   txNewline: "Cr" | "Lf" | "CrLf";
   rxNewline: "Raw" | "LfToCrLf" | "CrToCrLf";
   serialPort: string;
+  /** 一覧から選ばず、ポート名を手入力する。 */
+  serialPortManual: boolean;
   baudRate: number;
   dataBits: "Five" | "Six" | "Seven" | "Eight";
   parity: "None" | "Odd" | "Even";
@@ -67,7 +69,15 @@ export interface SubmitOptions {
   saveAs?: { id?: string; name: string; values: Record<string, unknown> };
 }
 
-const EXTRA_DEFAULTS = { profileId: "", saveProfile: false, profileName: "" };
+const EXTRA_DEFAULTS = {
+  profileId: "",
+  saveProfile: false,
+  profileName: "",
+  serialPortManual: false,
+};
+
+/** 手入力を選ぶ選択肢の値。 */
+const MANUAL_PORT = "__manual__";
 
 /** 保存・表示に使う値から秘密情報を取り除く。 */
 function withoutSecrets(values: ConnectionValues): Record<string, unknown> {
@@ -138,11 +148,19 @@ export function ConnectionDialog({
   const [portList, setPortList] = useState<{
     ports: string[];
     error: string | null;
+    loaded: boolean;
   }>({
     ports: [],
     error: null,
+    loaded: false,
   });
-  const { ports, error: portsError } = portList;
+  const { ports, error: portsError, loaded: portsLoaded } = portList;
+  const serialPort = useWatch({ control, name: "serialPort" });
+  const serialPortManual = useWatch({ control, name: "serialPortManual" });
+  /** 手入力を選んだ場合、または（保存済みの接続などで）一覧にないポート名の場合。 */
+  const manualPort =
+    serialPortManual ||
+    (portsLoaded && serialPort !== "" && !ports.includes(serialPort));
 
   useEffect(() => {
     // 閉じたら入力を破棄し（パスワード等の秘密情報をメモリに残さない）、開くたびに初期状態へ戻す。
@@ -164,13 +182,17 @@ export function ConnectionDialog({
     if (!open || type !== "serial") return;
     let cancelled = false;
     loadSerialPorts()
-      .then((ports) => !cancelled && setPortList({ ports, error: null }))
+      .then(
+        (ports) =>
+          !cancelled && setPortList({ ports, error: null, loaded: true }),
+      )
       .catch(
         (e: unknown) =>
           !cancelled &&
           setPortList({
             ports: [],
             error: `ポート一覧を取得できません: ${String(e)}`,
+            loaded: true,
           }),
       );
     return () => {
@@ -412,16 +434,39 @@ export function ConnectionDialog({
                 error={message(errors, "serialPort")}
               >
                 {(id) => (
-                  <Select id={id} {...register("serialPort")}>
+                  <Select
+                    id={id}
+                    value={manualPort ? MANUAL_PORT : serialPort}
+                    onChange={(e) => {
+                      const manual = e.target.value === MANUAL_PORT;
+                      setValue("serialPortManual", manual);
+                      setValue("serialPort", manual ? "" : e.target.value, {
+                        shouldValidate: false,
+                      });
+                    }}
+                  >
                     <option value="">選択してください</option>
                     {ports.map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
                     ))}
+                    <option value={MANUAL_PORT}>手入力…</option>
                   </Select>
                 )}
               </Field>
+              {manualPort && (
+                <Field label="ポート名（手入力）">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      autoComplete="off"
+                      placeholder="/dev/cu.usbserial-1410"
+                      {...register("serialPort")}
+                    />
+                  )}
+                </Field>
+              )}
               {portsError && (
                 <p role="alert" className="text-xs text-red-400">
                   {portsError}

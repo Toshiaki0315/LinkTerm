@@ -11,6 +11,8 @@ pub enum TerminalError {
     AuthenticationFailed(String),
     #[error("ホスト鍵を信頼できません: {0}")]
     HostKeyRejected(String),
+    #[error("この接続では使えない操作です: {0}")]
+    Unsupported(String),
     #[error("未対応の文字コードです: {0}")]
     UnsupportedEncoding(String),
     #[error("セッションは既に閉じられています")]

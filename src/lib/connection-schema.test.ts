@@ -255,4 +255,26 @@ describe("connectionTitle", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("シリアルのポート名は /dev/ 以下のデバイスのパス", () => {
+    const base = { ...defaultConnectionValues, type: "serial", baudRate: 9600 };
+    for (const ok of [
+      "/dev/cu.usbserial-1410",
+      "/dev/tty.Bluetooth-Incoming-Port",
+    ]) {
+      expect(
+        connectionSchema.safeParse({ ...base, serialPort: ok }).success,
+      ).toBe(true);
+    }
+    for (const bad of [
+      "COM3",
+      "/etc/passwd",
+      "/dev/",
+      "/dev/../etc/passwd",
+      "cu.usbserial",
+    ]) {
+      const r = connectionSchema.safeParse({ ...base, serialPort: bad });
+      expect(r.success, bad).toBe(false);
+    }
+  });
 });

@@ -43,6 +43,11 @@ vi.mock("./TerminalView", async () => {
   };
 });
 vi.mock("./LogControl", () => ({ LogControl: () => null }));
+vi.mock("./SerialControls", () => ({
+  SerialControls: ({ sessionId }: { sessionId: string | null }) => (
+    <div data-testid="serial-controls" data-session={sessionId ?? ""} />
+  ),
+}));
 
 import { TerminalTab } from "./TerminalTab";
 
@@ -294,6 +299,62 @@ describe("TerminalTab", () => {
       termWrite.mockClear();
       typed("a");
       expect(echoed()).toBe("");
+    });
+  });
+
+  describe("シリアルの操作パネル", () => {
+    const serialValues = {
+      type: "serial",
+      encoding: "UTF-8",
+      localEcho: "off",
+      serialPort: "/dev/cu.x",
+      baudRate: 115200,
+      dataBits: "Eight",
+      parity: "None",
+      stopBits: "One",
+      flowControl: "None",
+    } as ConnectionValues;
+
+    it("シリアルの接続中に表示し、セッションIDを渡す", () => {
+      session.state = {
+        status: "connected",
+        sessionId: "s9",
+        error: null,
+        remoteEcho: null,
+      };
+      setup(serialValues);
+      expect(screen.getByTestId("serial-controls")).toHaveAttribute(
+        "data-session",
+        "s9",
+      );
+    });
+
+    it("Telnet・ローカルシェルには表示しない", () => {
+      session.state = {
+        status: "connected",
+        sessionId: "s9",
+        error: null,
+        remoteEcho: null,
+      };
+      const { view } = setup(telnet);
+      expect(screen.queryByTestId("serial-controls")).not.toBeInTheDocument();
+      view.unmount();
+      setup({ type: "local", encoding: "UTF-8" } as ConnectionValues);
+      expect(screen.queryByTestId("serial-controls")).not.toBeInTheDocument();
+    });
+
+    it("接続が確立するまではセッションIDを渡さない（操作不可）", () => {
+      session.state = {
+        status: "connecting",
+        sessionId: null,
+        error: null,
+        remoteEcho: null,
+      };
+      setup(serialValues);
+      expect(screen.getByTestId("serial-controls")).toHaveAttribute(
+        "data-session",
+        "",
+      );
     });
   });
 });

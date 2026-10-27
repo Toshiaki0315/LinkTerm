@@ -96,7 +96,10 @@ const serial = z.object({
   type: z.literal("serial"),
   encoding,
   localEcho,
-  serialPort: required("ポート"),
+  serialPort: required("ポート").refine(
+    (v) => v.startsWith("/dev/") && v.length > 5 && !v.includes(".."),
+    "ポート名は /dev/ から始まるデバイスのパスで入力してください",
+  ),
   baudRate: z
     .number("ボーレートを入力してください")
     .int("ボーレートは整数で入力してください")
