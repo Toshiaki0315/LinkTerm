@@ -1,6 +1,7 @@
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Tab } from "../lib/tabs";
 import type { Appearance } from "../lib/settings";
+import { themeFor } from "../lib/themes";
 import { cn } from "../lib/utils";
 import { TerminalTab } from "./TerminalTab";
 
@@ -37,6 +38,7 @@ export function TerminalWorkspace({
       {tabs.map((tab) => (
         <div
           key={tab.id}
+          style={{ backgroundColor: themeFor(appearance?.theme).background }}
           className={cn(
             "absolute inset-0 p-1",
             tab.id !== activeId && "hidden",

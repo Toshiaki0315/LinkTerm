@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { THEME_IDS } from "./themes";
 
 // 範囲・既定値は Rust 側（src-tauri/src/settings.rs）と揃える。Rust 側の検証が正。
 export const FONT_SIZE_MIN = 8;
@@ -64,6 +65,7 @@ export const settingsSchema = z.object({
   fontSize: fontSizeSchema,
   scrollback: scrollbackSchema,
   cursorBlink: z.boolean(),
+  theme: z.enum(THEME_IDS),
   startup: startupSchema,
 });
 
@@ -88,11 +90,12 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   scrollback: 10_000,
   cursorBlink: true,
+  theme: "dark",
   startup: { kind: "none" },
 };
 
 /** ターミナルの見た目に関わる設定。 */
 export type Appearance = Pick<
   Settings,
-  "fontFamily" | "fontSize" | "scrollback" | "cursorBlink"
+  "fontFamily" | "fontSize" | "scrollback" | "cursorBlink" | "theme"
 >;

@@ -68,6 +68,7 @@ vi.mock("@xterm/addon-fit", () => ({
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 import { TerminalView, type TerminalHandle } from "./TerminalView";
+import { THEMES } from "../lib/themes";
 
 beforeEach(() => {
   xterm.instances.length = 0;
@@ -151,6 +152,7 @@ describe("TerminalView", () => {
       fontSize: 18,
       scrollback: 777,
       cursorBlink: false,
+      theme: "dark" as const,
     };
 
     it("指定した外観で xterm を生成する", () => {
@@ -234,6 +236,79 @@ describe("TerminalView", () => {
       );
       expect(xterm.instances[0].options).toEqual(before);
       expect(fit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("配色テーマ", () => {
+    const base = {
+      fontFamily: "Menlo",
+      fontSize: 13,
+      scrollback: 100,
+      cursorBlink: true,
+    };
+
+    it("指定したテーマの配色で生成する（既定はダーク）", () => {
+      render(<TerminalView active onInput={() => {}} onResize={() => {}} />);
+      expect(xterm.instances[0].options.theme).toEqual(THEMES.dark.xterm);
+    });
+
+    it("テーマ指定つきの外観を反映する", () => {
+      render(
+        <TerminalView
+          active
+          appearance={{ ...base, theme: "solarized-light" }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances[0].options.theme).toEqual(
+        THEMES["solarized-light"].xterm,
+      );
+    });
+
+    it("テーマが変わったら作り直さずに反映する。同じなら触らない", () => {
+      const { rerender } = render(
+        <TerminalView
+          active
+          appearance={{ ...base, theme: "dark" }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      rerender(
+        <TerminalView
+          active
+          appearance={{ ...base, theme: "dracula" }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances).toHaveLength(1);
+      expect(xterm.instances[0].options.theme).toEqual(THEMES.dracula.xterm);
+      const before = xterm.instances[0].options.theme;
+      rerender(
+        <TerminalView
+          active
+          appearance={{ ...base, theme: "dracula" }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances[0].options.theme).toBe(before);
+    });
+
+    it("端末の外側（余白）も背景色にそろえる", () => {
+      const { container } = render(
+        <TerminalView
+          active
+          appearance={{ ...base, theme: "light" }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(
+        (container.firstChild as HTMLElement).style.backgroundColor,
+      ).not.toBe("");
     });
   });
 

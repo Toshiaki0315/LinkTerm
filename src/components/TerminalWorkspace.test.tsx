@@ -90,4 +90,26 @@ describe("TerminalWorkspace", () => {
     );
     expect(screen.getByText(/新しい接続/)).toBeInTheDocument();
   });
+
+  it("端末の外側の余白も、テーマの背景色にする", () => {
+    render(
+      <TerminalWorkspace
+        tabs={[tab("a")]}
+        activeId="a"
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+        appearance={{
+          fontFamily: "Menlo",
+          fontSize: 13,
+          scrollback: 10,
+          cursorBlink: true,
+          theme: "solarized-dark",
+        }}
+      />,
+    );
+    expect(
+      screen.getByTestId("term-a").parentElement?.style.backgroundColor,
+    ).toMatch(/^(#002b36|rgb\(0, 43, 54\))$/i);
+  });
 });

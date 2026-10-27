@@ -16,6 +16,7 @@ describe("settingsSchema", () => {
       fontSize: 13,
       scrollback: 10000,
       cursorBlink: true,
+      theme: "dark",
       startup: { kind: "none" },
     });
   });
@@ -100,6 +101,27 @@ describe("settingsSchema", () => {
         settingsSchema.safeParse({ ...DEFAULT_SETTINGS, startup }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe("配色テーマの設定", () => {
+  it("既定はダーク。6種類の ID を受け付け、それ以外は拒否する", () => {
+    expect(DEFAULT_SETTINGS.theme).toBe("dark");
+    for (const theme of [
+      "dark",
+      "light",
+      "solarized-dark",
+      "solarized-light",
+      "dracula",
+      "monokai",
+    ]) {
+      expect(
+        settingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme }).success,
+      ).toBe(true);
+    }
+    expect(
+      settingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: "neon" }).success,
+    ).toBe(false);
   });
 });
 

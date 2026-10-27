@@ -66,10 +66,12 @@ describe("SettingsDialog", () => {
         fontSize: 16,
         scrollback: 5000,
         cursorBlink: false,
+        theme: "dracula",
         startup: { kind: "local" },
       },
     });
     await fontsLoaded();
+    expect(screen.getByLabelText("配色テーマ")).toHaveValue("dracula");
     expect(screen.getByLabelText("フォント")).toHaveValue(
       fontStackFor("Osaka-Mono"),
     );
@@ -238,6 +240,7 @@ describe("SettingsDialog", () => {
       fontSize: 18,
       scrollback: 2000,
       cursorBlink: false,
+      theme: "dark",
       startup: { kind: "local" },
     });
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -342,6 +345,53 @@ describe("SettingsDialog", () => {
       await screen.findByText(/ディスクがいっぱいです/),
     ).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  describe("配色テーマ", () => {
+    it("6つのテーマから選べる", () => {
+      setup();
+      const select = screen.getByLabelText("配色テーマ");
+      const labels = Array.from(select.querySelectorAll("option")).map(
+        (o) => o.textContent,
+      );
+      expect(labels).toEqual([
+        "ダーク",
+        "ライト",
+        "Solarized ダーク",
+        "Solarized ライト",
+        "Dracula",
+        "Monokai",
+      ]);
+      expect(select).toHaveValue("dark");
+    });
+
+    it("選んだテーマを保存する", async () => {
+      const { user, onSave } = setup();
+      await user.selectOptions(screen.getByLabelText("配色テーマ"), "dracula");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].theme).toBe("dracula");
+    });
+
+    it("プレビューが選んだテーマの配色になる", async () => {
+      const { user } = setup();
+      const preview = screen.getByTestId("font-preview");
+      const dark = preview.style.backgroundColor;
+      await user.selectOptions(
+        screen.getByLabelText("配色テーマ"),
+        "solarized-light",
+      );
+      expect(preview.style.backgroundColor).not.toBe(dark);
+    });
+
+    it("「初期設定に戻す」でダークに戻る", async () => {
+      const { user } = setup({
+        settings: { ...DEFAULT_SETTINGS, theme: "monokai" },
+      });
+      expect(screen.getByLabelText("配色テーマ")).toHaveValue("monokai");
+      await user.click(screen.getByRole("button", { name: "初期設定に戻す" }));
+      expect(screen.getByLabelText("配色テーマ")).toHaveValue("dark");
+    });
   });
 
   it("キャンセルで保存せずに閉じる", async () => {

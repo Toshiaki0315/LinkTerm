@@ -4,12 +4,14 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { DEFAULT_SETTINGS, type Appearance } from "../lib/settings";
+import { themeFor } from "../lib/themes";
 
 const DEFAULT_APPEARANCE: Appearance = {
   fontFamily: DEFAULT_SETTINGS.fontFamily,
   fontSize: DEFAULT_SETTINGS.fontSize,
   scrollback: DEFAULT_SETTINGS.scrollback,
   cursorBlink: DEFAULT_SETTINGS.cursorBlink,
+  theme: DEFAULT_SETTINGS.theme,
 };
 
 export interface TerminalHandle {
@@ -49,13 +51,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const searchRef = useRef<SearchAddon | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
-    const { fontFamily, fontSize, scrollback, cursorBlink } = appearance;
+    const { fontFamily, fontSize, scrollback, cursorBlink, theme } = appearance;
     /** 生成時・前回反映時の外観。値が変わったときだけ xterm に設定する。 */
     const appliedRef = useRef<Appearance>({
       fontFamily,
       fontSize,
       scrollback,
       cursorBlink,
+      theme,
     });
 
     useEffect(() => {
@@ -66,7 +69,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     useEffect(() => {
       const container = containerRef.current;
       if (!container) return;
-      const term = new Terminal({ ...appliedRef.current });
+      const { theme: initialTheme, ...options } = appliedRef.current;
+      const term = new Terminal({
+        ...options,
+        theme: themeFor(initialTheme).xterm,
+      });
       const fit = new FitAddon();
       term.loadAddon(fit);
       const searchAddon = new SearchAddon();
@@ -101,7 +108,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     useEffect(() => {
       const term = termRef.current;
       const applied = appliedRef.current;
-      const next = { fontFamily, fontSize, scrollback, cursorBlink };
+      const next = { fontFamily, fontSize, scrollback, cursorBlink, theme };
       const changed = (Object.keys(next) as Array<keyof Appearance>).filter(
         (key) => applied[key] !== next[key],
       );
@@ -110,10 +117,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       term.options.fontSize = fontSize;
       term.options.scrollback = scrollback;
       term.options.cursorBlink = cursorBlink;
+      if (applied.theme !== theme) term.options.theme = themeFor(theme).xterm;
       appliedRef.current = next;
       // 文字の大きさが変わると行・列数が変わるため、表示中なら再計算する。
       if (containerRef.current?.offsetParent !== null) fitRef.current?.fit();
-    }, [fontFamily, fontSize, scrollback, cursorBlink]);
+    }, [fontFamily, fontSize, scrollback, cursorBlink, theme]);
 
     useEffect(() => {
       if (!active) return;
@@ -146,6 +154,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       [],
     );
 
-    return <div ref={containerRef} className="h-full w-full" />;
+    return (
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        style={{ backgroundColor: themeFor(theme).background }}
+      />
+    );
   },
 );

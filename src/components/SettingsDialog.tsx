@@ -11,6 +11,7 @@ import {
   scrollbackSchema,
   type Settings,
 } from "../lib/settings";
+import { THEME_IDS, THEMES, themeFor } from "../lib/themes";
 import {
   listFonts,
   type FontFamily,
@@ -33,6 +34,7 @@ const formSchema = z
     fontSize: fontSizeSchema,
     scrollback: scrollbackSchema,
     cursorBlink: z.boolean(),
+    theme: z.enum(THEME_IDS),
     startupKind: z.enum(["none", "local", "profile"]),
     startupProfileId: z.string(),
   })
@@ -53,6 +55,7 @@ const toForm = (s: Settings): FormValues => ({
   fontSize: s.fontSize,
   scrollback: s.scrollback,
   cursorBlink: s.cursorBlink,
+  theme: s.theme,
   startupKind: s.startup.kind,
   startupProfileId: s.startup.kind === "profile" ? s.startup.profileId : "",
 });
@@ -62,6 +65,7 @@ const toSettings = (v: z.output<typeof formSchema>): Settings => ({
   fontSize: v.fontSize,
   scrollback: v.scrollback,
   cursorBlink: v.cursorBlink,
+  theme: v.theme,
   startup:
     v.startupKind === "profile"
       ? { kind: "profile", profileId: v.startupProfileId }
@@ -155,6 +159,7 @@ export function SettingsDialog({
   const fontFamily = useWatch({ control, name: "fontFamily" });
   const fontSize = useWatch({ control, name: "fontSize" });
   const startupKind = useWatch({ control, name: "startupKind" });
+  const theme = themeFor(useWatch({ control, name: "theme" }));
 
   const fonts = useMemo(() => fontList?.fonts ?? [], [fontList]);
   const currentFamily = familyFromStack(fontFamily);
@@ -277,14 +282,27 @@ export function SettingsDialog({
           </div>
           <div
             data-testid="font-preview"
-            className="rounded border border-neutral-700 bg-black px-3 py-2 text-neutral-100"
+            className="rounded border border-neutral-700 px-3 py-2"
             style={{
+              backgroundColor: theme.background,
+              color: theme.foreground,
               fontFamily,
               fontSize: `${Number.isFinite(fontSize) ? fontSize : DEFAULT_SETTINGS.fontSize}px`,
             }}
           >
             AaBbCc 0O1lI {"{}[]()"} 日本語 あいうえお
           </div>
+          <Row label="配色テーマ">
+            {(id) => (
+              <Select id={id} {...register("theme")}>
+                {THEME_IDS.map((themeId) => (
+                  <option key={themeId} value={themeId}>
+                    {THEMES[themeId].label}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Row>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" {...register("cursorBlink")} />
             カーソルを点滅させる

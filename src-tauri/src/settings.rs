@@ -51,6 +51,19 @@ pub enum Startup {
     Profile { profile_id: String },
 }
 
+/// ターミナルの配色テーマ。色の定義はフロントエンド側にある。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    SolarizedDark,
+    SolarizedLight,
+    Dracula,
+    Monokai,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -58,6 +71,7 @@ pub struct Settings {
     pub font_size: u16,
     pub scrollback: u32,
     pub cursor_blink: bool,
+    pub theme: Theme,
     pub startup: Startup,
 }
 
@@ -68,6 +82,7 @@ impl Default for Settings {
             font_size: 13,
             scrollback: 10_000,
             cursor_blink: true,
+            theme: Theme::default(),
             startup: Startup::None,
         }
     }
@@ -218,6 +233,7 @@ mod tests {
             font_size: 16,
             scrollback: 50_000,
             cursor_blink: false,
+            theme: Theme::Monokai,
             startup: Startup::Profile {
                 profile_id: "profile-1".into(),
             },
@@ -414,6 +430,52 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["settings.json".to_string()]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn theme_defaults_to_dark_and_roundtrips_in_kebab_case() {
+        assert_eq!(Settings::default().theme, Theme::Dark);
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(v["theme"], "dark");
+        for (theme, name) in [
+            (Theme::Light, "light"),
+            (Theme::SolarizedDark, "solarized-dark"),
+            (Theme::SolarizedLight, "solarized-light"),
+            (Theme::Dracula, "dracula"),
+            (Theme::Monokai, "monokai"),
+        ] {
+            assert_eq!(serde_json::to_value(theme).unwrap(), json!(name));
+            let back: Theme = serde_json::from_value(json!(name)).unwrap();
+            assert_eq!(back, theme);
+        }
+    }
+
+    #[test]
+    fn theme_is_saved_and_loaded() {
+        let (s, path, dir) = store("theme");
+        let saved = s
+            .save(Settings {
+                theme: Theme::Dracula,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(saved.theme, Theme::Dracula);
+        assert_eq!(
+            SettingsStore::new(&path).load().unwrap().theme,
+            Theme::Dracula
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_without_a_theme_uses_the_default_and_unknown_themes_are_rejected() {
+        let (s, path, dir) = store("theme-file");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"fontSize": 14}"#).unwrap();
+        assert_eq!(s.load().unwrap().theme, Theme::Dark);
+        std::fs::write(&path, r#"{"theme": "neon-pink"}"#).unwrap();
+        assert!(matches!(s.load(), Err(SettingsError::Parse { .. })));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
