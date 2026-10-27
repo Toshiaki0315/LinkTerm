@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { cn } from "../lib/utils";
 
 export interface ContextMenuItem {
@@ -9,6 +9,8 @@ export interface ContextMenuItem {
   swatch?: string;
   /** 選択済みの選択肢か（`swatch` と併用）。 */
   checked?: boolean;
+  /** 付けると、この項目の上に区切り線を引く。 */
+  separatorBefore?: boolean;
 }
 
 interface Props {
@@ -21,6 +23,7 @@ interface Props {
 
 const ITEM_HEIGHT = 32;
 const MENU_WIDTH = 200;
+const SEPARATOR_HEIGHT = 9;
 
 /** 右クリックメニュー。Esc・外側のクリック・スクロールで閉じ、↑↓Enter で操作できる。 */
 export function ContextMenu({ x, y, items, onClose }: Props) {
@@ -71,7 +74,13 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
   const left = Math.max(0, Math.min(x, window.innerWidth - MENU_WIDTH));
   const top = Math.max(
     0,
-    Math.min(y, window.innerHeight - items.length * ITEM_HEIGHT - 8),
+    Math.min(
+      y,
+      window.innerHeight -
+        items.length * ITEM_HEIGHT -
+        items.filter((i) => i.separatorBefore).length * SEPARATOR_HEIGHT -
+        8,
+    ),
   );
 
   return (
@@ -82,36 +91,44 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       className="fixed z-50 rounded-md border border-neutral-700 bg-neutral-900 py-1 text-sm shadow-xl"
     >
       {items.map((item) => (
-        <button
-          key={item.label}
-          role={item.swatch !== undefined ? "menuitemradio" : "menuitem"}
-          aria-checked={
-            item.swatch !== undefined ? Boolean(item.checked) : undefined
-          }
-          disabled={item.disabled}
-          className={cn(
-            "block w-full px-3 text-left hover:bg-neutral-800 focus:bg-neutral-800 focus:outline-none disabled:opacity-40 disabled:hover:bg-transparent",
+        <Fragment key={item.label}>
+          {item.separatorBefore && (
+            <div
+              role="separator"
+              className="my-1 h-px bg-neutral-700"
+              style={{ height: 1 }}
+            />
           )}
-          style={{ height: ITEM_HEIGHT }}
-          onClick={() => {
-            item.onSelect();
-            onClose();
-          }}
-        >
-          {item.swatch !== undefined ? (
-            <span className="flex items-center gap-2">
-              <span
-                aria-hidden
-                className="h-3 w-3 rounded-full border border-neutral-600"
-                style={{ backgroundColor: item.swatch }}
-              />
-              {item.label}
-              {item.checked && <span aria-hidden>✓</span>}
-            </span>
-          ) : (
-            item.label
-          )}
-        </button>
+          <button
+            role={item.swatch !== undefined ? "menuitemradio" : "menuitem"}
+            aria-checked={
+              item.swatch !== undefined ? Boolean(item.checked) : undefined
+            }
+            disabled={item.disabled}
+            className={cn(
+              "block w-full px-3 text-left hover:bg-neutral-800 focus:bg-neutral-800 focus:outline-none disabled:opacity-40 disabled:hover:bg-transparent",
+            )}
+            style={{ height: ITEM_HEIGHT }}
+            onClick={() => {
+              item.onSelect();
+              onClose();
+            }}
+          >
+            {item.swatch !== undefined ? (
+              <span className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className="h-3 w-3 rounded-full border border-neutral-600"
+                  style={{ backgroundColor: item.swatch }}
+                />
+                {item.label}
+                {item.checked && <span aria-hidden>✓</span>}
+              </span>
+            ) : (
+              item.label
+            )}
+          </button>
+        </Fragment>
       ))}
     </div>
   );

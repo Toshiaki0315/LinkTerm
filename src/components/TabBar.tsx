@@ -281,7 +281,13 @@ export function TabBar({
               onSelect: () => onOpenRecent(entry),
             })),
             ...(onClearRecents
-              ? [{ label: "履歴を消去", onSelect: onClearRecents }]
+              ? [
+                  {
+                    label: "履歴を消去",
+                    onSelect: onClearRecents,
+                    separatorBefore: recents.length > 0,
+                  },
+                ]
               : []),
           ]}
           onClose={() => setRecentMenu(null)}

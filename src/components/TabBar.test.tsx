@@ -352,5 +352,24 @@ describe("TabBar", () => {
       await user.click(screen.getByRole("menuitem", { name: "履歴を消去" }));
       expect(onClearRecents).toHaveBeenCalled();
     });
+
+    it("履歴の一覧と「履歴を消去」の間に区切り線が入る", async () => {
+      const user = userEvent.setup();
+      render(
+        <TabBar
+          tabs={[]}
+          activeId={null}
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          recents={entries}
+          onOpenRecent={() => {}}
+          onClearRecents={() => {}}
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "最近使った接続" }));
+      const clear = screen.getByRole("menuitem", { name: "履歴を消去" });
+      expect(clear.previousElementSibling).toHaveAttribute("role", "separator");
+    });
   });
 });
