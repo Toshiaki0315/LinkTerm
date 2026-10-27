@@ -301,6 +301,7 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             size: size(req.cols, req.rows)?,
             term: DEFAULT_TERM.into(),
             keepalive_interval: Some(SSH_KEEPALIVE),
+            jump_hosts: vec![],
         },
         state.known_hosts.clone(),
         state.approver.clone(),

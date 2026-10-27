@@ -27,7 +27,7 @@ pub use newline::{IncomingConverter, RxNewline, TxNewline, convert_outgoing};
 pub use serial::{
     DataBits, FlowControl, Parity, SerialConfig, SerialControl, SerialSession, StopBits, list_ports,
 };
-pub use ssh::{SshAuth, SshConfig, SshSession};
+pub use ssh::{JumpHost, SshAuth, SshConfig, SshSession};
 pub use telnet::{TelnetConfig, TelnetSession};
 
 use async_trait::async_trait;
