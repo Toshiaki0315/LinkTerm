@@ -27,8 +27,9 @@ dmg: node_modules ## LinkTerm.dmg をビルドする
 	npm run tauri build -- --bundles dmg
 	@echo "=> $$(ls $(BUNDLE_DIR)/dmg/*.dmg)"
 
-test: node_modules ## フロントエンドとRustのテストを実行する
+test: node_modules ## フロントエンド・画面（Playwright）・Rustのテストを実行する
 	npm test
+	npm run test:e2e
 	cd src-tauri && cargo test
 
 clean: ## ビルド成果物を削除する

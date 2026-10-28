@@ -59,6 +59,7 @@ npm run tauri dev
 
 ```bash
 npm test            # フロントエンドのテスト (Vitest)
+npm run test:e2e    # 画面の試験 (Playwright。初回は npx playwright install chromium)
 npm run lint        # ESLint
 npm run typecheck   # TypeScript 型チェック
 cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
