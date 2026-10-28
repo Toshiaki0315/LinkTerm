@@ -74,6 +74,10 @@ vi.mock("./TerminalView", async () => {
   };
 });
 vi.mock("./LogControl", () => ({ LogControl: () => null }));
+vi.mock("./SftpDialog", () => ({
+  SftpDialog: ({ open, sessionId }: { open: boolean; sessionId: string }) =>
+    open ? <div data-testid="sftp-dialog">{sessionId}</div> : null,
+}));
 vi.mock("./SerialControls", () => ({
   SerialControls: ({ sessionId }: { sessionId: string | null }) => (
     <div data-testid="serial-controls" data-session={sessionId ?? ""} />
@@ -442,6 +446,41 @@ describe("TerminalTab", () => {
       await user.click(screen.getByRole("button", { name: "検索を閉じる" }));
       expect(termSearch.clearSearch).toHaveBeenCalled();
       expect(termSearch.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("ファイル転送（SFTP）", () => {
+    const connected = () => {
+      session.state = {
+        status: "connected",
+        sessionId: "sess-1",
+        error: null,
+        remoteEcho: null,
+      };
+    };
+
+    it("接続済みの SSH だけ、ボタンから SFTP の画面を開ける", async () => {
+      connected();
+      const user = userEvent.setup();
+      setup({ ...sshPassword, password: "x" } as ConnectionValues);
+      expect(screen.queryByTestId("sftp-dialog")).toBeNull();
+      await user.click(
+        screen.getByRole("button", { name: "ファイル転送（SFTP）" }),
+      );
+      expect(screen.getByTestId("sftp-dialog")).toHaveTextContent("sess-1");
+    });
+
+    it("SSH 以外・未接続では出さない", () => {
+      connected();
+      setup(telnet);
+      expect(
+        screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
+      ).toBeNull();
+      session.state = { ...session.state, status: "connecting" };
+      setup(sshPassword);
+      expect(
+        screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
+      ).toBeNull();
     });
   });
 

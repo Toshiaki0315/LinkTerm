@@ -9,6 +9,8 @@ pub mod recent;
 pub mod session;
 pub mod session_state;
 pub mod settings;
+pub mod sftp;
+pub mod sftp_commands;
 pub mod snippets;
 pub mod ssh_config;
 
@@ -21,9 +23,11 @@ pub fn run() {
         .on_menu_event(menu::handle_event)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = commands::AppState::new(app.handle())?;
             app.manage(state);
+            app.manage(sftp_commands::SftpState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -50,6 +54,12 @@ pub fn run() {
             commands::list_fonts,
             commands::get_session_state,
             commands::save_session_state,
+            sftp_commands::sftp_list,
+            sftp_commands::sftp_download,
+            sftp_commands::sftp_upload,
+            sftp_commands::sftp_mkdir,
+            sftp_commands::sftp_remove,
+            sftp_commands::sftp_cancel,
             commands::get_snippets,
             commands::save_snippets,
             commands::get_recent_connections,

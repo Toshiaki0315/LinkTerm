@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { FolderOpen, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAutoReconnect } from "../hooks/useAutoReconnect";
 import { useTerminalSession } from "../hooks/useTerminalSession";
@@ -15,6 +15,7 @@ import { copyText, pasteText } from "../lib/clipboard";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { EchoControl } from "./EchoControl";
 import { SearchBar } from "./SearchBar";
+import { SftpDialog } from "./SftpDialog";
 import { LogControl } from "./LogControl";
 import { SerialControls } from "./SerialControls";
 import { Button } from "./ui/button";
@@ -96,6 +97,7 @@ export function TerminalTab({
   const localEcho = supportsEcho && isLocalEchoOn(echoMode, remoteEcho);
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const [sftpOpen, setSftpOpen] = useState(false);
   const [seenFindSignal, setSeenFindSignal] = useState(findSignal);
   if (findSignal !== seenFindSignal) {
     // 検索の要求が来た（⌘F）。描画中の状態更新は、値が変わったときの1回だけ。
@@ -285,6 +287,17 @@ export function TerminalTab({
             sessionId={status === "connected" ? sessionId : null}
           />
         )}
+        {values.type === "ssh" && status === "connected" && sessionId && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="ファイル転送（SFTP）"
+            title="ファイル転送（SFTP）"
+            onClick={() => setSftpOpen(true)}
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -306,6 +319,14 @@ export function TerminalTab({
           title={title}
         />
       </div>
+      {values.type === "ssh" && sessionId && (
+        <SftpDialog
+          open={sftpOpen && status === "connected"}
+          onOpenChange={setSftpOpen}
+          sessionId={sessionId}
+          title={title}
+        />
+      )}
       {searchOpen && (
         <SearchBar
           onFind={(term, options, direction, incremental) =>

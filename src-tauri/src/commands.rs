@@ -78,6 +78,8 @@ pub enum CommandError {
     Recent(#[from] RecentError),
     #[error(transparent)]
     Snippet(#[from] SnippetError),
+    #[error(transparent)]
+    Sftp(#[from] crate::sftp::SftpError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -88,7 +90,7 @@ impl Serialize for CommandError {
     }
 }
 
-type CommandResult<T> = Result<T, CommandError>;
+pub type CommandResult<T> = Result<T, CommandError>;
 
 #[derive(Clone, Serialize)]
 struct DataPayload<'a> {
@@ -511,7 +513,12 @@ pub async fn set_display_mode(
 }
 
 #[tauri::command]
-pub async fn terminal_close(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+pub async fn terminal_close(
+    state: State<'_, AppState>,
+    sftp: State<'_, crate::sftp_commands::SftpState>,
+    id: String,
+) -> CommandResult<()> {
+    sftp.forget(&id).await;
     Ok(state.manager.close(&id).await?)
 }
 

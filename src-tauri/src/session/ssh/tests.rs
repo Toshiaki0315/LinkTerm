@@ -28,6 +28,10 @@ struct ServerState {
     remote_requests: Mutex<Vec<(String, u32)>>,
     /// サーバー側で実際に待ち受けたポート。
     remote_listen: Mutex<Vec<u16>>,
+    /// 要求を受けたサブシステム名。
+    subsystems: Mutex<Vec<String>>,
+    /// サブシステム要求を拒否する。
+    reject_subsystem: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone)]
@@ -188,6 +192,25 @@ impl server::Handler for MockServer {
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         session.data(channel, b"welcome\r\n".to_vec())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.state.subsystems.lock().unwrap().push(name.to_owned());
+        if self
+            .state
+            .reject_subsystem
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            session.channel_failure(channel)
+        } else {
+            // この試験のサーバーは、受け取ったデータをそのまま返す（SFTP の代わり）。
+            session.channel_success(channel)
+        }
     }
 
     async fn window_change_request(
@@ -1184,4 +1207,56 @@ async fn no_remote_forwards_means_no_server_requests() {
     let h = start_server_with(None, true).await;
     let _s = connect_with_remote(&h, vec![]).await.unwrap();
     assert!(h.state.remote_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn open_sftp_requests_the_sftp_subsystem_and_returns_a_working_stream() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let h = start_server(None).await;
+    let mut s = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    let mut stream = s.open_sftp().await.unwrap();
+    assert_eq!(*h.state.subsystems.lock().unwrap(), ["sftp"]);
+    stream.write_all(b"ping").await.unwrap();
+    let mut buf = [0u8; 4];
+    stream.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"ping");
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn open_sftp_fails_with_a_clear_error_when_the_server_refuses() {
+    let h = start_server(None).await;
+    h.state
+        .reject_subsystem
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut s = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    let err = s.open_sftp().await.err().expect("拒否されるはず");
+    assert!(err.to_string().contains("SFTP"), "{err}");
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn open_sftp_on_a_closed_session_is_an_error() {
+    let h = start_server(None).await;
+    let mut s = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    s.close().await.unwrap();
+    assert!(s.open_sftp().await.is_err());
 }

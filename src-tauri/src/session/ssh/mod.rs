@@ -15,7 +15,8 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use super::{
-    HostKeyApprover, KnownHostsStore, TerminalError, TerminalSession, TerminalSize, verify_host_key,
+    HostKeyApprover, KnownHostsStore, SftpTransport, TerminalError, TerminalSession, TerminalSize,
+    verify_host_key,
 };
 
 const OUTPUT_CAPACITY: usize = 64;
@@ -166,7 +167,36 @@ impl client::Handler for ClientHandler {
 enum Command {
     Data(Vec<u8>),
     Resize(TerminalSize),
+    /// SFTP サブシステム用の新しいチャネルを開く。
+    OpenSftp(tokio::sync::oneshot::Sender<Result<SftpTransport, TerminalError>>),
     Close,
+}
+
+/// 同じ接続の上に、SFTP サブシステムのチャネルを開く。
+async fn open_sftp_channel(handle: &Handle<ClientHandler>) -> Result<SftpTransport, TerminalError> {
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| TerminalError::Disconnected(format!("SFTP用のチャネルを開けません: {e}")))?;
+    let refused = |detail: String| {
+        TerminalError::Unsupported(format!(
+            "SFTP を開始できません（サーバーが SFTP を許可していない可能性があります）{detail}"
+        ))
+    };
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| refused(format!(": {e}")))?;
+    // サーバーの応答（成功・失敗）を待つ。
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Success) => break,
+            Some(ChannelMsg::Failure) => return Err(refused(String::new())),
+            Some(_) => {}
+            None => return Err(refused(": 応答の前に接続が閉じられました".into())),
+        }
+    }
+    Ok(Box::new(channel.into_stream()))
 }
 
 type Output = Result<Vec<u8>, TerminalError>;
@@ -677,6 +707,13 @@ async fn pump(
                         )));
                     }
                 }
+                Some(Command::OpenSftp(reply)) => {
+                    // 開くのに時間がかかっても、端末の入出力を止めないよう別タスクで行う。
+                    let handle = handle.clone();
+                    tokio::spawn(async move {
+                        let _ = reply.send(open_sftp_channel(&handle).await);
+                    });
+                }
                 Some(Command::Close) | None => break None,
             },
             msg = channel.wait() => match msg {
@@ -732,6 +769,18 @@ impl TerminalSession for SshSession {
             .send(Command::Resize(size))
             .await
             .map_err(|_| TerminalError::Closed)
+    }
+
+    async fn open_sftp(&mut self) -> Result<SftpTransport, TerminalError> {
+        if self.closed {
+            return Err(TerminalError::Closed);
+        }
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(Command::OpenSftp(reply))
+            .await
+            .map_err(|_| TerminalError::Closed)?;
+        answer.await.map_err(|_| TerminalError::Closed)?
     }
 
     async fn close(&mut self) -> Result<(), TerminalError> {

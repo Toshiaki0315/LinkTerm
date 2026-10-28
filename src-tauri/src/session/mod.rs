@@ -31,6 +31,12 @@ pub use ssh::{JumpHost, LocalForward, RemoteForward, SshAuth, SshConfig, SshSess
 pub use telnet::{TelnetConfig, TelnetSession};
 
 use async_trait::async_trait;
+use tokio::io::{AsyncRead, AsyncWrite};
+
+/// SFTP サブシステムへの入出力（SSH のチャネルなど）。
+pub trait SftpStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> SftpStream for T {}
+pub type SftpTransport = Box<dyn SftpStream>;
 
 /// シリアルの制御信号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -84,6 +90,10 @@ pub trait TerminalSession: Send {
         _on: bool,
     ) -> Result<(), TerminalError> {
         Err(TerminalError::Unsupported("制御信号の操作".into()))
+    }
+    /// SFTP サブシステムを開き、その入出力を返す。SSH 以外は `Unsupported`。
+    async fn open_sftp(&mut self) -> Result<SftpTransport, TerminalError> {
+        Err(TerminalError::Unsupported("SFTP".into()))
     }
     /// ブレーク信号を送る。対応しない接続は `Unsupported`。
     async fn send_break(&mut self) -> Result<(), TerminalError> {

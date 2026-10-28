@@ -9,7 +9,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::session::hex::HexDumper;
 use crate::session::{
-    Codec, ControlSignal, LogError, SessionLogger, TerminalError, TerminalSession, TerminalSize,
+    Codec, ControlSignal, LogError, SessionLogger, SftpTransport, TerminalError, TerminalSession,
+    TerminalSize,
 };
 
 #[derive(Debug, Error)]
@@ -57,6 +58,8 @@ enum Command {
         reply: Reply,
     },
     Break(Reply),
+    /// SFTP サブシステムの入出力を開く。
+    OpenSftp(oneshot::Sender<Result<SftpTransport, TerminalError>>),
     Display(DisplayMode),
     /// 登録の確定（切り詰め）結果を `reply` で呼び出し元へ返す。
     SetLogger(Option<SessionLogger>, oneshot::Sender<Result<(), LogError>>),
@@ -167,6 +170,16 @@ impl SessionManager {
         let (reply, ack) = oneshot::channel();
         self.send(id, Command::Break(reply)).await?;
         Self::acknowledged(id, ack).await
+    }
+
+    /// SFTP サブシステムを開き、その入出力を返す。SSH 以外は `Unsupported`。
+    pub async fn open_sftp(&self, id: &str) -> Result<SftpTransport, ManagerError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(id, Command::OpenSftp(reply)).await?;
+        answer
+            .await
+            .map_err(|_| ManagerError::UnknownSession(id.to_owned()))?
+            .map_err(ManagerError::from)
     }
 
     /// 受信データの表示方法を切り替える。
@@ -290,6 +303,9 @@ async fn run_session(
                 }
                 Some(Command::Break(reply)) => {
                     let _ = reply.send(session.send_break().await);
+                }
+                Some(Command::OpenSftp(reply)) => {
+                    let _ = reply.send(session.open_sftp().await);
                 }
                 Some(Command::Display(mode)) => {
                     if mode != display {
@@ -873,6 +889,21 @@ mod tests {
         ));
         // セッションは継続する。
         m.write(&id, "ok").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_sftp_is_unsupported_for_sessions_without_it_and_unknown_ids_fail() {
+        let (m, _sink) = setup();
+        let (s, _, _) = EchoSession::new();
+        let id = m.start(Box::new(s), Codec::utf8()).await;
+        assert!(matches!(
+            m.open_sftp(&id).await.err(),
+            Some(ManagerError::Session(TerminalError::Unsupported(_)))
+        ));
+        assert!(matches!(
+            m.open_sftp("nope").await.err(),
+            Some(ManagerError::UnknownSession(_))
+        ));
     }
 
     #[tokio::test]
