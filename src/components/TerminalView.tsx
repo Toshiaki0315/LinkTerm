@@ -58,6 +58,8 @@ interface Props {
   appearance?: Appearance;
   /** キーワードのハイライト規則。 */
   highlightRules?: HighlightRule[];
+  /** ベル（BEL）が鳴った。 */
+  onBell?: () => void;
   /** 各行の右端に、その行が現れた時刻を重ねて表示する。 */
   showTimestamps?: boolean;
   onInput: (data: string) => void;
@@ -74,6 +76,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       appearance = DEFAULT_APPEARANCE,
       highlightRules,
       showTimestamps = false,
+      onBell,
       onInput,
       onResize,
       onContextMenu,
@@ -90,6 +93,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const batcherRef = useRef<ScanBatcher | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
+    const onBellRef = useRef(onBell);
     const {
       fontFamily,
       fontSize,
@@ -119,9 +123,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       backspaceKeyRef.current = backspaceKey;
       onInputRef.current = onInput;
       onResizeRef.current = onResize;
+      onBellRef.current = onBell;
       copyOnSelectRef.current = copyOnSelect;
       onContextMenuRef.current = onContextMenu;
-    }, [onInput, onResize, copyOnSelect, onContextMenu, backspaceKey]);
+    }, [onInput, onResize, onBell, copyOnSelect, onContextMenu, backspaceKey]);
 
     useEffect(() => {
       const container = containerRef.current;
@@ -131,8 +136,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         optionIsMeta: meta,
         ...options
       } = appliedRef.current;
+      // リンクは ⌘+クリックで開く（修飾キーなしのクリックは、選択操作のために開かない）。
+      // 文字列から見つけた URL（WebLinks）と、出力が埋め込んだリンク（OSC 8）で共通。
+      const activateLink = (event: MouseEvent, uri: string) => {
+        if (!event.metaKey || !isOpenableUrl(uri)) return;
+        openExternalUrl(uri).catch((e: unknown) =>
+          console.error("URLを開けませんでした:", e),
+        );
+      };
       const term = new Terminal({
         ...options,
+        linkHandler: { activate: activateLink },
         macOptionIsMeta: meta,
         theme: themeFor(initialTheme).xterm,
       });
@@ -141,15 +155,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       const searchAddon = new SearchAddon();
       term.loadAddon(searchAddon);
       searchRef.current = searchAddon;
-      // URL は ⌘+クリックで開く（修飾キーなしのクリックは、選択操作のために開かない）。
-      term.loadAddon(
-        new WebLinksAddon((event, uri) => {
-          if (!event.metaKey || !isOpenableUrl(uri)) return;
-          openExternalUrl(uri).catch((e: unknown) =>
-            console.error("URLを開けませんでした:", e),
-          );
-        }),
-      );
+      term.loadAddon(new WebLinksAddon(activateLink));
       term.open(container);
       termRef.current = term;
       // 画面の文字列を調べて色を付ける（テストの偽物など、バッファを持たない場合は使わない）。
@@ -170,6 +176,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
           d === "\x7f" && backspaceKeyRef.current === "bs" ? "\x08" : d,
         ),
       );
+      const bellSub = term.onBell(() => onBellRef.current?.());
       const resizeSub = term.onResize(({ cols, rows }) =>
         onResizeRef.current(cols, rows),
       );
@@ -183,6 +190,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       return () => {
         observer.disconnect();
         dataSub.dispose();
+        bellSub.dispose();
         resizeSub.dispose();
         batcherRef.current?.dispose();
         batcherRef.current = null;

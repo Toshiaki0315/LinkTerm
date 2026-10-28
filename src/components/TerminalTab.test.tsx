@@ -40,6 +40,7 @@ const clipboard = vi.hoisted(() => ({ copyText: vi.fn(), pasteText: vi.fn() }));
 vi.mock("../lib/clipboard", () => clipboard);
 const viewProps = vi.hoisted(() => ({
   onInput: (_d: string) => {},
+  onBell: undefined as undefined | (() => void),
   onContextMenu: undefined as
     undefined | ((p: { x: number; y: number }) => void),
 }));
@@ -50,11 +51,13 @@ vi.mock("./TerminalView", async () => {
       (
         props: {
           onInput: (d: string) => void;
+          onBell?: () => void;
           onContextMenu?: (p: { x: number; y: number }) => void;
         },
         ref: React.Ref<unknown>,
       ) => {
         viewProps.onInput = props.onInput;
+        viewProps.onBell = props.onBell;
         viewProps.onContextMenu = props.onContextMenu;
         React.useImperativeHandle(ref, () => ({
           write: termWrite,
@@ -486,6 +489,61 @@ describe("TerminalTab", () => {
       expect(
         screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
       ).toBeNull();
+    });
+  });
+
+  describe("ベル", () => {
+    const mount = (active: boolean, onAttention = vi.fn()) => {
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="t"
+          values={telnet}
+          active={active}
+          onAttention={onAttention}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+      return onAttention;
+    };
+
+    it("鳴ったら画面を一瞬光らせ、すぐ戻す", () => {
+      vi.useFakeTimers();
+      try {
+        vi.spyOn(document, "hasFocus").mockReturnValue(true);
+        mount(true);
+        expect(screen.queryByTestId("bell-flash")).toBeNull();
+        act(() => viewProps.onBell!());
+        expect(screen.getByTestId("bell-flash")).toBeInTheDocument();
+        act(() => {
+          vi.advanceTimersByTime(200);
+        });
+        expect(screen.queryByTestId("bell-flash")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
+    });
+
+    it("見ていないタブ（または注目のないウィンドウ）で鳴ったら、タブの注目表示も出す。見ているときは出さない", () => {
+      const spy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const watching = mount(true);
+      act(() => viewProps.onBell!());
+      expect(watching).not.toHaveBeenCalled();
+      spy.mockReturnValue(false);
+      act(() => viewProps.onBell!());
+      expect(watching).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
+
+    it("非アクティブなタブで鳴ったら、注目表示を出す", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const onAttention = mount(false);
+      act(() => viewProps.onBell!());
+      expect(onAttention).toHaveBeenCalledTimes(1);
     });
   });
 

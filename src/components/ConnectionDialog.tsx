@@ -96,6 +96,8 @@ interface Props {
   /** ~/.ssh/config の Host の別名（ホスト名の候補）。 */
   loadSshHosts?: () => Promise<string[]>;
   profiles?: SavedProfile[];
+  /** 「管理…」（保存済みの接続の一覧・整理）。渡さなければボタンを出さない。 */
+  onManageProfiles?: () => void;
   onDeleteProfile?: (id: string) => void;
   /** 最近使った接続先。選ぶと入力欄に反映する（パスワード類は含まない）。 */
   recents?: RecentEntry[];
@@ -162,6 +164,7 @@ export function ConnectionDialog({
   loadSerialPorts = listSerialPorts,
   loadSshHosts = listSshHosts,
   profiles = [],
+  onManageProfiles,
   onDeleteProfile,
   recents = [],
 }: Props) {
@@ -372,6 +375,18 @@ export function ConnectionDialog({
                   </Select>
                 )}
               </Field>
+              {onManageProfiles && !selectedProfile && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onManageProfiles();
+                  }}
+                >
+                  管理…
+                </Button>
+              )}
               {selectedProfile && (
                 <Button
                   type="button"

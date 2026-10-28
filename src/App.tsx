@@ -937,6 +937,7 @@ function App() {
         onSubmit={addTab}
         profiles={profiles}
         onDeleteProfile={onDeleteProfile}
+        onManageProfiles={() => setProfilesOpen(true)}
         recents={recent.list}
       />
       <SettingsDialog

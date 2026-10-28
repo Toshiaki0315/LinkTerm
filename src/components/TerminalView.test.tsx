@@ -13,6 +13,7 @@ const xterm = vi.hoisted(() => {
   const handlers: {
     data?: (d: string) => void;
     resize?: (s: { cols: number; rows: number }) => void;
+    bell?: () => void;
   } = {};
   /** 次に作る端末が持つ、画面バッファの偽物。 */
   const next: { buffer?: unknown } = {};
@@ -36,6 +37,10 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon = vi.fn();
     onData = vi.fn((cb: (d: string) => void) => {
       xterm.handlers.data = cb;
+      return { dispose: vi.fn() };
+    });
+    onBell = vi.fn((cb: () => void) => {
+      xterm.handlers.bell = cb;
       return { dispose: vi.fn() };
     });
     onResize = vi.fn((cb: (s: { cols: number; rows: number }) => void) => {
@@ -376,6 +381,32 @@ describe("TerminalView", () => {
         (xterm.instances[0].write.mock.lastCall![1] as () => void)();
       }).not.toThrow();
     });
+  });
+
+  it("ベル（BEL）が鳴ったら通知する。最新の通知先を使う", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender } = render(
+      <TerminalView
+        active
+        onBell={first}
+        onInput={() => {}}
+        onResize={() => {}}
+      />,
+    );
+    xterm.handlers.bell!();
+    expect(first).toHaveBeenCalledTimes(1);
+    rerender(
+      <TerminalView
+        active
+        onBell={second}
+        onInput={() => {}}
+        onResize={() => {}}
+      />,
+    );
+    xterm.handlers.bell!();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
   });
 
   it("ハンドルから現在のサイズを取得できる", () => {
@@ -762,6 +793,28 @@ describe("TerminalView", () => {
       const open = links.handlers[0];
       open(new MouseEvent("click", { metaKey: true }), "javascript:alert(1)");
       open(new MouseEvent("click", { metaKey: true }), "file:///etc/passwd");
+      expect(opener.openExternalUrl).not.toHaveBeenCalled();
+    });
+
+    it("OSC 8 のリンク（出力が埋め込んだリンク）も、⌘+クリックで開く。http / https 以外は開かない", () => {
+      mount();
+      const handler = xterm.instances[0].options.linkHandler as {
+        activate: (e: MouseEvent, text: string) => void;
+      };
+      handler.activate(new MouseEvent("click"), "https://example.com/a");
+      expect(opener.openExternalUrl).not.toHaveBeenCalled();
+      handler.activate(
+        new MouseEvent("click", { metaKey: true }),
+        "https://example.com/a",
+      );
+      expect(opener.openExternalUrl).toHaveBeenCalledWith(
+        "https://example.com/a",
+      );
+      opener.openExternalUrl.mockClear();
+      handler.activate(
+        new MouseEvent("click", { metaKey: true }),
+        "javascript:alert(1)",
+      );
       expect(opener.openExternalUrl).not.toHaveBeenCalled();
     });
 

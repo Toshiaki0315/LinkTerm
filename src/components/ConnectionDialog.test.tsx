@@ -563,6 +563,26 @@ describe("ConnectionDialog", () => {
     });
   });
 
+  it("「管理…」で、接続ダイアログを閉じて、保存済みの接続の管理を開く", async () => {
+    const user = userEvent.setup();
+    const onManageProfiles = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <ConnectionDialog
+        open
+        onOpenChange={onOpenChange}
+        onSubmit={vi.fn()}
+        profiles={[
+          { id: "p1", name: "a", values: { type: "local", encoding: "UTF-8" } },
+        ]}
+        onManageProfiles={onManageProfiles}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "管理…" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onManageProfiles).toHaveBeenCalled();
+  });
+
   describe("保存済みの接続の整理", () => {
     it("保存するときにフォルダーとタグを指定できる", async () => {
       const { user, onSubmit } = setup();

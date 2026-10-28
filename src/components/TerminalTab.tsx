@@ -106,6 +106,28 @@ export function TerminalTab({
       : null;
   }, [highlightRules]);
 
+  /** ベルが鳴った直後の、画面の点滅。 */
+  const [bellFlash, setBellFlash] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** ベル: 画面を一瞬光らせる。見ていなければ、タブの注目表示も出す。 */
+  const onBell = useCallback(() => {
+    setBellFlash(true);
+    if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => {
+      flashTimer.current = null;
+      setBellFlash(false);
+    }, 150);
+    const live = liveRef.current;
+    if (!live.active || !document.hasFocus()) live.onAttention?.();
+  }, []);
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
   /** 通知する規則に一致したとき。画面を見ていなければ、通知とタブの注目表示を出す。 */
   const onMatches = useCallback((hits: HighlightRule[]) => {
     const live = liveRef.current;
@@ -408,6 +430,13 @@ export function TerminalTab({
           title={title}
         />
       )}
+      {bellFlash && (
+        <div
+          aria-hidden
+          data-testid="bell-flash"
+          className="pointer-events-none absolute inset-0 z-10 bg-white/10 ring-2 ring-inset ring-sky-400/60"
+        />
+      )}
       {searchOpen && (
         <SearchBar
           onFind={(term, options, direction, incremental) =>
@@ -424,6 +453,7 @@ export function TerminalTab({
         appearance={appearance}
         highlightRules={highlightRules}
         showTimestamps={showTimestamps}
+        onBell={onBell}
         onInput={onInput}
         onResize={onResize}
         onContextMenu={({ x, y }) =>
