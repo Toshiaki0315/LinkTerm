@@ -360,6 +360,352 @@ pub async fn upload(
     }
 }
 
+/// フォルダー転送で扱う、ファイル・フォルダーの数の上限。
+pub const MAX_TREE_ENTRIES: usize = 20_000;
+/// フォルダー転送で辿る深さの上限（シンボリックリンクは辿らないが、念のため）。
+pub const MAX_TREE_DEPTH: usize = 32;
+
+/// フォルダー転送の結果。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeSummary {
+    /// 保存した先（ダウンロードならローカル、アップロードならリモートのパス）。
+    pub path: String,
+    /// 転送したファイルの数。
+    pub files: u64,
+    /// 転送しなかったもの（シンボリックリンク・使えない名前・通常でないファイル）の数。
+    pub skipped: u64,
+}
+
+/// 木の1件（起点からの相対パス）。
+struct TreeItem {
+    /// 起点からの、名前の並び。
+    rel: Vec<String>,
+    is_dir: bool,
+    size: u64,
+}
+
+/// リモートのフォルダーの中身を、浅い順に集める。シンボリックリンクと使えない名前は飛ばす。
+async fn scan_remote(fs: &dyn RemoteFs, root: &str) -> Result<(Vec<TreeItem>, u64), SftpError> {
+    let mut items = Vec::new();
+    let mut skipped = 0u64;
+    let mut queue = std::collections::VecDeque::from([(root.to_owned(), Vec::<String>::new())]);
+    while let Some((dir, rel)) = queue.pop_front() {
+        if rel.len() >= MAX_TREE_DEPTH {
+            return Err(SftpError::Invalid(format!(
+                "フォルダーが深すぎます（{MAX_TREE_DEPTH}階層まで）"
+            )));
+        }
+        for entry in list_dir(fs, &dir).await? {
+            if entry.is_symlink || validate_file_name(&entry.name).is_err() {
+                skipped += 1;
+                continue;
+            }
+            let mut child = rel.clone();
+            child.push(entry.name.clone());
+            if entry.is_dir {
+                queue.push_back((join_remote(&dir, &entry.name), child.clone()));
+            }
+            items.push(TreeItem {
+                rel: child,
+                is_dir: entry.is_dir,
+                size: entry.size,
+            });
+            if items.len() > MAX_TREE_ENTRIES {
+                return Err(SftpError::Invalid(format!(
+                    "ファイルが多すぎます（{MAX_TREE_ENTRIES}件まで）"
+                )));
+            }
+        }
+    }
+    Ok((items, skipped))
+}
+
+/// ローカルのフォルダーの中身を、浅い順に集める。シンボリックリンクと通常でないファイルは飛ばす。
+fn scan_local(root: &Path) -> Result<(Vec<TreeItem>, u64), SftpError> {
+    let mut items = Vec::new();
+    let mut skipped = 0u64;
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), Vec::<String>::new())]);
+    while let Some((dir, rel)) = queue.pop_front() {
+        if rel.len() >= MAX_TREE_DEPTH {
+            return Err(SftpError::Invalid(format!(
+                "フォルダーが深すぎます（{MAX_TREE_DEPTH}階層まで）"
+            )));
+        }
+        let read = std::fs::read_dir(&dir).map_err(local(format!("{} の一覧", dir.display())))?;
+        let mut entries: Vec<_> = read
+            .collect::<Result<_, _>>()
+            .map_err(local(format!("{} の一覧", dir.display())))?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let kind = entry
+                .file_type()
+                .map_err(local(format!("{} の確認", entry.path().display())))?;
+            if kind.is_symlink()
+                || !(kind.is_dir() || kind.is_file())
+                || validate_file_name(&name).is_err()
+            {
+                skipped += 1;
+                continue;
+            }
+            let mut child = rel.clone();
+            child.push(name);
+            if kind.is_dir() {
+                queue.push_back((entry.path(), child.clone()));
+            }
+            let size = if kind.is_file() {
+                entry
+                    .metadata()
+                    .map_err(local(format!("{} の確認", entry.path().display())))?
+                    .len()
+            } else {
+                0
+            };
+            items.push(TreeItem {
+                rel: child,
+                is_dir: kind.is_dir(),
+                size,
+            });
+            if items.len() > MAX_TREE_ENTRIES {
+                return Err(SftpError::Invalid(format!(
+                    "ファイルが多すぎます（{MAX_TREE_ENTRIES}件まで）"
+                )));
+            }
+        }
+    }
+    Ok((items, skipped))
+}
+
+/// 既存と重ならない名前で、フォルダーを作る（`名前`, `名前 (1)`, ...）。
+fn create_unique_dir(parent: &Path, name: &str) -> Result<PathBuf, SftpError> {
+    for n in 0..10_000u32 {
+        let candidate = if n == 0 {
+            name.to_owned()
+        } else {
+            format!("{name} ({n})")
+        };
+        let path = parent.join(&candidate);
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(local(format!("{} の作成", path.display()))(e)),
+        }
+    }
+    Err(SftpError::Invalid(
+        "保存先のフォルダー名を決められませんでした".into(),
+    ))
+}
+
+fn join_rel(base: &str, rel: &[String]) -> String {
+    rel.iter()
+        .fold(base.to_owned(), |acc, n| join_remote(&acc, n))
+}
+
+/// リモートのフォルダーを、`dest_dir` の中へ、中身ごとダウンロードする。
+/// 同名のフォルダーがあれば `名前 (1)` のように別名にし、統合しない。途中で失敗・中止したら、作った分は消す。
+pub async fn download_dir(
+    fs: &dyn RemoteFs,
+    remote_dir: &str,
+    dest_dir: &Path,
+    cancel: &CancelToken,
+    on_progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<TreeSummary, SftpError> {
+    let remote_dir = validate_remote_path(remote_dir)?;
+    let name = remote_base_name(remote_dir)?;
+    match fs.stat(remote_dir).await? {
+        Some(s) if s.is_dir => {}
+        Some(_) => {
+            return Err(SftpError::Invalid(format!(
+                "{remote_dir} はフォルダーではありません"
+            )));
+        }
+        None => {
+            return Err(SftpError::Invalid(format!("{remote_dir} が見つかりません")));
+        }
+    }
+    let (items, skipped) = scan_remote(fs, remote_dir).await?;
+    let total: u64 = items.iter().filter(|i| !i.is_dir).map(|i| i.size).sum();
+    let top = create_unique_dir(dest_dir, name)?;
+    let result = async {
+        let mut done = 0u64;
+        let mut files = 0u64;
+        on_progress(0, total);
+        for item in &items {
+            if cancel.is_cancelled() {
+                return Err(SftpError::Cancelled);
+            }
+            let local_path = item.rel.iter().fold(top.clone(), |p, n| p.join(n));
+            if item.is_dir {
+                std::fs::create_dir(&local_path)
+                    .map_err(local(format!("{} の作成", local_path.display())))?;
+                continue;
+            }
+            let remote_path = join_rel(remote_dir, &item.rel);
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&local_path)
+                .map_err(local(format!("{} の作成", local_path.display())))?;
+            let mut reader = fs.open_read(&remote_path).await?;
+            let mut writer = tokio::fs::File::from_std(file);
+            let base = done;
+            copy_with_progress(
+                &mut reader,
+                &mut writer,
+                item.size,
+                cancel,
+                &mut |d, _| on_progress(base + d, total.max(base + d)),
+                (
+                    &Side::remote(format!("{remote_path} の読み込み")),
+                    &Side::local(format!("{} の書き込み", local_path.display())),
+                ),
+            )
+            .await
+            .map(|n| {
+                done += n;
+                files += 1;
+            })?;
+        }
+        Ok((files, done))
+    }
+    .await;
+    match result {
+        Ok((files, done)) => {
+            on_progress(done, total.max(done));
+            Ok(TreeSummary {
+                path: top.display().to_string(),
+                files,
+                skipped,
+            })
+        }
+        Err(e) => {
+            // 作った分は残さない。
+            let _ = std::fs::remove_dir_all(&top);
+            Err(e)
+        }
+    }
+}
+
+/// ローカルのフォルダーを、リモートの `remote_parent` の中へ、中身ごとアップロードする。
+/// 同名のリモートのフォルダーがあるときは、`overwrite` が `true` でなければ `Exists`
+/// （`true` なら、中身を統合し、同名のファイルは上書きする）。失敗・中止したら、新しく作った分は消す。
+pub async fn upload_dir(
+    fs: &dyn RemoteFs,
+    local_dir: &Path,
+    remote_parent: &str,
+    overwrite: bool,
+    cancel: &CancelToken,
+    on_progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<TreeSummary, SftpError> {
+    let remote_parent = validate_remote_path(remote_parent)?;
+    let meta =
+        std::fs::metadata(local_dir).map_err(local(format!("{} の確認", local_dir.display())))?;
+    if !meta.is_dir() {
+        return Err(SftpError::Invalid("フォルダーを指定してください".into()));
+    }
+    let name = local_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| SftpError::Invalid("フォルダー名を読み取れません".into()))?;
+    let name = validate_file_name(name)?;
+    let remote_root = join_remote(remote_parent, name);
+    let (items, skipped) = scan_local(local_dir)?;
+    let total: u64 = items.iter().filter(|i| !i.is_dir).map(|i| i.size).sum();
+
+    let root_existed = match fs.stat(&remote_root).await? {
+        Some(s) if !s.is_dir => {
+            return Err(SftpError::Invalid(format!(
+                "{remote_root} はファイルのため、フォルダーを作れません"
+            )));
+        }
+        Some(_) if !overwrite => return Err(SftpError::Exists(remote_root)),
+        Some(_) => true,
+        None => false,
+    };
+
+    // 新しく作ったもの（失敗したときに消す）。
+    let mut created_files: Vec<String> = Vec::new();
+    let mut created_dirs: Vec<String> = Vec::new();
+    let result = async {
+        if !root_existed {
+            fs.mkdir(&remote_root).await?;
+            created_dirs.push(remote_root.clone());
+        }
+        let mut done = 0u64;
+        let mut files = 0u64;
+        on_progress(0, total);
+        for item in &items {
+            if cancel.is_cancelled() {
+                return Err(SftpError::Cancelled);
+            }
+            let remote_path = join_rel(&remote_root, &item.rel);
+            if item.is_dir {
+                if fs.stat(&remote_path).await?.is_none() {
+                    fs.mkdir(&remote_path).await?;
+                    created_dirs.push(remote_path);
+                }
+                continue;
+            }
+            let local_path = item
+                .rel
+                .iter()
+                .fold(local_dir.to_path_buf(), |p, n| p.join(n));
+            match fs.stat(&remote_path).await? {
+                Some(s) if s.is_dir => {
+                    return Err(SftpError::Invalid(format!(
+                        "{remote_path} はフォルダーのため上書きできません"
+                    )));
+                }
+                Some(_) => {}
+                None => created_files.push(remote_path.clone()),
+            }
+            let mut reader = tokio::fs::File::open(&local_path)
+                .await
+                .map_err(local(format!("{} の読み込み", local_path.display())))?;
+            let mut writer = fs.open_write(&remote_path).await?;
+            let base = done;
+            let n = copy_with_progress(
+                &mut reader,
+                &mut writer,
+                item.size,
+                cancel,
+                &mut |d, _| on_progress(base + d, total.max(base + d)),
+                (
+                    &Side::local(format!("{} の読み込み", local_path.display())),
+                    &Side::remote(format!("{remote_path} の書き込み")),
+                ),
+            )
+            .await?;
+            drop(writer);
+            done += n;
+            files += 1;
+        }
+        Ok((files, done))
+    }
+    .await;
+    match result {
+        Ok((files, done)) => {
+            on_progress(done, total.max(done));
+            Ok(TreeSummary {
+                path: remote_root,
+                files,
+                skipped,
+            })
+        }
+        Err(e) => {
+            // 新しく作った分だけを消す（もとからあったファイルは触らない）。できなくても、元のエラーを返す。
+            for f in created_files.iter().rev() {
+                let _ = fs.remove_file(f).await;
+            }
+            for d in created_dirs.iter().rev() {
+                let _ = fs.remove_dir(d).await;
+            }
+            Err(e)
+        }
+    }
+}
+
 /// フォルダーを作る。
 pub async fn make_dir(fs: &dyn RemoteFs, dir: &str, name: &str) -> Result<String, SftpError> {
     let dir = validate_remote_path(dir)?;
@@ -520,6 +866,10 @@ mod tests {
         dirs: Arc<Mutex<BTreeSet<String>>>,
         /// この文字数を書いたところで書き込みを失敗させる。
         fail_write_after: Option<usize>,
+        /// 一覧にシンボリックリンクとして出すパス。
+        symlinks: Vec<String>,
+        /// 一覧に（実体のない）ファイルとして出すパス。不正な名前の試験用。
+        extra_names: Vec<String>,
     }
 
     impl MemFs {
@@ -610,6 +960,20 @@ mod tests {
                     && !rest.contains('/')
                 {
                     out.push(entry(rest, true, 0));
+                }
+            }
+            for l in &self.symlinks {
+                if let Some(rest) = l.strip_prefix(&prefix)
+                    && !rest.contains('/')
+                {
+                    let mut e = entry(rest, false, 0);
+                    e.is_symlink = true;
+                    out.push(e);
+                }
+            }
+            for x in &self.extra_names {
+                if let Some(rest) = x.strip_prefix(&prefix) {
+                    out.push(entry(rest, false, 0));
                 }
             }
             Ok(out)
@@ -908,5 +1272,267 @@ mod tests {
         assert!(dir.is_dir());
         assert!(default_download_dir(None).is_err());
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// リモートに `/h/proj` を作る: /h/proj/a.txt, /h/proj/sub/b.txt, /h/proj/sub/deep/c.txt, 空の /h/proj/empty。
+    fn remote_tree() -> MemFs {
+        MemFs::default()
+            .with_dir("/h")
+            .with_dir("/h/proj")
+            .with_dir("/h/proj/sub")
+            .with_dir("/h/proj/sub/deep")
+            .with_dir("/h/proj/empty")
+            .with_file("/h/proj/a.txt", b"AAA")
+            .with_file("/h/proj/sub/b.txt", b"BBBB")
+            .with_file("/h/proj/sub/deep/c.txt", b"C")
+    }
+
+    #[tokio::test]
+    async fn download_dir_recreates_the_tree_and_reports_total_progress() {
+        let fs = remote_tree();
+        let dest = temp_dir("dd");
+        let mut last = (0, 0);
+        let summary = download_dir(
+            &fs,
+            "/h/proj",
+            &dest,
+            &CancelToken::default(),
+            &mut |d, t| last = (d, t),
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.path, dest.join("proj"));
+        assert_eq!(summary.files, 3);
+        assert_eq!(std::fs::read(dest.join("proj/a.txt")).unwrap(), b"AAA");
+        assert_eq!(std::fs::read(dest.join("proj/sub/b.txt")).unwrap(), b"BBBB");
+        assert_eq!(
+            std::fs::read(dest.join("proj/sub/deep/c.txt")).unwrap(),
+            b"C"
+        );
+        assert!(dest.join("proj/empty").is_dir());
+        assert_eq!(last, (8, 8));
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    #[tokio::test]
+    async fn download_dir_never_merges_into_an_existing_folder() {
+        let fs = remote_tree();
+        let dest = temp_dir("dd-unique");
+        std::fs::create_dir_all(dest.join("proj")).unwrap();
+        std::fs::write(dest.join("proj/keep.txt"), b"mine").unwrap();
+        let summary = download_dir(&fs, "/h/proj", &dest, &CancelToken::default(), &mut noop())
+            .await
+            .unwrap();
+        assert_eq!(summary.path, dest.join("proj (1)"));
+        assert_eq!(std::fs::read(dest.join("proj/keep.txt")).unwrap(), b"mine");
+        assert!(dest.join("proj (1)/a.txt").is_file());
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    #[tokio::test]
+    async fn download_dir_skips_symlinks_and_bad_names_and_counts_them() {
+        let mut fs = remote_tree();
+        fs.symlinks.push("/h/proj/link".into());
+        fs.extra_names.push("/h/proj/bad\\name".into());
+        let dest = temp_dir("dd-skip");
+        let summary = download_dir(&fs, "/h/proj", &dest, &CancelToken::default(), &mut noop())
+            .await
+            .unwrap();
+        assert_eq!(summary.skipped, 2);
+        assert!(!dest.join("proj/link").exists());
+        assert_eq!(summary.files, 3);
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    #[tokio::test]
+    async fn download_dir_rejects_files_missing_paths_and_too_many_entries() {
+        let fs = remote_tree();
+        let dest = temp_dir("dd-bad");
+        let c = CancelToken::default();
+        for path in ["/h/proj/a.txt", "/h/none", ""] {
+            assert!(
+                matches!(
+                    download_dir(&fs, path, &dest, &c, &mut noop()).await,
+                    Err(SftpError::Invalid(_))
+                ),
+                "{path}"
+            );
+        }
+        let mut big = MemFs::default().with_dir("/h").with_dir("/h/big");
+        for i in 0..=MAX_TREE_ENTRIES {
+            big = big.with_file(&format!("/h/big/f{i}"), b"");
+        }
+        assert!(matches!(
+            download_dir(&big, "/h/big", &dest, &c, &mut noop()).await,
+            Err(SftpError::Invalid(_))
+        ));
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    #[tokio::test]
+    async fn cancelled_download_dir_removes_what_it_created() {
+        let fs = remote_tree();
+        let dest = temp_dir("dd-cancel");
+        let cancel = CancelToken::default();
+        let token = cancel.clone();
+        let r = download_dir(&fs, "/h/proj", &dest, &cancel, &mut |d, _| {
+            if d >= 3 {
+                token.cancel();
+            }
+        })
+        .await;
+        assert!(matches!(r, Err(SftpError::Cancelled)));
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(dest);
+    }
+
+    fn local_tree(name: &str) -> PathBuf {
+        let root = temp_dir(name);
+        let proj = root.join("proj");
+        std::fs::create_dir_all(proj.join("sub/deep")).unwrap();
+        std::fs::create_dir_all(proj.join("empty")).unwrap();
+        std::fs::write(proj.join("a.txt"), b"AAA").unwrap();
+        std::fs::write(proj.join("sub/b.txt"), b"BBBB").unwrap();
+        std::fs::write(proj.join("sub/deep/c.txt"), b"C").unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn upload_dir_recreates_the_tree_on_the_remote() {
+        let root = local_tree("ud");
+        let fs = MemFs::default().with_dir("/h");
+        let mut last = (0, 0);
+        let summary = upload_dir(
+            &fs,
+            &root.join("proj"),
+            "/h",
+            false,
+            &CancelToken::default(),
+            &mut |d, t| last = (d, t),
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.path, "/h/proj");
+        assert_eq!(summary.files, 3);
+        assert_eq!(fs.file("/h/proj/a.txt").unwrap(), b"AAA");
+        assert_eq!(fs.file("/h/proj/sub/b.txt").unwrap(), b"BBBB");
+        assert_eq!(fs.file("/h/proj/sub/deep/c.txt").unwrap(), b"C");
+        assert!(fs.dirs.lock().unwrap().contains("/h/proj/empty"));
+        assert_eq!(last, (8, 8));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn upload_dir_asks_before_merging_into_an_existing_remote_folder() {
+        let root = local_tree("ud-exists");
+        let fs = MemFs::default()
+            .with_dir("/h")
+            .with_dir("/h/proj")
+            .with_file("/h/proj/a.txt", b"old")
+            .with_file("/h/proj/other.txt", b"keep");
+        let c = CancelToken::default();
+        assert!(matches!(
+            upload_dir(&fs, &root.join("proj"), "/h", false, &c, &mut noop()).await,
+            Err(SftpError::Exists(p)) if p == "/h/proj"
+        ));
+        assert_eq!(fs.file("/h/proj/a.txt").unwrap(), b"old");
+        upload_dir(&fs, &root.join("proj"), "/h", true, &c, &mut noop())
+            .await
+            .unwrap();
+        assert_eq!(fs.file("/h/proj/a.txt").unwrap(), b"AAA");
+        assert_eq!(fs.file("/h/proj/other.txt").unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn upload_dir_rejects_a_remote_file_with_the_same_name_and_non_directories() {
+        let root = local_tree("ud-bad");
+        let fs = MemFs::default().with_dir("/h").with_file("/h/proj", b"x");
+        let c = CancelToken::default();
+        assert!(matches!(
+            upload_dir(&fs, &root.join("proj"), "/h", true, &c, &mut noop()).await,
+            Err(SftpError::Invalid(_))
+        ));
+        assert!(matches!(
+            upload_dir(&fs, &root.join("proj/a.txt"), "/h", true, &c, &mut noop()).await,
+            Err(SftpError::Invalid(_))
+        ));
+        assert!(matches!(
+            upload_dir(&fs, &root.join("none"), "/h", true, &c, &mut noop()).await,
+            Err(SftpError::Local { .. })
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn upload_dir_skips_symlinks() {
+        let root = local_tree("ud-link");
+        std::os::unix::fs::symlink("/etc/hosts", root.join("proj/link")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("proj/loop")).unwrap();
+        let fs = MemFs::default().with_dir("/h");
+        let summary = upload_dir(
+            &fs,
+            &root.join("proj"),
+            "/h",
+            false,
+            &CancelToken::default(),
+            &mut noop(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.skipped, 2);
+        assert!(fs.file("/h/proj/link").is_none());
+        assert_eq!(summary.files, 3);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cancelled_or_failed_upload_dir_removes_what_it_created_but_keeps_existing_files() {
+        let root = local_tree("ud-cancel");
+        let fs = MemFs::default().with_dir("/h");
+        let cancel = CancelToken::default();
+        let token = cancel.clone();
+        let r = upload_dir(
+            &fs,
+            &root.join("proj"),
+            "/h",
+            false,
+            &cancel,
+            &mut |d, _| {
+                if d >= 3 {
+                    token.cancel();
+                }
+            },
+        )
+        .await;
+        assert!(matches!(r, Err(SftpError::Cancelled)));
+        assert!(fs.files.lock().unwrap().is_empty());
+        assert!(!fs.dirs.lock().unwrap().contains("/h/proj"));
+
+        // 既存のフォルダーへ統合して失敗した場合、もとからあったファイルは消さない。
+        let existing = MemFs::default()
+            .with_dir("/h")
+            .with_dir("/h/proj")
+            .with_file("/h/proj/other.txt", b"keep");
+        let cancel = CancelToken::default();
+        let token = cancel.clone();
+        let r = upload_dir(
+            &existing,
+            &root.join("proj"),
+            "/h",
+            true,
+            &cancel,
+            &mut |d, _| {
+                if d >= 3 {
+                    token.cancel();
+                }
+            },
+        )
+        .await;
+        assert!(matches!(r, Err(SftpError::Cancelled)));
+        assert_eq!(existing.file("/h/proj/other.txt").unwrap(), b"keep");
+        assert!(existing.dirs.lock().unwrap().contains("/h/proj"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

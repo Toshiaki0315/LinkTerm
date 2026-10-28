@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 
 use crate::commands::{AppState, CommandError, CommandResult};
 use crate::sftp::{
-    CancelToken, RemoteEntry, RemoteFs, SftpError, SftpFs, default_download_dir, download,
-    list_dir, make_dir, remove, upload, validate_remote_path,
+    CancelToken, RemoteEntry, RemoteFs, SftpError, SftpFs, TreeSummary, default_download_dir,
+    download, download_dir, list_dir, make_dir, remove, upload, upload_dir, validate_remote_path,
 };
 
 pub const EVENT_PROGRESS: &str = "sftp-progress";
@@ -155,7 +155,55 @@ pub async fn sftp_list(
     Ok(result?)
 }
 
-/// ダウンロードフォルダーへ保存する。保存したパスを返す。
+/// 転送の結果。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferResult {
+    /// 同名のものがあり、上書き・統合しなかった（アップロードのみ）。
+    pub exists: bool,
+    /// 保存した先（または、既存だったもののパス）。
+    pub path: String,
+    /// フォルダーの転送か。
+    pub is_dir: bool,
+    /// フォルダー転送で転送したファイルの数（ファイルなら 1）。
+    pub files: u64,
+    /// フォルダー転送で、転送しなかったものの数。
+    pub skipped: u64,
+}
+
+impl TransferResult {
+    fn file(path: String) -> Self {
+        Self {
+            exists: false,
+            path,
+            is_dir: false,
+            files: 1,
+            skipped: 0,
+        }
+    }
+
+    fn tree(s: TreeSummary) -> Self {
+        Self {
+            exists: false,
+            path: s.path,
+            is_dir: true,
+            files: s.files,
+            skipped: s.skipped,
+        }
+    }
+
+    fn exists(path: String, is_dir: bool) -> Self {
+        Self {
+            exists: true,
+            path,
+            is_dir,
+            files: 0,
+            skipped: 0,
+        }
+    }
+}
+
+/// ダウンロードフォルダーへ保存する（ファイルでもフォルダーでも）。
 #[tauri::command]
 pub async fn sftp_download(
     app: AppHandle,
@@ -164,23 +212,29 @@ pub async fn sftp_download(
     session_id: String,
     remote_path: String,
     transfer_id: String,
-) -> CommandResult<String> {
+) -> CommandResult<TransferResult> {
     let fs = sftp.fs_for(&state, &session_id).await?;
     let dir = default_download_dir(std::env::var_os("HOME").map(PathBuf::from))?;
     let token = sftp.register(&transfer_id);
     let mut on_progress = progress_emitter(&app, &transfer_id);
-    let result = download(fs.as_ref(), &remote_path, &dir, &token, &mut on_progress).await;
+    let result = async {
+        let is_dir = fs
+            .stat(validate_remote_path(&remote_path)?)
+            .await?
+            .is_some_and(|s| s.is_dir);
+        if is_dir {
+            download_dir(fs.as_ref(), &remote_path, &dir, &token, &mut on_progress)
+                .await
+                .map(TransferResult::tree)
+        } else {
+            download(fs.as_ref(), &remote_path, &dir, &token, &mut on_progress)
+                .await
+                .map(|p| TransferResult::file(p.display().to_string()))
+        }
+    }
+    .await;
     sftp.finish(&transfer_id);
-    Ok(result?.display().to_string())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UploadResult {
-    /// 同名のファイルがあり、上書きしなかった。
-    pub exists: bool,
-    /// アップロード先（または、既存だったファイル）のパス。
-    pub path: String,
+    Ok(result?)
 }
 
 #[derive(Deserialize)]
@@ -194,34 +248,46 @@ pub struct UploadRequest {
     transfer_id: String,
 }
 
-/// ローカルのファイルを、リモートのフォルダーへアップロードする。
+/// ローカルのファイル・フォルダーを、リモートのフォルダーへアップロードする。
 #[tauri::command]
 pub async fn sftp_upload(
     app: AppHandle,
     state: State<'_, AppState>,
     sftp: State<'_, SftpState>,
     req: UploadRequest,
-) -> CommandResult<UploadResult> {
+) -> CommandResult<TransferResult> {
     let fs = sftp.fs_for(&state, &req.session_id).await?;
     let token = sftp.register(&req.transfer_id);
     let mut on_progress = progress_emitter(&app, &req.transfer_id);
-    let result = upload(
-        fs.as_ref(),
-        std::path::Path::new(&req.local_path),
-        &req.remote_dir,
-        req.overwrite,
-        &token,
-        &mut on_progress,
-    )
-    .await;
+    let local = std::path::Path::new(&req.local_path);
+    let is_dir = local.is_dir();
+    let result = if is_dir {
+        upload_dir(
+            fs.as_ref(),
+            local,
+            &req.remote_dir,
+            req.overwrite,
+            &token,
+            &mut on_progress,
+        )
+        .await
+        .map(TransferResult::tree)
+    } else {
+        upload(
+            fs.as_ref(),
+            local,
+            &req.remote_dir,
+            req.overwrite,
+            &token,
+            &mut on_progress,
+        )
+        .await
+        .map(TransferResult::file)
+    };
     sftp.finish(&req.transfer_id);
     match result {
-        Ok(path) => Ok(UploadResult {
-            exists: false,
-            path,
-        }),
-        Err(SftpError::Exists(path)) => Ok(UploadResult { exists: true, path }),
-        Err(e) => Err(e.into()),
+        Err(SftpError::Exists(path)) => Ok(TransferResult::exists(path, is_dir)),
+        other => Ok(other?),
     }
 }
 

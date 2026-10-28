@@ -31,6 +31,15 @@ const entry = (over: Partial<RemoteEntry>): RemoteEntry => ({
 let emitProgress: (p: TransferProgress) => void;
 let emitDrop: (paths: string[]) => void;
 
+const ok = (path: string, over: Record<string, unknown> = {}) => ({
+  exists: false,
+  path,
+  isDir: false,
+  files: 1,
+  skipped: 0,
+  ...over,
+});
+
 const home = {
   path: "/home/u",
   entries: [
@@ -46,8 +55,14 @@ beforeEach(() => {
       ? { path: "/home/u/docs", entries: [entry({ name: "inner.md" })] }
       : home,
   );
-  api.sftpDownload.mockResolvedValue("/Users/me/Downloads/a.txt");
-  api.sftpUpload.mockResolvedValue({ exists: false, path: "/home/u/up.txt" });
+  api.sftpDownload.mockResolvedValue({
+    exists: false,
+    path: "/Users/me/Downloads/a.txt",
+    isDir: false,
+    files: 1,
+    skipped: 0,
+  });
+  api.sftpUpload.mockResolvedValue(ok("/home/u/up.txt"));
   api.sftpMkdir.mockResolvedValue("/home/u/new");
   api.sftpRemove.mockResolvedValue(undefined);
   api.sftpCancel.mockResolvedValue(true);
@@ -110,9 +125,9 @@ describe("SftpDialog", () => {
   });
 
   it("ダウンロードすると保存先を表示する。進捗イベントで更新される", async () => {
-    let resolve!: (p: string) => void;
+    let resolve!: (r: ReturnType<typeof ok>) => void;
     api.sftpDownload.mockReturnValueOnce(
-      new Promise<string>((r) => (resolve = r)),
+      new Promise<ReturnType<typeof ok>>((r) => (resolve = r)),
     );
     const { user } = await setup();
     await user.click(
@@ -129,11 +144,51 @@ describe("SftpDialog", () => {
       "value",
       "50",
     );
-    await act(async () => resolve("/Users/me/Downloads/a.txt"));
+    await act(async () => resolve(ok("/Users/me/Downloads/a.txt")));
     expect(
       await screen.findByText(/保存先: \/Users\/me\/Downloads\/a.txt/),
     ).toBeInTheDocument();
     expect(screen.getByText("完了")).toBeInTheDocument();
+  });
+
+  it("フォルダーもダウンロードできる。ファイル数と、転送しなかった数を表示する", async () => {
+    api.sftpDownload.mockResolvedValueOnce(
+      ok("/Users/me/Downloads/docs", { isDir: true, files: 12, skipped: 2 }),
+    );
+    const { user } = await setup();
+    await user.click(
+      screen.getByRole("button", { name: "docs をダウンロード" }),
+    );
+    expect(api.sftpDownload).toHaveBeenCalledWith(
+      "s1",
+      "/home/u/docs",
+      expect.any(String),
+    );
+    expect(
+      await screen.findByText(
+        "保存先: /Users/me/Downloads/docs（12ファイル。2件はリンクなどのため転送せず）",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("同名のフォルダーがあるアップロードは、統合してよいか確認する", async () => {
+    api.sftpUpload
+      .mockResolvedValueOnce(
+        ok("/home/u/proj", { exists: true, isDir: true, files: 0 }),
+      )
+      .mockResolvedValueOnce(ok("/home/u/proj", { isDir: true, files: 5 }));
+    const { user } = await setup();
+    await act(async () => emitDrop(["/a/proj"]));
+    const box = await screen.findByRole("alertdialog");
+    expect(box).toHaveTextContent(
+      "中身を統合し、同名のファイルは上書きしますか？",
+    );
+    await user.click(within(box).getByRole("button", { name: "上書き" }));
+    await waitFor(() => expect(api.sftpUpload).toHaveBeenCalledTimes(2));
+    expect(api.sftpUpload.mock.calls[1][0]).toMatchObject({ overwrite: true });
+    expect(
+      await screen.findByText("/home/u/proj（5ファイル）"),
+    ).toBeInTheDocument();
   });
 
   it("実行中の転送は「中止」で止められる", async () => {
@@ -188,8 +243,8 @@ describe("SftpDialog", () => {
 
   it("同名のファイルがあれば確認し、「上書き」で上書きしてアップロードする", async () => {
     api.sftpUpload
-      .mockResolvedValueOnce({ exists: true, path: "/home/u/up.txt" })
-      .mockResolvedValueOnce({ exists: false, path: "/home/u/up.txt" });
+      .mockResolvedValueOnce(ok("/home/u/up.txt", { exists: true }))
+      .mockResolvedValueOnce(ok("/home/u/up.txt"));
     const { user } = await setup();
     await act(async () => emitDrop(["/a/up.txt"]));
     const box = await screen.findByRole("alertdialog");
@@ -201,10 +256,9 @@ describe("SftpDialog", () => {
   });
 
   it("「スキップ」なら上書きしない", async () => {
-    api.sftpUpload.mockResolvedValueOnce({
-      exists: true,
-      path: "/home/u/up.txt",
-    });
+    api.sftpUpload.mockResolvedValueOnce(
+      ok("/home/u/up.txt", { exists: true }),
+    );
     const { user } = await setup();
     await act(async () => emitDrop(["/a/up.txt"]));
     const box = await screen.findByRole("alertdialog");

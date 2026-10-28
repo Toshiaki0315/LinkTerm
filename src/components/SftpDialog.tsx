@@ -56,7 +56,13 @@ interface Transfer {
 
 type Confirm =
   | { kind: "delete"; entry: RemoteEntry }
-  | { kind: "overwrite"; localPath: string };
+  | { kind: "overwrite"; localPath: string; isDir: boolean };
+
+/** フォルダー転送の結果の説明（ファイル数と、転送しなかった数）。 */
+const treeNote = (r: { isDir: boolean; files: number; skipped: number }) =>
+  r.isDir
+    ? `（${r.files}ファイル${r.skipped > 0 ? `。${r.skipped}件はリンクなどのため転送せず` : ""}）`
+    : "";
 
 const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -71,7 +77,9 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   /** 同名のファイルがあり、確認待ちのアップロード。 */
-  const overwriteQueue = useRef<string[]>([]);
+  const overwriteQueue = useRef<Array<{ localPath: string; isDir: boolean }>>(
+    [],
+  );
   const pathRef = useRef<string | null>(null);
 
   const load = useCallback(
@@ -132,11 +140,16 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
         if (result.exists) {
           // 上書きしてよいか確認する（まとめて落としたときは、順に聞く）。
           setTransfers((l) => l.filter((t) => t.id !== id));
-          overwriteQueue.current.push(localPath);
-          setConfirm((c) => c ?? { kind: "overwrite", localPath });
+          overwriteQueue.current.push({ localPath, isDir: result.isDir });
+          setConfirm(
+            (c) => c ?? { kind: "overwrite", localPath, isDir: result.isDir },
+          );
           return;
         }
-        patchTransfer(id, { state: "done", message: result.path });
+        patchTransfer(id, {
+          state: "done",
+          message: `${result.path}${treeNote(result)}`,
+        });
       } catch (e) {
         const message = describe(e);
         patchTransfer(id, {
@@ -198,7 +211,10 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
         joinPath(path, entry.name),
         id,
       );
-      patchTransfer(id, { state: "done", message: `保存先: ${saved}` });
+      patchTransfer(id, {
+        state: "done",
+        message: `保存先: ${saved.path}${treeNote(saved)}`,
+      });
     } catch (e) {
       const message = describe(e);
       patchTransfer(id, {
@@ -213,7 +229,7 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
     if (current?.kind !== "overwrite") return;
     overwriteQueue.current.shift();
     const next = overwriteQueue.current[0];
-    setConfirm(next ? { kind: "overwrite", localPath: next } : null);
+    setConfirm(next ? { kind: "overwrite", ...next } : null);
     if (yes) await upload(current.localPath, true);
     if (!next) await load(pathRef.current ?? undefined);
   };
@@ -257,7 +273,7 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
       <DialogContent className="max-w-3xl">
         <DialogTitle>ファイル（SFTP）— {title}</DialogTitle>
         <DialogDescription className="mt-1">
-          ファイルをこの画面へドラッグ＆ドロップするか「アップロード」で、表示中のフォルダーへ送ります。ダウンロードは「ダウンロード」フォルダーへ保存します（フォルダー単位の転送には未対応です）。
+          ファイルをこの画面へドラッグ＆ドロップするか「アップロード」で、表示中のフォルダーへ送ります。ダウンロードは「ダウンロード」フォルダーへ保存します（フォルダーも中身ごと転送できます。シンボリックリンクは転送しません）。
         </DialogDescription>
 
         <div className="mt-3 flex items-center gap-1">
@@ -339,7 +355,10 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
             className="mt-2 flex items-center justify-between gap-2 rounded border border-amber-600 bg-amber-950/40 px-3 py-2 text-sm"
           >
             <span>
-              「{baseName(confirm.localPath)}」は既にあります。上書きしますか？
+              「{baseName(confirm.localPath)}」は既にあります。
+              {confirm.isDir
+                ? "中身を統合し、同名のファイルは上書きしますか？"
+                : "上書きしますか？"}
             </span>
             <span className="flex gap-1">
               <Button size="sm" onClick={() => void answerOverwrite(true)}>
@@ -417,17 +436,15 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
                     {formatModified(entry.modified)}
                   </span>
                   <span className="flex w-16 shrink-0 justify-end gap-1">
-                    {!entry.isDir && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6"
-                        aria-label={`${entry.name} をダウンロード`}
-                        onClick={() => void download(entry)}
-                      >
-                        <Download className="h-4 w-4" />
-                      </Button>
-                    )}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6"
+                      aria-label={`${entry.name} をダウンロード`}
+                      onClick={() => void download(entry)}
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
                     <Button
                       size="icon"
                       variant="ghost"

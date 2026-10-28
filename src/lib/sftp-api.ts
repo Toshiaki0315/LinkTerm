@@ -20,10 +20,18 @@ export interface SftpListing {
   entries: RemoteEntry[];
 }
 
-export interface UploadResult {
-  /** 同名のファイルがあり、上書きしなかった。 */
+/** 転送の結果（ファイル・フォルダー共通）。 */
+export interface TransferResult {
+  /** 同名のものがあり、上書き・統合しなかった（アップロードのみ）。 */
   exists: boolean;
+  /** 保存した先（または、既存だったもののパス）。 */
   path: string;
+  /** フォルダーの転送か。 */
+  isDir: boolean;
+  /** 転送したファイルの数。 */
+  files: number;
+  /** フォルダー転送で、転送しなかったもの（シンボリックリンクなど）の数。 */
+  skipped: number;
 }
 
 export interface TransferProgress {
@@ -35,12 +43,17 @@ export interface TransferProgress {
 export const sftpList = (sessionId: string, path?: string) =>
   invoke<SftpListing>("sftp_list", { sessionId, path: path ?? null });
 
-/** ダウンロードフォルダーへ保存する。保存したパスを返す。 */
+/** ダウンロードフォルダーへ保存する（ファイルでもフォルダーでも）。 */
 export const sftpDownload = (
   sessionId: string,
   remotePath: string,
   transferId: string,
-) => invoke<string>("sftp_download", { sessionId, remotePath, transferId });
+) =>
+  invoke<TransferResult>("sftp_download", {
+    sessionId,
+    remotePath,
+    transferId,
+  });
 
 export const sftpUpload = (req: {
   sessionId: string;
@@ -48,7 +61,7 @@ export const sftpUpload = (req: {
   remoteDir: string;
   overwrite: boolean;
   transferId: string;
-}) => invoke<UploadResult>("sftp_upload", { req });
+}) => invoke<TransferResult>("sftp_upload", { req });
 
 export const sftpMkdir = (sessionId: string, dir: string, name: string) =>
   invoke<string>("sftp_mkdir", { sessionId, dir, name });
