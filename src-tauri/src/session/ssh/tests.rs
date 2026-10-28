@@ -38,6 +38,12 @@ struct ServerState {
     agent_reply: Mutex<Option<Vec<u8>>>,
     /// エージェント転送を受けたあと、転送先のチャネルを開こうとするか（試験用）。
     open_agent_channel: std::sync::atomic::AtomicBool,
+    /// PTY の要求で受けた端末の種類（TERM）。
+    pty_term: Mutex<Option<String>>,
+    /// 指定すると、`sftp` サブシステムでこのフォルダーを根にした本物の SFTP サーバーを動かす。
+    sftp_root: Mutex<Option<PathBuf>>,
+    /// SFTP 用に預かったセッションのチャネル。
+    sftp_channels: Mutex<std::collections::HashMap<ChannelId, Channel<Msg>>>,
 }
 
 #[derive(Clone)]
@@ -82,10 +88,17 @@ impl server::Handler for MockServer {
 
     async fn channel_open_session(
         &mut self,
-        _channel: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.state.sftp_root.lock().unwrap().is_some() {
+            self.state
+                .sftp_channels
+                .lock()
+                .unwrap()
+                .insert(channel.id(), channel);
+        }
         reply.accept().await;
         Ok(())
     }
@@ -178,7 +191,7 @@ impl server::Handler for MockServer {
     async fn pty_request(
         &mut self,
         channel: ChannelId,
-        _term: &str,
+        term: &str,
         col: u32,
         row: u32,
         _pw: u32,
@@ -187,6 +200,7 @@ impl server::Handler for MockServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         *self.state.pty_requested.lock().unwrap() = true;
+        *self.state.pty_term.lock().unwrap() = Some(term.to_owned());
         *self.state.window.lock().unwrap() = Some((col, row));
         session.channel_success(channel)
     }
@@ -242,6 +256,21 @@ impl server::Handler for MockServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.state.subsystems.lock().unwrap().push(name.to_owned());
+        let root = self.state.sftp_root.lock().unwrap().clone();
+        if let (Some(root), "sftp") = (root, name) {
+            let channel = self.state.sftp_channels.lock().unwrap().remove(&channel);
+            if let Some(channel) = channel {
+                // この後のデータは SFTP のストリームが処理する（エコーしない）。
+                self.state.forwarded.lock().unwrap().insert(channel.id());
+                session.channel_success(channel.id())?;
+                russh_sftp::server::run(
+                    channel.into_stream(),
+                    crate::sftp_e2e_tests::DirServer::new(root),
+                )
+                .await;
+                return Ok(());
+            }
+        }
         if self
             .state
             .reject_subsystem
@@ -1309,6 +1338,164 @@ async fn open_sftp_requests_the_sftp_subsystem_and_returns_a_working_stream() {
     stream.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf, b"ping");
     s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_requested_terminal_type_is_sent_in_the_pty_request() {
+    let h = start_server(None).await;
+    let mut cfg = config(h.port, password("secret"));
+    cfg.term = "vt100".into();
+    let mut s = SshSession::connect(
+        cfg,
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    read_until(&mut s, "welcome").await;
+    assert_eq!(h.state.pty_term.lock().unwrap().as_deref(), Some("vt100"));
+    s.close().await.unwrap();
+}
+
+/// 本物の SFTP サーバー（一時フォルダーが根）を動かす。
+fn sftp_root(h: &Harness, root: &std::path::Path) {
+    *h.state.sftp_root.lock().unwrap() = Some(root.to_owned());
+}
+
+async fn sftp_over(s: &mut SshSession) -> crate::sftp::SftpFs {
+    let stream = s.open_sftp().await.unwrap();
+    crate::sftp::SftpFs(
+        russh_sftp::client::SftpSession::new(stream)
+            .await
+            .expect("SFTP の初期化"),
+    )
+}
+
+async fn round_trip_files(
+    fs: &crate::sftp::SftpFs,
+    work: &std::path::Path,
+    remote: &std::path::Path,
+) {
+    use crate::sftp::{CancelToken, download, list_dir, upload};
+    let src = work.join("hello.txt");
+    std::fs::write(&src, "こんにちは").unwrap();
+    let up = upload(
+        fs,
+        &src,
+        "/",
+        false,
+        &CancelToken::default(),
+        &mut |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(up, "/hello.txt");
+    assert_eq!(
+        std::fs::read_to_string(remote.join("hello.txt")).unwrap(),
+        "こんにちは"
+    );
+    let names: Vec<_> = list_dir(fs, "/")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, ["hello.txt"]);
+    let down = work.join("down");
+    std::fs::create_dir(&down).unwrap();
+    let saved = download(
+        fs,
+        "/hello.txt",
+        &down,
+        &CancelToken::default(),
+        &mut |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(saved).unwrap(), "こんにちは");
+}
+
+#[tokio::test]
+async fn sftp_transfers_files_over_a_real_ssh_connection() {
+    let work = temp_dir("sftp-direct-work");
+    let remote = temp_dir("sftp-direct-remote");
+    let h = start_server(None).await;
+    sftp_root(&h, &remote);
+    let mut s = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    let fs = sftp_over(&mut s).await;
+    round_trip_files(&fs, &work, &remote).await;
+    s.close().await.unwrap();
+    let _ = std::fs::remove_dir_all(work);
+    let _ = std::fs::remove_dir_all(remote);
+}
+
+#[tokio::test]
+async fn sftp_also_works_through_a_jump_host() {
+    let dir = temp_dir("sftp-jump-keys");
+    let work = temp_dir("sftp-jump-work");
+    let remote = temp_dir("sftp-jump-remote");
+    let (key_path, public) = new_key(&dir, "jump_key");
+    let target = start_server(None).await;
+    sftp_root(&target, &remote);
+    let bastion = start_server_with(Some(public), true).await;
+    let mut s = connect_via(
+        &target,
+        vec![jump(&bastion, Some(&key_path))],
+        password("secret"),
+        Arc::new(InMemoryKnownHosts::default()),
+        true,
+    )
+    .await
+    .unwrap();
+    let fs = sftp_over(&mut s).await;
+    round_trip_files(&fs, &work, &remote).await;
+    assert_eq!(bastion.state.direct.lock().unwrap().len(), 1);
+    s.close().await.unwrap();
+    for d in [dir, work, remote] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[tokio::test]
+async fn two_sftp_sessions_on_one_connection_work_independently() {
+    // 分割画面のペインは、それぞれ別の SSH 接続だが、同じサーバーへ同時に SFTP を張っても
+    // 互いの操作が混ざらないこと。
+    let remote = temp_dir("sftp-two-remote");
+    let h = start_server(None).await;
+    sftp_root(&h, &remote);
+    let mut a = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    let mut b = SshSession::connect(
+        config(h.port, password("secret")),
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+    .unwrap();
+    let fa = sftp_over(&mut a).await;
+    let fb = sftp_over(&mut b).await;
+    use crate::sftp::RemoteFs;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut w = fa.open_write("/from-a.txt").await.unwrap();
+        w.write_all(b"A").await.unwrap();
+        w.shutdown().await.unwrap();
+    }
+    assert!(fb.stat("/from-a.txt").await.unwrap().is_some());
+    a.close().await.unwrap();
+    b.close().await.unwrap();
+    let _ = std::fs::remove_dir_all(remote);
 }
 
 #[tokio::test]

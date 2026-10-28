@@ -14,6 +14,8 @@ pub mod session_state;
 pub mod settings;
 pub mod sftp;
 pub mod sftp_commands;
+#[cfg(test)]
+mod sftp_e2e_tests;
 pub mod snippets;
 pub mod ssh_config;
 
