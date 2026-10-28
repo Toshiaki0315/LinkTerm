@@ -5,6 +5,7 @@ export interface Init {
   highlights?: unknown[];
   snippets?: unknown[];
   profiles?: unknown[];
+  recent?: unknown[];
 }
 
 /** 画面を開く。`init` で、保存済みの設定などを最初から入れておける。 */
@@ -126,3 +127,11 @@ export async function openSettings(page: Page): Promise<void> {
 }
 
 export const panes = (page: Page): Locator => page.locator("[data-pane-id]");
+
+/** 保存済みの接続を、画面を通さずに入れておく。 */
+export const profile = (
+  id: string,
+  name: string,
+  values: Record<string, unknown>,
+  extra: { folder?: string; tags?: string[] } = {},
+) => ({ id, name, values, ...extra });

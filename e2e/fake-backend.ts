@@ -1,4 +1,4 @@
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { DEFAULT_SETTINGS } from "../src/lib/settings";
 
@@ -24,6 +24,14 @@ interface E2E {
   sessions: string[];
   /** 端末へ届いた入力（`terminal_write`）。 */
   written: Array<{ id: string; data: string }>;
+  /** 偽のリモートのフォルダー（パス → 中身）。SFTP の画面試験用。 */
+  remote: Record<string, Array<{ name: string; isDir: boolean; size: number }>>;
+  /** ファイル選択ダイアログが返すパス。 */
+  pickedFiles: string[];
+  /** 保存ダイアログが返すパス（null ならキャンセル）。 */
+  savePath: string | null;
+  /** `sftp_upload` が「既に存在する」を返す名前。 */
+  existing: string[];
   /** 偽のシェルが入力をそのまま返す（ローカルエコー相当）か。 */
   echo: boolean;
 }
@@ -52,6 +60,17 @@ const e2e: E2E = {
   clipboard: "",
   overrides: {},
   sessions: [],
+  remote: {
+    "/home/alice": [
+      { name: "docs", isDir: true, size: 0 },
+      { name: "a.txt", isDir: false, size: 1536 },
+    ],
+    "/home/alice/docs": [{ name: "b.md", isDir: false, size: 20 }],
+    "/home": [{ name: "alice", isDir: true, size: 0 }],
+  },
+  pickedFiles: ["/Users/me/up.txt"],
+  savePath: "/Users/me/screen.txt",
+  existing: [],
   written: [],
   echo: true,
   async output(id, text) {
@@ -141,15 +160,24 @@ function handle(cmd: string, args: Args): unknown {
     case "list_profiles":
       return e2e.profiles;
     case "save_profile": {
+      const existing = e2e.profiles.find((p) => p.id === args.id);
       const saved = {
-        id: `p${e2e.profiles.length + 1}`,
+        id: (args.id as string | null) ?? `p${e2e.profiles.length + 1}`,
         name: args.name,
         values: args.values,
-        folder: args.folder ?? undefined,
-        tags: args.tags ?? undefined,
+        folder: args.folder ?? existing?.folder ?? undefined,
+        tags: args.tags ?? existing?.tags ?? undefined,
       };
-      e2e.profiles.push(saved);
+      e2e.profiles = [...e2e.profiles.filter((p) => p.id !== saved.id), saved];
       return saved;
+    }
+    case "update_profile": {
+      const found = e2e.profiles.find((p) => p.id === args.id);
+      if (!found) return null;
+      found.name = args.name;
+      found.folder = args.folder ?? undefined;
+      found.tags = args.tags;
+      return found;
     }
     case "delete_profile":
       e2e.profiles = e2e.profiles.filter((p) => p.id !== args.id);
@@ -184,7 +212,63 @@ function handle(cmd: string, args: Args): unknown {
       return "/tmp/linkterm.log";
     case "save_text_file":
       return null;
+    case "sftp_list": {
+      const path = (args.path as string | null) ?? "/home/alice";
+      const entries = e2e.remote[path];
+      if (!entries) throw `${path} の一覧に失敗しました`;
+      return {
+        path,
+        entries: entries.map((e) => ({
+          ...e,
+          isSymlink: false,
+          modified: 1_700_000_000,
+          permissions: 0o644,
+        })),
+      };
+    }
+    case "sftp_mkdir": {
+      const dir = String(args.dir);
+      const name = String(args.name);
+      e2e.remote[dir] = [
+        ...(e2e.remote[dir] ?? []),
+        { name, isDir: true, size: 0 },
+      ];
+      e2e.remote[`${dir}/${name}`] = [];
+      return `${dir}/${name}`;
+    }
+    case "sftp_remove": {
+      const path = String(args.path);
+      const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+      const name = path.slice(path.lastIndexOf("/") + 1);
+      e2e.remote[dir] = (e2e.remote[dir] ?? []).filter((e) => e.name !== name);
+      return null;
+    }
+    case "sftp_download": {
+      const remotePath = String(args.remotePath);
+      const name = remotePath.slice(remotePath.lastIndexOf("/") + 1);
+      return {
+        exists: false,
+        path: `/Users/me/Downloads/${name}`,
+        isDir: Array.isArray(e2e.remote[remotePath]),
+        files: 3,
+        skipped: 0,
+      };
+    }
+    case "sftp_upload": {
+      const req = args.req as { localPath: string; overwrite: boolean };
+      const name = req.localPath.slice(req.localPath.lastIndexOf("/") + 1);
+      if (e2e.existing.includes(name) && !req.overwrite) {
+        return { exists: true, path: name, isDir: false, files: 0, skipped: 0 };
+      }
+      return { exists: false, path: name, isDir: false, files: 1, skipped: 0 };
+    }
+    case "sftp_cancel":
+      return true;
     // プラグイン
+    case "plugin:dialog|open":
+      return e2e.pickedFiles;
+    case "plugin:dialog|save":
+      return e2e.savePath;
     case "plugin:clipboard-manager|write_text":
       e2e.clipboard = String(args.text ?? "");
       return null;
@@ -199,6 +283,7 @@ function handle(cmd: string, args: Args): unknown {
   }
 }
 
+mockWindows("main");
 mockIPC((cmd, payload) => handle(cmd, (payload ?? {}) as Args), {
   shouldMockEvents: true,
 });
