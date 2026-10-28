@@ -118,3 +118,11 @@ export async function openedUrls(page: Page): Promise<string[]> {
       .map((c) => JSON.stringify(c.args)),
   );
 }
+
+/** メニューバーの「設定…」を選んだことにして、設定画面を開く。 */
+export async function openSettings(page: Page): Promise<void> {
+  await page.evaluate(() => window.__e2e.emit("menu-open-settings"));
+  await expect(page.getByRole("dialog")).toBeVisible();
+}
+
+export const panes = (page: Page): Locator => page.locator("[data-pane-id]");

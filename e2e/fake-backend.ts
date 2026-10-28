@@ -19,6 +19,8 @@ interface E2E {
   overrides: Record<string, (args: Args) => unknown>;
   /** 端末にデータを届ける（バックエンドからの出力）。 */
   output(id: string, text: string | Uint8Array): Promise<void>;
+  /** バックエンドのイベント（メニューの選択など）を送る。 */
+  emit(event: string, payload?: unknown): Promise<void>;
   sessions: string[];
   /** 端末へ届いた入力（`terminal_write`）。 */
   written: Array<{ id: string; data: string }>;
@@ -56,6 +58,9 @@ const e2e: E2E = {
     const bytes =
       typeof text === "string" ? new TextEncoder().encode(text) : text;
     await emit("terminal-data", { id, data: toBase64(bytes) });
+  },
+  async emit(event, payload) {
+    await emit(event, payload ?? null);
   },
 };
 window.__e2e = e2e;
