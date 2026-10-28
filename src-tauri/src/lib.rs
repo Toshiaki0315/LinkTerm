@@ -3,6 +3,7 @@ pub mod atomic_file;
 pub mod commands;
 pub mod fonts;
 pub mod highlights;
+pub mod keybindings;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
@@ -62,6 +63,8 @@ pub fn run() {
             sftp_commands::sftp_mkdir,
             sftp_commands::sftp_remove,
             sftp_commands::sftp_cancel,
+            commands::get_keybindings,
+            commands::save_keybindings,
             commands::get_highlight_rules,
             commands::save_highlight_rules,
             commands::get_snippets,

@@ -5,6 +5,7 @@ import {
   type PaletteActions,
   type PaletteContext,
 } from "./palette-commands";
+import { DEFAULT_BINDINGS, resolveBindings } from "./shortcuts";
 import type { Tab } from "./tabs";
 
 const local = { type: "local", encoding: "UTF-8" } as const;
@@ -35,6 +36,7 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     openRecent: vi.fn(),
     clearRecents: vi.fn(),
     openProfile: vi.fn(),
+    openShortcuts: vi.fn(),
   };
 }
 
@@ -47,6 +49,7 @@ const build = (over: Partial<PaletteContext> = {}) => {
     recents: [],
     profiles: [],
     broadcast: "off",
+    bindings: DEFAULT_BINDINGS,
     actions: a as unknown as PaletteActions,
     ...over,
   });
@@ -176,5 +179,19 @@ describe("buildPaletteCommands", () => {
 
   it("履歴がなければ、履歴の消去は出さない", () => {
     expect(build().list.map((c) => c.id)).not.toContain("clear-recents");
+  });
+
+  it("ショートカットのヒントは、いまの割り当てを表示する", () => {
+    const custom = resolveBindings([{ id: "split-right", binding: "Cmd+e" }]);
+    const { byId } = build({ bindings: custom });
+    expect(byId("split-row").hint).toBe("⌘E");
+    expect(byId("split-column").hint).toBe("⇧⌘D");
+    expect(byId("new").hint).toBe("⌘T");
+  });
+
+  it("「ショートカットを設定…」を呼べる", () => {
+    const { byId, a } = build();
+    byId("shortcuts").run();
+    expect(a.openShortcuts).toHaveBeenCalled();
   });
 });

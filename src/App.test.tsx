@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   listProfiles: vi.fn(),
   getRecentConnections: vi.fn(),
   saveRecentConnections: vi.fn(),
+  getKeybindings: vi.fn(),
+  saveKeybindings: vi.fn(),
   getHighlightRules: vi.fn(),
   saveHighlightRules: vi.fn(),
   getSnippets: vi.fn(),
@@ -95,6 +97,8 @@ beforeEach(() => {
   api.listProfiles.mockResolvedValue([]);
   api.getRecentConnections.mockResolvedValue([]);
   api.saveRecentConnections.mockResolvedValue(undefined);
+  api.getKeybindings.mockResolvedValue([]);
+  api.saveKeybindings.mockImplementation(async (b) => b);
   api.getHighlightRules.mockResolvedValue([]);
   api.saveHighlightRules.mockImplementation(async (r) => r);
   api.getSnippets.mockResolvedValue([]);
@@ -424,6 +428,73 @@ describe("App", () => {
       await user.keyboard("{Enter}");
       await waitFor(() => expect(sent).toEqual(["ls\r"]));
       off();
+    });
+  });
+
+  describe("ショートカットの設定", () => {
+    it("保存済みの割り当てで動く（古いキーは動かない）", async () => {
+      api.getKeybindings.mockResolvedValue([
+        { id: "palette", binding: "Cmd+k" },
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.getKeybindings).toHaveBeenCalled());
+      // 読み込みの反映を待つ（⌘K で開けば反映済み）。
+      await waitFor(async () => {
+        await user.keyboard("{Meta>}k{/Meta}");
+        expect(
+          screen.getByRole("combobox", { name: "コマンドを検索" }),
+        ).toBeInTheDocument();
+      });
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("combobox", { name: "コマンドを検索" }),
+        ).toBeNull(),
+      );
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      expect(
+        screen.queryByRole("combobox", { name: "コマンドを検索" }),
+      ).toBeNull();
+    });
+
+    it("パレットから設定画面を開いて変更すると保存し、すぐ使える。パレットのヒントも変わる", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      await user.type(
+        await screen.findByRole("combobox", { name: "コマンドを検索" }),
+        "ショートカット",
+      );
+      await user.keyboard("{Enter}");
+      await user.click(
+        await screen.findByRole("button", {
+          name: "コマンドパレット のショートカットを変更",
+        }),
+      );
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+      await waitFor(() => expect(api.saveKeybindings).toHaveBeenCalled());
+      expect(api.saveKeybindings).toHaveBeenCalledWith([
+        { id: "palette", binding: "Cmd+k" },
+      ]);
+      await user.click(screen.getByRole("button", { name: "閉じる" }));
+      await user.keyboard("{Meta>}k{/Meta}");
+      expect(
+        await screen.findByRole("combobox", { name: "コマンドを検索" }),
+      ).toBeInTheDocument();
+    });
+
+    it("設定画面のボタンからも開ける", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await waitFor(() => expect(api.onOpenSettings).toHaveBeenCalled());
+      act(() => openSettingsFromMenu());
+      await user.click(
+        await screen.findByRole("button", { name: "ショートカットを設定…" }),
+      );
+      expect(
+        await screen.findByRole("dialog", { name: "ショートカット" }),
+      ).toBeInTheDocument();
     });
   });
 

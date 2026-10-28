@@ -11,6 +11,7 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { CommandPalette } from "./components/CommandPalette";
 import { HighlightsDialog } from "./components/HighlightsDialog";
 import { SnippetsDialog } from "./components/SnippetsDialog";
@@ -44,7 +45,12 @@ import {
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
 import { sendToPane } from "./lib/pane-input";
-import { shortcutFor } from "./lib/shortcuts";
+import {
+  overridesOf,
+  resolveBindings,
+  shortcutFor,
+  type Bindings,
+} from "./lib/shortcuts";
 import { runSnippet, type Snippet } from "./lib/snippets";
 import type { SplitDir } from "./lib/layout";
 import {
@@ -64,6 +70,8 @@ import {
   respondHostKey,
   getRecentConnections,
   getHighlightRules,
+  getKeybindings,
+  saveKeybindings,
   getSnippets,
   saveHighlightRules,
   saveSnippets,
@@ -144,6 +152,32 @@ function App() {
   }, [recentDirty, recentPayload]);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** 初期値から変えたショートカット。 */
+  const [keyOverrides, setKeyOverrides] = useState<
+    Array<{ id: string; binding: string }>
+  >([]);
+  const bindings = useMemo(() => resolveBindings(keyOverrides), [keyOverrides]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getKeybindings()
+      .then((list) => {
+        if (!cancelled) setKeyOverrides(list);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled)
+          setNotice(`ショートカットを読み込めません: ${describe(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSaveBindings = useCallback(async (next: Bindings) => {
+    setKeyOverrides(await saveKeybindings(overridesOf(next)));
+  }, []);
+
   /** 同時入力の範囲。 */
   const [broadcast, setBroadcast] = useState<BroadcastMode>("off");
 
@@ -455,6 +489,7 @@ function App() {
     snippetsOpen ||
     highlightsOpen ||
     paletteOpen ||
+    shortcutsOpen ||
     hostKeyQueue.length > 0;
 
   // 見たタブの印は消す（切り替えたとき・ウィンドウに戻ったとき）。
@@ -482,7 +517,7 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       // ダイアログ表示中は入力を妨げない。
       if (modalOpen) return;
-      const action = shortcutFor(event);
+      const action = shortcutFor(event, bindings);
       if (!action) return;
       event.preventDefault();
       switch (action.type) {
@@ -537,7 +572,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalOpen, state.activeId, activeTab, splitTab]);
+  }, [modalOpen, state.activeId, activeTab, splitTab, bindings]);
 
   const addTab = useCallback(
     (values: ConnectionValues, options?: SubmitOptions) => {
@@ -694,6 +729,7 @@ function App() {
         recents: recent.list,
         profiles,
         broadcast,
+        bindings,
         actions: {
           newConnection: () => setDialog({}),
           openSettings: () => setSettingsOpen(true),
@@ -734,6 +770,7 @@ function App() {
           openRecent: onOpenRecent,
           clearRecents: onClearRecents,
           openProfile: onOpenProfile,
+          openShortcuts: () => setShortcutsOpen(true),
         },
       }),
     [
@@ -744,6 +781,7 @@ function App() {
       recent.list,
       profiles,
       broadcast,
+      bindings,
       splitTab,
       onDuplicateTab,
       onRunSnippet,
@@ -845,6 +883,16 @@ function App() {
         settings={settings}
         profiles={profiles}
         onSave={onSaveSettings}
+        onOpenShortcuts={() => {
+          setSettingsOpen(false);
+          setShortcutsOpen(true);
+        }}
+      />
+      <ShortcutsDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        bindings={bindings}
+        onSave={onSaveBindings}
       />
       <CommandPalette
         open={paletteOpen}

@@ -29,6 +29,8 @@ import {
   deleteProfile,
   getRecentConnections,
   getHighlightRules,
+  getKeybindings,
+  saveKeybindings,
   saveHighlightRules,
   getSnippets,
   saveSnippets,
@@ -199,6 +201,18 @@ describe("最近使った接続", () => {
     expect(invoke).toHaveBeenCalledWith("save_recent_connections", {
       entries: [entry],
     });
+  });
+});
+
+describe("ショートカット", () => {
+  it("取得と保存は、対応するコマンドを呼ぶ", async () => {
+    const b = { id: "palette", binding: "Cmd+k" };
+    invoke.mockResolvedValueOnce([b]);
+    await expect(getKeybindings()).resolves.toEqual([b]);
+    expect(invoke).toHaveBeenCalledWith("get_keybindings");
+    invoke.mockResolvedValueOnce([b]);
+    await expect(saveKeybindings([b])).resolves.toEqual([b]);
+    expect(invoke).toHaveBeenCalledWith("save_keybindings", { bindings: [b] });
   });
 });
 

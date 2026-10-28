@@ -184,6 +184,18 @@ export const saveSettings = (settings: Settings) =>
 export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
   listen<null>("menu-open-settings", () => cb());
 
+/** 保存済みのショートカット（初期値から変えたものだけ）。 */
+export const getKeybindings = () =>
+  invoke<Array<{ id: string; binding: string }>>("get_keybindings");
+
+/** ショートカットを保存する（変えたものだけを渡す）。 */
+export const saveKeybindings = (
+  bindings: Array<{ id: string; binding: string }>,
+) =>
+  invoke<Array<{ id: string; binding: string }>>("save_keybindings", {
+    bindings,
+  });
+
 /** 保存済みのハイライト規則。 */
 export const getHighlightRules = () =>
   invoke<HighlightRule[]>("get_highlight_rules");

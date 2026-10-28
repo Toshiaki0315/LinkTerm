@@ -99,6 +99,8 @@ interface Props {
   onSave: (settings: Settings) => Promise<void>;
   /** インストール済みのフォント一覧。開くたびに読み込む。 */
   loadFonts?: () => Promise<FontFamily[]>;
+  /** 「ショートカットを設定…」。渡さなければボタンを出さない。 */
+  onOpenShortcuts?: () => void;
 }
 
 function Row({
@@ -131,6 +133,7 @@ export function SettingsDialog({
   profiles,
   onSave,
   loadFonts = listFonts,
+  onOpenShortcuts,
 }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null);
   /** `null` は未読み込み。再度開いたときは前回の一覧を表示しつつ、読み込み直す。 */
@@ -427,6 +430,11 @@ export function SettingsDialog({
             <p role="alert" className="text-xs text-red-400">
               {saveError}
             </p>
+          )}
+          {onOpenShortcuts && (
+            <Button type="button" variant="outline" onClick={onOpenShortcuts}>
+              ショートカットを設定…
+            </Button>
           )}
           <div className="mt-2 flex items-center justify-between gap-2">
             <Button

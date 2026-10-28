@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { shortcutFor } from "./shortcuts";
+import {
+  DEFAULT_BINDINGS,
+  SHORTCUT_DEFS,
+  bindingFromEvent,
+  formatBinding,
+  overridesOf,
+  resolveBindings,
+  shortcutFor,
+  validateBinding,
+} from "./shortcuts";
 
 const key = (
   k: string,
@@ -122,5 +131,124 @@ describe("shortcutFor", () => {
       type: "palette",
     });
     expect(shortcutFor(key("p", { metaKey: true }))).toBeNull();
+  });
+});
+
+describe("bindingFromEvent", () => {
+  it("⌘ を伴う入力を、キーの組み合わせにする（Shift の記号は元のキーに戻す）", () => {
+    expect(bindingFromEvent(key("p", { metaKey: true, shiftKey: true }))).toBe(
+      "Cmd+Shift+p",
+    );
+    expect(bindingFromEvent(key("P", { metaKey: true, shiftKey: true }))).toBe(
+      "Cmd+Shift+p",
+    );
+    expect(bindingFromEvent(key("{", { metaKey: true, shiftKey: true }))).toBe(
+      "Cmd+Shift+[",
+    );
+    expect(bindingFromEvent(key("t", { metaKey: true }))).toBe("Cmd+t");
+    expect(bindingFromEvent(key("Enter", { metaKey: true }))).toBe("Cmd+enter");
+  });
+
+  it("⌘ なし・Ctrl / Option 付き・修飾キーだけの入力は扱わない", () => {
+    expect(bindingFromEvent(key("t"))).toBeNull();
+    expect(
+      bindingFromEvent(key("t", { metaKey: true, ctrlKey: true })),
+    ).toBeNull();
+    expect(
+      bindingFromEvent(key("t", { metaKey: true, altKey: true })),
+    ).toBeNull();
+    expect(bindingFromEvent(key("Meta", { metaKey: true }))).toBeNull();
+    expect(
+      bindingFromEvent(key("Shift", { metaKey: true, shiftKey: true })),
+    ).toBeNull();
+  });
+});
+
+describe("formatBinding", () => {
+  it("記号で表す", () => {
+    expect(formatBinding("Cmd+Shift+p")).toBe("⇧⌘P");
+    expect(formatBinding("Cmd+Shift+]")).toBe("⇧⌘]");
+    expect(formatBinding("Cmd+enter")).toBe("⌘↩");
+    expect(formatBinding("Cmd+arrowleft")).toBe("⌘←");
+    expect(formatBinding("Cmd+f5")).toBe("⌘f5");
+    expect(formatBinding("Cmd+Shift++")).toBe("⇧⌘+");
+  });
+});
+
+describe("validateBinding", () => {
+  const cur = DEFAULT_BINDINGS;
+  it("使えるキーは null", () => {
+    expect(validateBinding("palette", "Cmd+k", cur)).toBeNull();
+    expect(validateBinding("palette", "Cmd+Shift+p", cur)).toBeNull();
+    expect(validateBinding("new", "Cmd+enter", cur)).toBeNull();
+  });
+  it("⌘ なし・形が違うものは拒否する", () => {
+    expect(validateBinding("new", "t", cur)).toMatch(/⌘/);
+    expect(validateBinding("new", "Ctrl+t", cur)).toMatch(/⌘/);
+    expect(validateBinding("new", "Cmd+", cur)).toMatch(/⌘/);
+  });
+  it("コピーなどシステムの操作と、番号でタブを選ぶキーは拒否する", () => {
+    expect(validateBinding("new", "Cmd+c", cur)).toMatch(/システム/);
+    expect(validateBinding("new", "Cmd+,", cur)).toMatch(/システム/);
+    expect(validateBinding("new", "Cmd+5", cur)).toMatch(/番号/);
+  });
+  it("ほかの操作と重複するときは、その操作名を示して拒否する。自分自身との重複は許す", () => {
+    expect(validateBinding("new", "Cmd+w", cur)).toMatch(
+      /タブ／ペインを閉じる/,
+    );
+    expect(validateBinding("new", "Cmd+t", cur)).toBeNull();
+  });
+});
+
+describe("resolveBindings / overridesOf", () => {
+  it("保存された割り当てを、初期値に重ねる。変えていないものは初期値のまま", () => {
+    const b = resolveBindings([{ id: "palette", binding: "Cmd+k" }]);
+    expect(b.palette).toBe("Cmd+k");
+    expect(b.new).toBe("Cmd+t");
+  });
+
+  it("未知の操作・不正な値・重複は無視する（初期値のまま）", () => {
+    const b = resolveBindings([
+      { id: "nope", binding: "Cmd+k" },
+      { id: "new", binding: "Cmd+c" },
+      { id: "find", binding: "Cmd+w" },
+      { id: "palette", binding: "Cmd+k" },
+      { id: "broadcast", binding: "Cmd+k" },
+    ]);
+    expect(b.new).toBe("Cmd+t");
+    expect(b.find).toBe("Cmd+f");
+    expect(b.palette).toBe("Cmd+k");
+    expect(b.broadcast).toBe("Cmd+Shift+i");
+  });
+
+  it("overridesOf は、変えたものだけを返し、resolveBindings で元に戻る", () => {
+    expect(overridesOf(DEFAULT_BINDINGS)).toEqual([]);
+    const changed = { ...DEFAULT_BINDINGS, palette: "Cmd+k" };
+    expect(overridesOf(changed)).toEqual([{ id: "palette", binding: "Cmd+k" }]);
+    expect(resolveBindings(overridesOf(changed))).toEqual(changed);
+  });
+
+  it("初期値どうしは重複せず、すべて検証を通る", () => {
+    for (const d of SHORTCUT_DEFS) {
+      expect(validateBinding(d.id, d.binding, DEFAULT_BINDINGS)).toBeNull();
+    }
+  });
+});
+
+describe("shortcutFor（割り当てを変えたとき）", () => {
+  const custom = resolveBindings([{ id: "palette", binding: "Cmd+k" }]);
+  it("新しいキーで動き、古いキーは動かない", () => {
+    expect(shortcutFor(key("k", { metaKey: true }), custom)).toEqual({
+      type: "palette",
+    });
+    expect(
+      shortcutFor(key("P", { metaKey: true, shiftKey: true }), custom),
+    ).toBeNull();
+  });
+  it("⌘1〜9 は、割り当てを変えても固定", () => {
+    expect(shortcutFor(key("9", { metaKey: true }), custom)).toEqual({
+      type: "select",
+      index: "last",
+    });
   });
 });

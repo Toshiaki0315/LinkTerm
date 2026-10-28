@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::fonts::{FontError, FontFamily};
 use crate::highlights::{HighlightError, HighlightRule, HighlightStore};
+use crate::keybindings::{KeyBinding, KeybindingError, KeybindingStore};
 use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::recent::{RecentConnection, RecentError, RecentStore};
@@ -83,6 +84,8 @@ pub enum CommandError {
     Sftp(#[from] crate::sftp::SftpError),
     #[error(transparent)]
     Highlight(#[from] HighlightError),
+    #[error(transparent)]
+    Keybinding(#[from] KeybindingError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -192,6 +195,7 @@ pub struct AppState {
     recent: RecentStore,
     snippets: SnippetStore,
     highlights: HighlightStore,
+    keybindings: KeybindingStore,
 }
 
 impl AppState {
@@ -214,6 +218,7 @@ impl AppState {
             recent: RecentStore::new(dir.join("recent.json")),
             snippets: SnippetStore::new(dir.join("snippets.json")),
             highlights: HighlightStore::new(dir.join("highlights.json")),
+            keybindings: KeybindingStore::new(dir.join("keybindings.json")),
         })
     }
 }
@@ -649,6 +654,21 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
 #[tauri::command]
 pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
     Ok(state.session_state.load()?)
+}
+
+/// 保存済みのショートカット（初期値から変えたものだけ）。
+#[tauri::command]
+pub fn get_keybindings(state: State<'_, AppState>) -> CommandResult<Vec<KeyBinding>> {
+    Ok(state.keybindings.load()?)
+}
+
+/// ショートカットを検証して保存し、保存した内容を返す。
+#[tauri::command]
+pub fn save_keybindings(
+    state: State<'_, AppState>,
+    bindings: Vec<KeyBinding>,
+) -> CommandResult<Vec<KeyBinding>> {
+    Ok(state.keybindings.save(bindings)?)
 }
 
 /// 保存済みのハイライト規則。

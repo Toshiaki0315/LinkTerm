@@ -5,6 +5,7 @@ import type { Snippet } from "./snippets";
 import { TAB_COLORS, type TabColorId } from "./tab-colors";
 import type { SavedProfile } from "./terminal-api";
 import type { SplitDir } from "./layout";
+import { formatBinding, type Bindings, type ShortcutId } from "./shortcuts";
 import type { Tab } from "./tabs";
 
 /** パレットから呼ぶ操作。 */
@@ -27,6 +28,7 @@ export interface PaletteActions {
   openRecent(entry: RecentEntry): void;
   clearRecents(): void;
   openProfile(profile: SavedProfile): void;
+  openShortcuts(): void;
 }
 
 export interface PaletteContext {
@@ -36,6 +38,8 @@ export interface PaletteContext {
   recents: RecentEntry[];
   profiles: SavedProfile[];
   broadcast: BroadcastMode;
+  /** いまのショートカット（ヒントの表示用）。 */
+  bindings: Bindings;
   actions: PaletteActions;
 }
 
@@ -44,6 +48,7 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
   const { actions: a } = ctx;
   const activeTab = ctx.tabs.find((t) => t.id === ctx.activeId);
   const list: PaletteCommand[] = [];
+  const hint = (id: ShortcutId) => formatBinding(ctx.bindings[id]);
   const add = (
     group: string,
     id: string,
@@ -53,7 +58,7 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
   ) => list.push({ id, title, group, run, ...extra });
 
   add("接続", "new", "新しい接続", a.newConnection, {
-    hint: "⌘T",
+    hint: hint("new"),
     keywords: "new connect 開く",
   });
   add("アプリ", "settings", "設定を開く", a.openSettings, {
@@ -63,35 +68,37 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
 
   if (activeTab) {
     add("タブ", "close", "タブ／ペインを閉じる", a.closePane, {
-      hint: "⌘W",
+      hint: hint("close"),
       keywords: "close",
     });
     add("タブ", "duplicate", "タブを複製", () => a.duplicateTab(activeTab.id), {
       keywords: "duplicate copy",
     });
     add("タブ", "find", "画面内を検索", a.find, {
-      hint: "⌘F",
+      hint: hint("find"),
       keywords: "find search",
     });
   }
   if (ctx.tabs.length > 1) {
-    add("タブ", "next-tab", "次のタブ", a.nextTab, { hint: "⌘⇧]" });
-    add("タブ", "prev-tab", "前のタブ", a.previousTab, { hint: "⌘⇧[" });
+    add("タブ", "next-tab", "次のタブ", a.nextTab, { hint: hint("next-tab") });
+    add("タブ", "prev-tab", "前のタブ", a.previousTab, {
+      hint: hint("previous-tab"),
+    });
   }
   if (activeTab) {
     add("画面分割", "split-row", "右に分割", () => a.split("row"), {
-      hint: "⌘D",
+      hint: hint("split-right"),
       keywords: "split",
     });
     add("画面分割", "split-column", "下に分割", () => a.split("column"), {
-      hint: "⌘⇧D",
+      hint: hint("split-down"),
       keywords: "split",
     });
     add("画面分割", "next-pane", "次のペインへ", () => a.cyclePane(1), {
-      hint: "⌘]",
+      hint: hint("next-pane"),
     });
     add("画面分割", "prev-pane", "前のペインへ", () => a.cyclePane(-1), {
-      hint: "⌘[",
+      hint: hint("previous-pane"),
     });
     for (const mode of ["off", "tab", "all"] as const) {
       add(
@@ -99,7 +106,10 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
         `broadcast-${mode}`,
         `同時入力: ${BROADCAST_LABELS[mode]}${ctx.broadcast === mode ? "（現在）" : ""}`,
         () => a.setBroadcast(mode),
-        { hint: mode === "off" ? "⌘⇧I" : undefined, keywords: "broadcast" },
+        {
+          hint: mode === "off" ? hint("broadcast") : undefined,
+          keywords: "broadcast",
+        },
       );
     }
     for (const c of TAB_COLORS) {
@@ -123,6 +133,9 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
       a.runSnippet(s),
     );
   }
+  add("アプリ", "shortcuts", "ショートカットを設定…", a.openShortcuts, {
+    keywords: "shortcut keybinding キー",
+  });
   add("スニペット", "snippets", "スニペットを管理…", a.manageSnippets);
   add(
     "アプリ",
