@@ -31,7 +31,13 @@ import {
   type RecentEntry,
 } from "./lib/recent";
 import { shortcutFor } from "./lib/shortcuts";
-import { initialTabsState, tabsReducer } from "./lib/tabs";
+import type { SplitDir } from "./lib/layout";
+import {
+  activePaneIdOf,
+  initialTabsState,
+  panesOf,
+  tabsReducer,
+} from "./lib/tabs";
 import {
   deleteProfile,
   getSessionState,
@@ -63,6 +69,10 @@ function App() {
   const [dialog, setDialog] = useState<{
     initialValues?: DialogInitialValues;
     replaceTabId?: string;
+    /** 分割したペインの接続を置き換える（複数ペインのタブの再接続）。 */
+    replacePane?: { tabId: string; paneId: string };
+    /** 画面を分割して、新しいペインに開く。 */
+    split?: { tabId: string; dir: SplitDir };
   } | null>(null);
   const dialogOpen = dialog !== null;
   const [profiles, setProfiles] = useState<SavedProfile[]>([]);
@@ -312,6 +322,32 @@ function App() {
     };
   }, []);
 
+  const activeTab = state.tabs.find((t) => t.id === state.activeId);
+
+  /** 操作対象のペインと同じ接続で、画面を分割する。パスワードが要る場合は入力用のダイアログを開く。 */
+  const splitTab = useCallback(
+    (tabId: string, dir: SplitDir) => {
+      const tab = state.tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      const paneId = activePaneIdOf(tab);
+      const pane = panesOf(tab).find((p) => p.id === paneId);
+      if (!pane) return;
+      const v = pane.values;
+      if (v.type === "ssh" && v.authKind === "password" && v.password === "") {
+        setDialog({ initialValues: v, split: { tabId, dir } });
+        return;
+      }
+      dispatch({
+        type: "splitPane",
+        tabId,
+        dir,
+        splitId: crypto.randomUUID(),
+        pane: { id: crypto.randomUUID(), values: v },
+      });
+    },
+    [state.tabs],
+  );
+
   const modalOpen = dialogOpen || settingsOpen || hostKeyQueue.length > 0;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -325,13 +361,34 @@ function App() {
           setDialog({});
           break;
         case "close":
-          if (state.activeId) dispatch({ type: "close", id: state.activeId });
+          // 分割しているときは、操作対象のペインだけを閉じる。
+          if (activeTab) {
+            dispatch({
+              type: "closePane",
+              tabId: activeTab.id,
+              paneId: activePaneIdOf(activeTab),
+            });
+          }
           break;
         case "find": {
-          const id = state.activeId;
+          // 検索は操作対象のペインに対して開く。
+          const id = activeTab ? activePaneIdOf(activeTab) : null;
           if (id) setFindSignals((s) => ({ ...s, [id]: (s[id] ?? 0) + 1 }));
           break;
         }
+        case "split":
+          if (activeTab) splitTab(activeTab.id, action.dir);
+          break;
+        case "nextPane":
+        case "previousPane":
+          if (activeTab) {
+            dispatch({
+              type: "cyclePane",
+              tabId: activeTab.id,
+              delta: action.type === "nextPane" ? 1 : -1,
+            });
+          }
+          break;
         case "select":
           dispatch({ type: "activateIndex", index: action.index });
           break;
@@ -345,14 +402,31 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalOpen, state.activeId]);
+  }, [modalOpen, state.activeId, activeTab, splitTab]);
 
   const addTab = useCallback(
     (values: ConnectionValues, options?: SubmitOptions) => {
-      if (dialog?.replaceTabId) {
-        dispatch({ type: "close", id: dialog.replaceTabId });
+      if (dialog?.split) {
+        dispatch({
+          type: "splitPane",
+          tabId: dialog.split.tabId,
+          dir: dialog.split.dir,
+          splitId: crypto.randomUUID(),
+          pane: { id: crypto.randomUUID(), values },
+        });
+      } else if (dialog?.replacePane) {
+        dispatch({
+          type: "replacePane",
+          tabId: dialog.replacePane.tabId,
+          paneId: dialog.replacePane.paneId,
+          pane: { id: crypto.randomUUID(), values },
+        });
+      } else {
+        if (dialog?.replaceTabId) {
+          dispatch({ type: "close", id: dialog.replaceTabId });
+        }
+        openTab(values);
       }
-      openTab(values);
       setRecent((r) => ({
         list: recordRecent(r.list, values, Date.now()),
         dirty: true,
@@ -433,8 +507,18 @@ function App() {
 
   const onEditAndReconnect = useCallback(
     (id: string) => {
-      const tab = state.tabs.find((t) => t.id === id);
-      if (tab) setDialog({ initialValues: tab.values, replaceTabId: id });
+      // `id` はペインの ID。
+      const tab = state.tabs.find((t) => panesOf(t).some((p) => p.id === id));
+      const pane = tab && panesOf(tab).find((p) => p.id === id);
+      if (!tab || !pane) return;
+      setDialog(
+        tab.panes
+          ? {
+              initialValues: pane.values,
+              replacePane: { tabId: tab.id, paneId: id },
+            }
+          : { initialValues: pane.values, replaceTabId: tab.id },
+      );
     },
     [state.tabs],
   );
@@ -492,6 +576,16 @@ function App() {
         appearance={settings}
         autoReconnect={settings.autoReconnect}
         findSignals={findSignals}
+        onActivatePane={(tabId, paneId) =>
+          dispatch({ type: "activatePane", tabId, paneId })
+        }
+        onResizeSplit={(tabId, splitId, ratio) =>
+          dispatch({ type: "resizeSplit", tabId, splitId, ratio })
+        }
+        onSplit={splitTab}
+        onClosePane={(tabId, paneId) =>
+          dispatch({ type: "closePane", tabId, paneId })
+        }
       />
       <ConnectionDialog
         open={dialogOpen}

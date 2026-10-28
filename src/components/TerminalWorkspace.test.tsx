@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { Tab } from "../lib/tabs";
+import { initialTabsState, tabsReducer, type Tab } from "../lib/tabs";
 
 const mounts = vi.hoisted(() => ({ count: 0 }));
 vi.mock("./TerminalTab", async () => {
@@ -35,10 +35,12 @@ describe("TerminalWorkspace", () => {
         onEditAndReconnect={() => {}}
       />,
     );
-    expect(screen.getByTestId("term-a").parentElement).not.toHaveClass(
+    expect(
+      screen.getByTestId("term-a").closest("[data-tab-id]"),
+    ).not.toHaveClass("hidden");
+    expect(screen.getByTestId("term-b").closest("[data-tab-id]")).toHaveClass(
       "hidden",
     );
-    expect(screen.getByTestId("term-b").parentElement).toHaveClass("hidden");
   });
 
   it("タブ切替でアンマウント・再マウントしない（Keep-Alive）", () => {
@@ -72,10 +74,12 @@ describe("TerminalWorkspace", () => {
       />,
     );
     expect(mounts.count).toBe(2);
-    expect(screen.getByTestId("term-a").parentElement).not.toHaveClass(
+    expect(
+      screen.getByTestId("term-a").closest("[data-tab-id]"),
+    ).not.toHaveClass("hidden");
+    expect(screen.getByTestId("term-b").closest("[data-tab-id]")).toHaveClass(
       "hidden",
     );
-    expect(screen.getByTestId("term-b").parentElement).toHaveClass("hidden");
   });
 
   it("タブがなければ案内を表示する", () => {
@@ -113,7 +117,93 @@ describe("TerminalWorkspace", () => {
       />,
     );
     expect(
-      screen.getByTestId("term-a").parentElement?.style.backgroundColor,
+      (screen.getByTestId("term-a").closest("[data-tab-id]") as HTMLElement)
+        .style.backgroundColor,
     ).toMatch(/^(#002b36|rgb\(0, 43, 54\))$/i);
+  });
+
+  describe("画面分割", () => {
+    const base = () =>
+      tabsReducer(initialTabsState, {
+        type: "add",
+        tab: {
+          id: "a",
+          title: "a",
+          values: { type: "local", encoding: "UTF-8" },
+        },
+      });
+    const splitState = () =>
+      tabsReducer(base(), {
+        type: "splitPane",
+        tabId: "a",
+        dir: "row",
+        splitId: "sp",
+        pane: { id: "p2", values: { type: "local", encoding: "UTF-8" } },
+      });
+    const props = {
+      onStatusChange: () => {},
+      onSecretsConsumed: () => {},
+      onEditAndReconnect: () => {},
+    };
+
+    it("ペインごとに端末を置き、割合で位置を指定する", () => {
+      const s = splitState();
+      render(<TerminalWorkspace tabs={s.tabs} activeId="a" {...props} />);
+      const left = screen.getByTestId("term-a").closest("[data-pane-id]");
+      const right = screen.getByTestId("term-p2").closest("[data-pane-id]");
+      expect((left as HTMLElement).style.width).toBe("50%");
+      expect((right as HTMLElement).style.left).toBe("50%");
+      expect(screen.getByRole("separator")).toBeInTheDocument();
+    });
+
+    it("分割してもすでにある端末は作り直さない", () => {
+      mounts.count = 0;
+      const { rerender } = render(
+        <TerminalWorkspace tabs={base().tabs} activeId="a" {...props} />,
+      );
+      expect(mounts.count).toBe(1);
+      rerender(
+        <TerminalWorkspace tabs={splitState().tabs} activeId="a" {...props} />,
+      );
+      expect(mounts.count).toBe(2);
+    });
+
+    it("ペインを押すと操作対象になる", () => {
+      const onActivatePane = vi.fn();
+      render(
+        <TerminalWorkspace
+          tabs={splitState().tabs}
+          activeId="a"
+          {...props}
+          onActivatePane={onActivatePane}
+        />,
+      );
+      fireEvent.mouseDown(
+        screen.getByTestId("term-a").closest("[data-pane-id]") as HTMLElement,
+      );
+      expect(onActivatePane).toHaveBeenCalledWith("a", "a");
+    });
+
+    it("境目のドラッグで比率を変える", () => {
+      const onResizeSplit = vi.fn();
+      render(
+        <TerminalWorkspace
+          tabs={splitState().tabs}
+          activeId="a"
+          {...props}
+          onResizeSplit={onResizeSplit}
+        />,
+      );
+      const sep = screen.getByRole("separator");
+      const area = sep.parentElement as HTMLElement;
+      area.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 1000, height: 500 }) as DOMRect;
+      fireEvent.pointerDown(sep, { pointerId: 1, clientX: 500, clientY: 10 });
+      window.dispatchEvent(
+        new MouseEvent("pointermove", { clientX: 300, clientY: 10 }),
+      );
+      window.dispatchEvent(new MouseEvent("pointerup"));
+      expect(onResizeSplit).toHaveBeenCalledWith("a", "sp", 0.3);
+    });
   });
 });

@@ -248,6 +248,28 @@ describe("App", () => {
     expect(screen.getAllByRole("tab")).toHaveLength(1);
   });
 
+  it("⌘D で画面を分割し、⌘W は操作対象のペインだけを閉じる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.keyboard("{Meta>}t{/Meta}");
+    await user.click(await screen.findByRole("button", { name: "接続" }));
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getAllByTestId(/^term-/)).toHaveLength(1);
+
+    await user.keyboard("{Meta>}d{/Meta}");
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^term-/)).toHaveLength(2),
+    );
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+
+    await user.keyboard("{Meta>}w{/Meta}");
+    expect(screen.getAllByTestId(/^term-/)).toHaveLength(1);
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+
+    await user.keyboard("{Meta>}w{/Meta}");
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
   it("ダイアログ表示中は ⌘W / ⌘T でタブを操作しない", async () => {
     const user = userEvent.setup();
     render(<App />);

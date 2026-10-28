@@ -4,7 +4,12 @@ export type ShortcutAction =
   | { type: "find" }
   | { type: "select"; index: number | "last" }
   | { type: "next" }
-  | { type: "previous" };
+  | { type: "previous" }
+  /** 画面を左右・上下に分割する（⌘D / ⌘⇧D）。 */
+  | { type: "split"; dir: "row" | "column" }
+  /** 分割したペインの間を移動する（⌘] / ⌘[）。 */
+  | { type: "nextPane" }
+  | { type: "previousPane" };
 
 export interface KeyEventLike {
   key: string;
@@ -26,11 +31,15 @@ export function shortcutFor(event: KeyEventLike): ShortcutAction | null {
   if (event.shiftKey) {
     if (key === "]" || key === "}") return { type: "next" };
     if (key === "[" || key === "{") return { type: "previous" };
+    if (key === "d") return { type: "split", dir: "column" };
     return null;
   }
   if (key === "t") return { type: "new" };
   if (key === "w") return { type: "close" };
   if (key === "f") return { type: "find" };
+  if (key === "d") return { type: "split", dir: "row" };
+  if (key === "]") return { type: "nextPane" };
+  if (key === "[") return { type: "previousPane" };
   if (/^[1-9]$/.test(key)) {
     return { type: "select", index: key === "9" ? "last" : Number(key) - 1 };
   }

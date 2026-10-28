@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { initialTabsState, tabsReducer, type TabsState } from "./tabs";
+import { paneIds } from "./layout";
+import {
+  activePaneIdOf,
+  initialTabsState,
+  layoutOf,
+  panesOf,
+  tabsReducer,
+  type TabsState,
+} from "./tabs";
 
 const local = { type: "local", encoding: "UTF-8" } as const;
 const add = (s: TabsState, id: string) =>
@@ -225,5 +233,180 @@ describe("tabsReducer", () => {
     expect(tabsReducer(s, { type: "setColor", id: "zzz", color: "red" })).toBe(
       s,
     );
+  });
+});
+
+describe("画面分割", () => {
+  const split = (
+    s: TabsState,
+    paneId: string,
+    dir: "row" | "column" = "row",
+    splitId = `s-${paneId}`,
+  ) =>
+    tabsReducer(s, {
+      type: "splitPane",
+      tabId: "a",
+      dir,
+      splitId,
+      pane: { id: paneId, values: local },
+    });
+  const base = () => add(initialTabsState, "a");
+
+  it("分割すると新しいペインが操作対象になり、タブの表示項目は先頭ペインのまま", () => {
+    const s = split(base(), "p2");
+    const tab = s.tabs[0];
+    expect(panesOf(tab).map((p) => p.id)).toEqual(["a", "p2"]);
+    expect(tab.activePaneId).toBe("p2");
+    expect(tab.layout).toMatchObject({ kind: "split", dir: "row" });
+    expect(tab.values).toBe(panesOf(tab)[0].values);
+    expect(s.activeId).toBe("a");
+  });
+
+  it("操作対象のペインを分割する（入れ子）", () => {
+    let s = split(base(), "p2");
+    s = split(s, "p3", "column");
+    expect(paneIds(layoutOf(s.tabs[0]))).toEqual(["a", "p2", "p3"]);
+    expect(s.tabs[0].layout).toMatchObject({
+      b: { kind: "split", dir: "column" },
+    });
+  });
+
+  it("ペインごとに状態を持つ。先頭ペインの状態はタブへ写る", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, { type: "setStatus", id: "p2", status: "connected" });
+    expect(panesOf(s.tabs[0]).map((p) => p.status)).toEqual([
+      "connecting",
+      "connected",
+    ]);
+    expect(s.tabs[0].status).toBe("connecting");
+    s = tabsReducer(s, { type: "setStatus", id: "a", status: "error" });
+    expect(s.tabs[0].status).toBe("error");
+  });
+
+  it("ペインを閉じると兄弟が場所を引き継ぐ。先頭を閉じたら次が先頭になる", () => {
+    let s = split(base(), "p2");
+    s = split(s, "p3");
+    s = tabsReducer(s, { type: "closePane", tabId: "a", paneId: "a" });
+    expect(panesOf(s.tabs[0]).map((p) => p.id)).toEqual(["p2", "p3"]);
+    expect(s.tabs[0].values).toBe(panesOf(s.tabs[0])[0].values);
+    expect(paneIds(layoutOf(s.tabs[0]))).toEqual(["p2", "p3"]);
+  });
+
+  it("操作対象のペインを閉じたら近いペインへ移る", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, { type: "closePane", tabId: "a", paneId: "p2" });
+    expect(s.tabs[0].panes).toBeUndefined();
+    expect(s.tabs[0].layout).toBeUndefined();
+    expect(activePaneIdOf(s.tabs[0])).toBe("a");
+  });
+
+  it("1つに戻したら、分割していないタブの形に戻る", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, { type: "closePane", tabId: "a", paneId: "p2" });
+    expect(s.tabs[0]).toEqual({
+      id: "a",
+      title: "a",
+      values: local,
+      status: "connecting",
+    });
+  });
+
+  it("最後の1ペインを閉じるとタブごと閉じる", () => {
+    const s = tabsReducer(base(), {
+      type: "closePane",
+      tabId: "a",
+      paneId: "a",
+    });
+    expect(s.tabs).toEqual([]);
+  });
+
+  it("先頭を閉じて1つ残ったとき、ペインの ID はタブと違っても描画に必要な情報を保つ", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, { type: "closePane", tabId: "a", paneId: "a" });
+    expect(panesOf(s.tabs[0]).map((p) => p.id)).toEqual(["p2"]);
+    expect(paneIds(layoutOf(s.tabs[0]))).toEqual(["p2"]);
+  });
+
+  it("activatePane / cyclePane で操作対象を切り替える", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, { type: "activatePane", tabId: "a", paneId: "a" });
+    expect(activePaneIdOf(s.tabs[0])).toBe("a");
+    s = tabsReducer(s, { type: "cyclePane", tabId: "a", delta: 1 });
+    expect(activePaneIdOf(s.tabs[0])).toBe("p2");
+    s = tabsReducer(s, { type: "cyclePane", tabId: "a", delta: 1 });
+    expect(activePaneIdOf(s.tabs[0])).toBe("a");
+    s = tabsReducer(s, { type: "cyclePane", tabId: "a", delta: -1 });
+    expect(activePaneIdOf(s.tabs[0])).toBe("p2");
+    expect(
+      tabsReducer(s, { type: "activatePane", tabId: "a", paneId: "zzz" }),
+    ).toBe(s);
+    expect(
+      tabsReducer(base(), { type: "cyclePane", tabId: "a", delta: 1 }).tabs[0]
+        .panes,
+    ).toBeUndefined();
+  });
+
+  it("resizeSplit で比率を変える", () => {
+    let s = split(base(), "p2", "row", "sp");
+    s = tabsReducer(s, {
+      type: "resizeSplit",
+      tabId: "a",
+      splitId: "sp",
+      ratio: 0.3,
+    });
+    expect(s.tabs[0].layout).toMatchObject({ ratio: 0.3 });
+  });
+
+  it("色は全ペインに付く。パスワードの消去はそのペインだけ", () => {
+    const ssh = {
+      type: "ssh",
+      encoding: "UTF-8",
+      termType: "xterm-256color",
+      host: "h",
+      port: 22,
+      username: "u",
+      useSshConfig: true,
+      jumpHosts: "",
+      forwards: "",
+      socksPorts: "",
+      remoteForwards: "",
+      authKind: "password",
+      password: "secret",
+      remember: false,
+      keyPath: "",
+      passphrase: "",
+    } as const;
+    let s = split(base(), "p2");
+    s = tabsReducer(s, {
+      type: "replacePane",
+      tabId: "a",
+      paneId: "p2",
+      pane: { id: "p3", values: ssh },
+    });
+    s = tabsReducer(s, { type: "setColor", id: "a", color: "red" });
+    expect(panesOf(s.tabs[0]).map((p) => p.values.tabColor)).toEqual([
+      "red",
+      "red",
+    ]);
+    s = tabsReducer(s, { type: "scrubSecrets", id: "p3" });
+    const p3 = panesOf(s.tabs[0])[1].values;
+    expect(p3.type === "ssh" && p3.password).toBe("");
+  });
+
+  it("replacePane は配置を保ったままペインを入れ替える", () => {
+    let s = split(base(), "p2");
+    s = tabsReducer(s, {
+      type: "replacePane",
+      tabId: "a",
+      paneId: "p2",
+      pane: { id: "p9", values: local },
+    });
+    expect(paneIds(layoutOf(s.tabs[0]))).toEqual(["a", "p9"]);
+    expect(activePaneIdOf(s.tabs[0])).toBe("p9");
+  });
+
+  it("タブを閉じれば全ペインが消える", () => {
+    const s = tabsReducer(split(base(), "p2"), { type: "close", id: "a" });
+    expect(s.tabs).toEqual([]);
   });
 });

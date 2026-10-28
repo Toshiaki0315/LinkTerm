@@ -41,6 +41,10 @@ interface Props {
   findSignal?: number;
   /** 復元したタブ: 自動では接続せず、「接続」ボタンで接続する。 */
   deferStart?: boolean;
+  /** 画面を分割する（右クリックメニュー）。省略すると項目を出さない。 */
+  onSplit?: (dir: "row" | "column") => void;
+  /** このペインを閉じる（分割しているときだけ渡す）。 */
+  onClosePane?: () => void;
 }
 
 /** 1タブ = 1セッション。xterm とセッションをここで結び付ける。 */
@@ -56,6 +60,8 @@ export function TerminalTab({
   autoReconnect = DISABLED_AUTO_RECONNECT,
   findSignal = 0,
   deferStart = false,
+  onSplit,
+  onClosePane,
 }: Props) {
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
@@ -115,6 +121,19 @@ export function TerminalTab({
     { label: "すべて選択", onSelect: () => termRef.current?.selectAll() },
     { label: "検索…", onSelect: () => setSearchOpen(true) },
     { label: "画面をクリア", onSelect: () => termRef.current?.clear() },
+    ...(onSplit
+      ? [
+          {
+            label: "右に分割（⌘D）",
+            separatorBefore: true,
+            onSelect: () => onSplit("row"),
+          },
+          { label: "下に分割（⌘⇧D）", onSelect: () => onSplit("column") },
+        ]
+      : []),
+    ...(onClosePane
+      ? [{ label: "ペインを閉じる", onSelect: onClosePane }]
+      : []),
   ];
 
   const closeSearch = () => {

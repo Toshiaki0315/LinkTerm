@@ -446,6 +446,39 @@ describe("TerminalTab", () => {
       act(() => viewProps.onContextMenu!({ x: 30, y: 40 }));
     }
 
+    it("分割・ペインを閉じる項目は、渡したときだけ表示し、選ぶと通知する", async () => {
+      const onSplit = vi.fn();
+      const onClosePane = vi.fn();
+      const props = {
+        findSignal: 0,
+        tabId: "t1",
+        title: "title",
+        values: telnet,
+        active: true,
+        onStatusChange: vi.fn(),
+        onSecretsConsumed: vi.fn(),
+        onEditAndReconnect: vi.fn(),
+        onSplit,
+        onClosePane,
+      };
+      render(<TerminalTab {...props} />);
+      openMenu();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "右に分割（⌘D）" }),
+      );
+      expect(onSplit).toHaveBeenCalledWith("row");
+      openMenu();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "下に分割（⌘⇧D）" }),
+      );
+      expect(onSplit).toHaveBeenCalledWith("column");
+      openMenu();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "ペインを閉じる" }),
+      );
+      expect(onClosePane).toHaveBeenCalled();
+    });
+
     it("コピー・貼り付け・すべて選択・検索・画面のクリアを表示する", () => {
       setup(telnet);
       openMenu();

@@ -84,4 +84,28 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("f", { ctrlKey: true }))).toBeNull();
     expect(shortcutFor(key("f"))).toBeNull();
   });
+
+  it("⌘D は左右に分割、⌘⇧D は上下に分割", () => {
+    expect(shortcutFor(key("d", { metaKey: true }))).toEqual({
+      type: "split",
+      dir: "row",
+    });
+    expect(shortcutFor(key("D", { metaKey: true, shiftKey: true }))).toEqual({
+      type: "split",
+      dir: "column",
+    });
+    expect(shortcutFor(key("d", { ctrlKey: true }))).toBeNull();
+  });
+
+  it("⌘] / ⌘[ で次・前のペイン（⇧付きはタブ移動のまま）", () => {
+    expect(shortcutFor(key("]", { metaKey: true }))).toEqual({
+      type: "nextPane",
+    });
+    expect(shortcutFor(key("[", { metaKey: true }))).toEqual({
+      type: "previousPane",
+    });
+    expect(shortcutFor(key("]", { metaKey: true, shiftKey: true }))).toEqual({
+      type: "next",
+    });
+  });
 });
