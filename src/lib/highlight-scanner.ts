@@ -145,8 +145,17 @@ export class HighlightScanner {
     this.records.set(y, record);
   }
 
-  /** 古い記録（調べた範囲より前）を、多すぎるときに捨てる。 */
+  /** 捨てられたマーカーの記録を掃除し、それでも多すぎるときは、古い記録（調べた範囲より前）から捨てる。 */
   private prune(firstScanned: number) {
+    for (const [y, record] of this.records) {
+      if (
+        record.markers.length > 0 &&
+        record.markers.every((m) => m.isDisposed)
+      ) {
+        this.release(record);
+        this.records.delete(y);
+      }
+    }
     if (this.records.size <= MAX_RECORDS) return;
     for (const [y, record] of this.records) {
       if (y >= firstScanned) continue;

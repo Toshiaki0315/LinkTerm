@@ -191,6 +191,23 @@ describe("TimestampStamper", () => {
     expect(f.decorations.length).toBeGreaterThan(1);
   });
 
+  it("スクロールで xterm が捨てたマーカーの記録は、調べる範囲の外でも掃除する", () => {
+    const f = fakeTerm(["base"]);
+    const s = new TimestampStamper(f.term);
+    s.setEnabled(true);
+    push(f, "a");
+    s.scanRecent(10);
+    push(f, "b");
+    s.scanRecent(10);
+    expect(f.decorations).toHaveLength(2);
+    // 古い行（a）のマーカーが捨てられた。いまは最後の1行だけを調べる。
+    f.markers[1]._disposed = true;
+    push(f, "c");
+    s.scanRecent(1);
+    expect(f.decorations[0].dispose).toHaveBeenCalled();
+    expect(f.decorations[1].dispose).not.toHaveBeenCalled();
+  });
+
   it("dispose で、すべて消す", () => {
     const f = fakeTerm(["base"]);
     const s = new TimestampStamper(f.term);

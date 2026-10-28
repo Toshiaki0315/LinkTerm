@@ -10,6 +10,7 @@ import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
 import { themeFor } from "../lib/themes";
 import type { HighlightRule } from "../lib/highlight";
 import { HighlightScanner, type ScanTerm } from "../lib/highlight-scanner";
+import { ScanBatcher } from "../lib/scan-batcher";
 import { TimestampStamper, type StampTerm } from "../lib/timestamp-stamper";
 
 /** xterm.js のオプションとして設定する外観（コピー設定は含まない）。 */
@@ -85,6 +86,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const searchRef = useRef<SearchAddon | null>(null);
     const scannerRef = useRef<HighlightScanner | null>(null);
     const stamperRef = useRef<TimestampStamper | null>(null);
+    /** 画面の走査をまとめる（大量の出力で詰まらないよう、一定の間隔に1回まで）。 */
+    const batcherRef = useRef<ScanBatcher | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const {
@@ -154,6 +157,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         const scanner = new HighlightScanner(term as unknown as ScanTerm);
         scannerRef.current = scanner;
         stamperRef.current = new TimestampStamper(term as unknown as StampTerm);
+        batcherRef.current = new ScanBatcher((lines) => {
+          scannerRef.current?.scanRecent(lines);
+          stamperRef.current?.scanRecent(lines);
+        });
       }
       fitRef.current = fit;
 
@@ -177,6 +184,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         observer.disconnect();
         dataSub.dispose();
         resizeSub.dispose();
+        batcherRef.current?.dispose();
+        batcherRef.current = null;
         scannerRef.current?.dispose();
         scannerRef.current = null;
         stamperRef.current?.dispose();
@@ -247,10 +256,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
           // 書き込みが画面に反映されてから、新しく増えた行を調べる。
           let lines = 2;
           for (const byte of data) if (byte === 0x0a) lines += 1;
-          term.write(data, () => {
-            scannerRef.current?.scanRecent(lines);
-            stamperRef.current?.scanRecent(lines);
-          });
+          term.write(data, () => batcherRef.current?.request(lines));
         },
         size: () => ({
           cols: termRef.current?.cols ?? 80,

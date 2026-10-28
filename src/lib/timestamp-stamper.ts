@@ -167,7 +167,13 @@ export class TimestampStamper {
     this.stamps.set(y, { marker, decoration });
   }
 
+  /** 捨てられたマーカーの記録を掃除し、それでも多すぎるときは、古い記録（調べた範囲より前）から捨てる。 */
   private prune(firstScanned: number) {
+    for (const [y, s] of this.stamps) {
+      if (!s.marker.isDisposed) continue;
+      s.decoration.dispose();
+      this.stamps.delete(y);
+    }
     if (this.stamps.size <= MAX_RECORDS) return;
     for (const [y, s] of this.stamps) {
       if (y >= firstScanned) continue;

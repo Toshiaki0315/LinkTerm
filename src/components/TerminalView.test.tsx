@@ -159,8 +159,12 @@ describe("TerminalView", () => {
       active: {
         type: "normal",
         baseY: 0,
-        cursorY: lines.length - 1,
-        length: lines.length,
+        get cursorY() {
+          return lines.length - 1;
+        },
+        get length() {
+          return lines.length;
+        },
         getLine: (y: number) => ({
           isWrapped: false,
           getCell: (x: number) => ({
@@ -221,6 +225,45 @@ describe("TerminalView", () => {
       expect(term.registerDecoration).not.toHaveBeenCalled();
       (term.write.mock.lastCall![1] as () => void)();
       expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+    });
+
+    it("続けて出力が届いても、画面の走査は一定の間隔に1回にまとめる", () => {
+      vi.useFakeTimers();
+      try {
+        const lines = ["ok"];
+        xterm.next.buffer = bufferOf(lines);
+        const ref = createRef<TerminalHandle>();
+        render(
+          <TerminalView
+            ref={ref}
+            active
+            highlightRules={rules}
+            onInput={() => {}}
+            onResize={() => {}}
+          />,
+        );
+        const term = xterm.instances[0] as unknown as {
+          registerDecoration: ReturnType<typeof vi.fn>;
+          write: ReturnType<typeof vi.fn>;
+        };
+        const write = (text: string) => {
+          lines.push(text);
+          ref.current!.write(new TextEncoder().encode(`${text}\n`));
+          (term.write.mock.lastCall![1] as () => void)();
+        };
+        write("ERROR a"); // 最初はすぐ調べる
+        expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+        write("ERROR b");
+        write("ERROR c"); // 間隔内なので、まとめて後で
+        expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(60);
+        // 間隔が空いてから、まとめて調べる（偽のマーカーは位置が合わないため、件数は下限だけ確かめる）。
+        expect(
+          term.registerDecoration.mock.calls.length,
+        ).toBeGreaterThanOrEqual(3);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("規則を空にすると装飾を外す", () => {

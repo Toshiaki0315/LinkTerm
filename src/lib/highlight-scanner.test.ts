@@ -149,6 +149,23 @@ describe("HighlightScanner", () => {
     expect(decorations).toHaveLength(2);
   });
 
+  it("スクロールで xterm が捨てたマーカーの記録は、調べる範囲の外でも掃除する", () => {
+    const { term, state, markers, decorations } = fakeTerm(["ERROR 1"]);
+    const s = new HighlightScanner(term);
+    s.setRules([rule()]);
+    state.lines.push("ERROR 2");
+    state.cursorY = 1;
+    s.scanRecent(5);
+    expect(decorations).toHaveLength(2);
+    // 先頭の行のマーカーが捨てられた。いまは最後の1行だけを調べる。
+    markers[0]._disposed = true;
+    state.lines.push("ERROR 3");
+    state.cursorY = 2;
+    s.scanRecent(1);
+    expect(decorations[0].dispose).toHaveBeenCalled();
+    expect(decorations[1].dispose).not.toHaveBeenCalled();
+  });
+
   it("代替画面（vim など）では何もしない", () => {
     const { term, decorations } = fakeTerm(["ERROR"], { type: "alternate" });
     new HighlightScanner(term).setRules([rule()]);
