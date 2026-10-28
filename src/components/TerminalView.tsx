@@ -8,7 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { DEFAULT_SETTINGS, type Appearance } from "../lib/settings";
 import { copyText } from "../lib/clipboard";
 import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
-import { themeFor } from "../lib/themes";
+import { backgroundFor, xtermThemeFor } from "../lib/themes";
 import type { HighlightRule } from "../lib/highlight";
 import { HighlightScanner, type ScanTerm } from "../lib/highlight-scanner";
 import { bufferToText } from "../lib/screen-text";
@@ -33,6 +33,7 @@ const DEFAULT_APPEARANCE: Appearance = {
   fontSize: DEFAULT_SETTINGS.fontSize,
   scrollback: DEFAULT_SETTINGS.scrollback,
   cursorBlink: DEFAULT_SETTINGS.cursorBlink,
+  backgroundOpacity: DEFAULT_SETTINGS.backgroundOpacity,
   cursorStyle: DEFAULT_SETTINGS.cursorStyle,
   backspaceKey: DEFAULT_SETTINGS.backspaceKey,
   optionIsMeta: DEFAULT_SETTINGS.optionIsMeta,
@@ -116,6 +117,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       cursorStyle,
       optionIsMeta,
       backspaceKey,
+      backgroundOpacity,
       theme,
       copyOnSelect,
     } = appearance;
@@ -130,6 +132,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       cursorBlink,
       cursorStyle,
       optionIsMeta,
+      backgroundOpacity,
       theme,
     });
 
@@ -147,6 +150,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       if (!container) return;
       const {
         theme: initialTheme,
+        backgroundOpacity: initialOpacity,
         optionIsMeta: meta,
         ...options
       } = appliedRef.current;
@@ -164,7 +168,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         // 画像表示のアドオンが、実験的な API を使う。
         allowProposedApi: true,
         macOptionIsMeta: meta,
-        theme: themeFor(initialTheme).xterm,
+        // 背景に不透明度（半透明）を使えるようにする。
+        allowTransparency: true,
+        theme: xtermThemeFor(initialTheme, initialOpacity),
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
@@ -237,6 +243,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         cursorBlink,
         cursorStyle,
         optionIsMeta,
+        backgroundOpacity,
         theme,
       };
       const changed = (
@@ -249,7 +256,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       term.options.cursorBlink = cursorBlink;
       term.options.cursorStyle = cursorStyle;
       term.options.macOptionIsMeta = optionIsMeta;
-      if (applied.theme !== theme) term.options.theme = themeFor(theme).xterm;
+      if (
+        applied.theme !== theme ||
+        applied.backgroundOpacity !== backgroundOpacity
+      ) {
+        term.options.theme = xtermThemeFor(theme, backgroundOpacity);
+      }
       appliedRef.current = next;
       // 文字の大きさが変わると行・列数が変わるため、表示中なら再計算する。
       if (containerRef.current?.offsetParent !== null) fitRef.current?.fit();
@@ -260,6 +272,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       cursorBlink,
       cursorStyle,
       optionIsMeta,
+      backgroundOpacity,
       theme,
     ]);
 
@@ -322,7 +335,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       <div
         ref={containerRef}
         className="h-full w-full"
-        style={{ backgroundColor: themeFor(theme).background }}
+        style={{ backgroundColor: backgroundFor(theme, backgroundOpacity) }}
         onMouseUp={() => {
           // 選択したらコピー（オンのとき）。選択がなければクリップボードを触らない。
           const term = termRef.current;

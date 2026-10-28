@@ -14,7 +14,14 @@ import {
   scrollbackSchema,
   type Settings,
 } from "../lib/settings";
-import { THEME_IDS, THEMES, themeFor } from "../lib/themes";
+import {
+  OPACITY_MAX,
+  OPACITY_MIN,
+  THEME_IDS,
+  THEMES,
+  backgroundFor,
+  themeFor,
+} from "../lib/themes";
 import {
   listFonts,
   type FontFamily,
@@ -37,6 +44,7 @@ const formSchema = z
     fontSize: fontSizeSchema,
     scrollback: scrollbackSchema,
     cursorBlink: z.boolean(),
+    backgroundOpacity: z.number().int().min(OPACITY_MIN).max(OPACITY_MAX),
     cursorStyle: z.enum(CURSOR_STYLES),
     backspaceKey: z.enum(BACKSPACE_KEYS),
     optionIsMeta: z.boolean(),
@@ -63,6 +71,7 @@ const toForm = (s: Settings): FormValues => ({
   fontSize: s.fontSize,
   scrollback: s.scrollback,
   cursorBlink: s.cursorBlink,
+  backgroundOpacity: s.backgroundOpacity,
   cursorStyle: s.cursorStyle,
   backspaceKey: s.backspaceKey,
   optionIsMeta: s.optionIsMeta,
@@ -78,6 +87,7 @@ const toSettings = (v: z.output<typeof formSchema>): Settings => ({
   fontSize: v.fontSize,
   scrollback: v.scrollback,
   cursorBlink: v.cursorBlink,
+  backgroundOpacity: v.backgroundOpacity,
   cursorStyle: v.cursorStyle,
   backspaceKey: v.backspaceKey,
   optionIsMeta: v.optionIsMeta,
@@ -180,7 +190,10 @@ export function SettingsDialog({
   const fontFamily = useWatch({ control, name: "fontFamily" });
   const fontSize = useWatch({ control, name: "fontSize" });
   const startupKind = useWatch({ control, name: "startupKind" });
-  const theme = themeFor(useWatch({ control, name: "theme" }));
+  const themeId = useWatch({ control, name: "theme" });
+  const theme = themeFor(themeId);
+  const rawOpacity = useWatch({ control, name: "backgroundOpacity" });
+  const opacity = Number.isFinite(rawOpacity) ? rawOpacity : OPACITY_MAX;
 
   const fonts = useMemo(() => fontList?.fonts ?? [], [fontList]);
   const currentFamily = familyFromStack(fontFamily);
@@ -305,7 +318,7 @@ export function SettingsDialog({
             data-testid="font-preview"
             className="rounded border border-neutral-700 px-3 py-2"
             style={{
-              backgroundColor: theme.background,
+              backgroundColor: backgroundFor(themeId, opacity),
               color: theme.foreground,
               fontFamily,
               fontSize: `${Number.isFinite(fontSize) ? fontSize : DEFAULT_SETTINGS.fontSize}px`,
@@ -328,6 +341,24 @@ export function SettingsDialog({
             <input type="checkbox" {...register("cursorBlink")} />
             カーソルを点滅させる
           </label>
+          <Row label={`背景の不透明度（${opacity}%）`} error={undefined}>
+            {(id) => (
+              <input
+                id={id}
+                type="range"
+                min={OPACITY_MIN}
+                max={OPACITY_MAX}
+                step={5}
+                className="w-full"
+                {...register("backgroundOpacity", { valueAsNumber: true })}
+              />
+            )}
+          </Row>
+          {opacity < OPACITY_MAX && (
+            <p className="-mt-2 text-xs text-neutral-400">
+              端末の背景が半透明になり、ウィンドウの後ろが透けて見えます。
+            </p>
+          )}
           <Row label="カーソルの形">
             {(id) => (
               <Select id={id} {...register("cursorStyle")}>

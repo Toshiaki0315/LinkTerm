@@ -36,3 +36,7 @@ export APPLE_TEAM_ID="TEAMID"
 3. 確認: `spctl -a -vv LinkTerm.app` が `accepted / source=Notarized Developer ID`。
 
 この環境変数・パスワードは決してコミットしないでください。
+
+## 補足: private API について
+
+背景の不透明度（ウィンドウの透過）のため、`tauri.conf.json` で `macOSPrivateApi` を有効にし、Cargo の `tauri` に `macos-private-api` 機能を付けています。Developer ID での署名・公証や、直接配布には問題ありませんが、**Mac App Store には出せません**（App Store 配布を目指す場合は、この機能と透過を外してください）。

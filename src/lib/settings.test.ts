@@ -16,6 +16,7 @@ describe("settingsSchema", () => {
       fontSize: 13,
       scrollback: 10000,
       cursorBlink: true,
+      backgroundOpacity: 100,
       cursorStyle: "block",
       backspaceKey: "del",
       optionIsMeta: false,
@@ -24,6 +25,23 @@ describe("settingsSchema", () => {
       autoReconnect: { enabled: false, delaySeconds: 5, maxAttempts: 5 },
       startup: { kind: "none" },
     });
+  });
+
+  it("背景の不透明度は 30〜100 の整数", () => {
+    for (const ok of [30, 80, 100]) {
+      expect(
+        settingsSchema.safeParse({ ...DEFAULT_SETTINGS, backgroundOpacity: ok })
+          .success,
+      ).toBe(true);
+    }
+    for (const bad of [0, 29, 101, 50.5, NaN]) {
+      expect(
+        settingsSchema.safeParse({
+          ...DEFAULT_SETTINGS,
+          backgroundOpacity: bad,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("フォントサイズは範囲内の整数", () => {

@@ -395,6 +395,71 @@ describe("TerminalView", () => {
     });
   });
 
+  describe("背景の不透明度", () => {
+    const base = {
+      fontFamily: "Menlo",
+      fontSize: 13,
+      scrollback: 10,
+      cursorBlink: true,
+      cursorStyle: "block" as const,
+      backspaceKey: "del" as const,
+      optionIsMeta: false,
+      theme: "solarized-dark" as const,
+      copyOnSelect: false,
+    };
+
+    it("100% ならテーマの背景色のまま。半透明を使えるよう allowTransparency を有効にする", () => {
+      const { container } = render(
+        <TerminalView
+          active
+          appearance={{ ...base, backgroundOpacity: 100 }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const options = xterm.instances[0].options as {
+        allowTransparency: boolean;
+        theme: { background: string };
+      };
+      expect(options.allowTransparency).toBe(true);
+      expect(options.theme.background).toBe("#002b36");
+      expect(
+        (container.firstChild as HTMLElement).style.backgroundColor,
+      ).toMatch(/^(#002b36|rgb\(0, 43, 54\))$/i);
+    });
+
+    it("100% 未満なら、端末とその外側の背景が rgba になる。変更は作り直さずに反映する", () => {
+      const { container, rerender } = render(
+        <TerminalView
+          active
+          appearance={{ ...base, backgroundOpacity: 60 }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(
+        (xterm.instances[0].options as { theme: { background: string } }).theme
+          .background,
+      ).toBe("rgba(0, 43, 54, 0.6)");
+      expect((container.firstChild as HTMLElement).style.backgroundColor).toBe(
+        "rgba(0, 43, 54, 0.6)",
+      );
+      rerender(
+        <TerminalView
+          active
+          appearance={{ ...base, backgroundOpacity: 90 }}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(xterm.instances).toHaveLength(1);
+      expect(
+        (xterm.instances[0].options as { theme: { background: string } }).theme
+          .background,
+      ).toBe("rgba(0, 43, 54, 0.9)");
+    });
+  });
+
   it("ベル（BEL）が鳴ったら通知する。最新の通知先を使う", () => {
     const first = vi.fn();
     const second = vi.fn();
@@ -501,6 +566,7 @@ describe("TerminalView", () => {
       fontSize: 18,
       scrollback: 777,
       cursorBlink: false,
+      backgroundOpacity: 100,
       cursorStyle: "block" as const,
       backspaceKey: "del" as const,
       optionIsMeta: false,
@@ -557,6 +623,7 @@ describe("TerminalView", () => {
             fontSize: 24,
             scrollback: 5,
             cursorBlink: true,
+            backgroundOpacity: 100,
             cursorStyle: "block" as const,
             backspaceKey: "del" as const,
             optionIsMeta: false,
@@ -660,6 +727,7 @@ describe("TerminalView", () => {
       fontSize: 13,
       scrollback: 100,
       cursorBlink: true,
+      backgroundOpacity: 100,
       cursorStyle: "block" as const,
       backspaceKey: "del" as const,
       optionIsMeta: false,
@@ -737,6 +805,7 @@ describe("TerminalView", () => {
       fontSize: 13,
       scrollback: 100,
       cursorBlink: true,
+      backgroundOpacity: 100,
       cursorStyle: "block" as const,
       backspaceKey: "del" as const,
       optionIsMeta: false,

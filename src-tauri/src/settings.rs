@@ -13,6 +13,8 @@ use thiserror::Error;
 pub const DEFAULT_FONT_FAMILY: &str = r#"Menlo, Monaco, "Courier New", monospace"#;
 pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<u16> = 8..=72;
 pub const MAX_SCROLLBACK: u32 = 100_000;
+/// 背景の不透明度（%）の範囲。0 に近いと読めなくなるため、下限を設ける。
+pub const OPACITY_RANGE: std::ops::RangeInclusive<u8> = 30..=100;
 pub const MAX_FONT_FAMILY_CHARS: usize = 200;
 pub const MAX_PROFILE_ID_CHARS: usize = 100;
 pub const RECONNECT_DELAY_RANGE: std::ops::RangeInclusive<u32> = 1..=3600;
@@ -115,6 +117,8 @@ pub struct Settings {
     pub font_size: u16,
     pub scrollback: u32,
     pub cursor_blink: bool,
+    /// 端末の背景の不透明度（%）。100 で不透明。
+    pub background_opacity: u8,
     pub cursor_style: CursorStyle,
     /// バックスペースキーが送る文字。
     pub backspace_key: BackspaceKey,
@@ -134,6 +138,7 @@ impl Default for Settings {
             font_size: 13,
             scrollback: 10_000,
             cursor_blink: true,
+            background_opacity: 100,
             cursor_style: CursorStyle::default(),
             backspace_key: BackspaceKey::default(),
             option_is_meta: false,
@@ -172,6 +177,13 @@ impl Settings {
                 "フォントサイズは{}〜{}で指定してください",
                 FONT_SIZE_RANGE.start(),
                 FONT_SIZE_RANGE.end()
+            )));
+        }
+        if !OPACITY_RANGE.contains(&self.background_opacity) {
+            return Err(SettingsError::Invalid(format!(
+                "背景の不透明度は{}〜{}%で指定してください",
+                OPACITY_RANGE.start(),
+                OPACITY_RANGE.end()
             )));
         }
         if self.scrollback > MAX_SCROLLBACK {
@@ -283,6 +295,7 @@ mod tests {
         assert_eq!(d.font_size, 13);
         assert_eq!(d.scrollback, 10_000);
         assert!(d.cursor_blink);
+        assert_eq!(d.background_opacity, 100);
         assert_eq!(d.cursor_style, CursorStyle::Block);
         assert_eq!(d.backspace_key, BackspaceKey::Del);
         assert!(!d.option_is_meta);
@@ -305,6 +318,7 @@ mod tests {
             font_size: 16,
             scrollback: 50_000,
             cursor_blink: false,
+            background_opacity: 80,
             cursor_style: CursorStyle::Bar,
             backspace_key: BackspaceKey::Bs,
             option_is_meta: true,
@@ -655,6 +669,36 @@ mod tests {
             SettingsStore::new(&path).load().unwrap().startup,
             Startup::Restore
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn background_opacity_must_be_within_range() {
+        for ok in [*OPACITY_RANGE.start(), 80, 100] {
+            let s = Settings {
+                background_opacity: ok,
+                ..Settings::default()
+            };
+            assert!(s.validated().is_ok(), "{ok}");
+        }
+        for bad in [0, 29, 101, 255] {
+            let s = Settings {
+                background_opacity: bad,
+                ..Settings::default()
+            };
+            assert!(
+                matches!(s.validated(), Err(SettingsError::Invalid(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn old_settings_files_without_opacity_load_as_opaque() {
+        let (s, path, dir) = store("opacity-compat");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"fontSize": 14}"#).unwrap();
+        assert_eq!(s.load().unwrap().background_opacity, 100);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

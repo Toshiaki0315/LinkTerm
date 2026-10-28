@@ -163,6 +163,49 @@ export const THEMES: Record<ThemeId, TerminalTheme> = {
 };
 
 /** ID から配色を引く。不明・未指定ならダーク。 */
+/** 背景の不透明度（%）の範囲。Rust 側（src-tauri/src/settings.rs）と揃える。 */
+export const OPACITY_MIN = 30;
+export const OPACITY_MAX = 100;
+
+/**
+ * `#rrggbb`（または `#rgb`）の色に、不透明度（%）を付けて `rgba(...)` にする。
+ * 不透明度は範囲内に収める。色として読めない値は、そのまま返す。
+ */
+export function withOpacity(color: string, percent: number): string {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return color;
+  const hex =
+    m[1].length === 3
+      ? m[1]
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : m[1];
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const clamped = Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, percent));
+  return `rgba(${r}, ${g}, ${b}, ${clamped / 100})`;
+}
+
+/** 背景色。不透明度が 100% のときは、テーマの色そのまま。 */
+export function backgroundFor(
+  id: ThemeId | undefined,
+  opacity: number,
+): string {
+  const background = themeFor(id).background;
+  return opacity >= OPACITY_MAX ? background : withOpacity(background, opacity);
+}
+
+/** xterm.js に渡す配色（背景に不透明度を反映する。100% のときはテーマそのまま）。 */
+export function xtermThemeFor(
+  id: ThemeId | undefined,
+  opacity: number,
+): ITheme {
+  const theme = themeFor(id);
+  return opacity >= OPACITY_MAX
+    ? theme.xterm
+    : { ...theme.xterm, background: withOpacity(theme.background, opacity) };
+}
+
 export function themeFor(id: ThemeId | undefined): TerminalTheme {
   return (id && THEMES[id]) || THEMES.dark;
 }

@@ -347,6 +347,26 @@ describe("App", () => {
     });
   });
 
+  describe("背景の不透明度", () => {
+    it("100% のときは、全体に地色を付ける。半透明にすると、窓の背後が見えるよう地色を外す", async () => {
+      const { container, unmount } = render(<App />);
+      expect((container.firstChild as HTMLElement).className).toContain(
+        "bg-neutral-900",
+      );
+      unmount();
+      api.getSettings.mockResolvedValue({
+        ...DEFAULT_SETTINGS,
+        backgroundOpacity: 60,
+      });
+      const view = render(<App />);
+      await waitFor(() =>
+        expect(
+          (view.container.firstChild as HTMLElement).className,
+        ).not.toContain("bg-neutral-900"),
+      );
+    });
+  });
+
   describe("コマンドパレット", () => {
     const openPalette = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");

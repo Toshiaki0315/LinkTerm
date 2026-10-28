@@ -81,4 +81,5 @@ TDD（テスト駆動開発）の原則に従い、以下のフェーズに分�
 - [x] リモートフォワード（-R）の待ち受けアドレス指定（`0.0.0.0:9000:host:80`、`*`、IPv6 は `[::1]:…`。省略は localhost。ssh_config の `RemoteForward [bind:]port host:port` も対応）と、ssh_config の `Match user`・複数条件（`host`/`originalhost`/`user` を並べるとすべて満たす場合のみ。`exec` などは非対応）。
 - [x] SSH Agent の転送（-A。接続ダイアログのチェックボックス／ssh_config の `ForwardAgent yes`。既定オフ・踏み台には渡さない・SSH_AUTH_SOCK が無ければ接続前にエラー。警告表示あり）。
 - [x] 画像表示（sixel / iTerm2 インライン画像。`@xterm/addon-image`。1枚 4096x2048・合計 64MB などの上限つき）。
+- [x] 背景の不透明度（設定のスライダー 30〜100%。端末の背景を半透明にしてウィンドウの後ろを透かす。macOS の private API（`macOSPrivateApi`）とウィンドウの `transparent` を使うため、Mac App Store 配布には使えない）。
 - [x] 最近使った接続（タブバーの履歴メニュー・接続ダイアログから選択。`recent.json`、パスワード類は保存しない）。

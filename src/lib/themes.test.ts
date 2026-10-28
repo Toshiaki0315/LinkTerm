@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { THEME_IDS, THEMES, themeFor } from "./themes";
+import { THEME_IDS, THEMES, themeFor, withOpacity } from "./themes";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -91,5 +91,26 @@ describe("配色テーマ", () => {
     expect(themeFor("dracula")).toBe(THEMES.dracula);
     expect(themeFor(undefined)).toBe(THEMES.dark);
     expect(themeFor("neon" as never)).toBe(THEMES.dark);
+  });
+});
+
+describe("withOpacity", () => {
+  it("#rrggbb / #rgb と不透明度（%）から、rgba を作る", () => {
+    expect(withOpacity("#002b36", 100)).toBe("rgba(0, 43, 54, 1)");
+    expect(withOpacity("#002b36", 50)).toBe("rgba(0, 43, 54, 0.5)");
+    expect(withOpacity("#fff", 80)).toBe("rgba(255, 255, 255, 0.8)");
+    expect(withOpacity("#FDF6E3", 30)).toBe("rgba(253, 246, 227, 0.3)");
+  });
+
+  it("範囲外は収め、色として読めなければ元の値をそのまま返す", () => {
+    expect(withOpacity("#000000", 0)).toBe("rgba(0, 0, 0, 0.3)");
+    expect(withOpacity("#000000", 500)).toBe("rgba(0, 0, 0, 1)");
+    expect(withOpacity("not-a-color", 50)).toBe("not-a-color");
+  });
+
+  it("すべてのテーマの背景色を変換できる", () => {
+    for (const id of THEME_IDS) {
+      expect(withOpacity(THEMES[id].background, 70)).toMatch(/^rgba\(/);
+    }
   });
 });

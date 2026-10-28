@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, fontStackFor, type Settings } from "../lib/settings";
@@ -66,6 +66,7 @@ describe("SettingsDialog", () => {
         fontSize: 16,
         scrollback: 5000,
         cursorBlink: false,
+        backgroundOpacity: 100,
         cursorStyle: "block",
         backspaceKey: "del",
         optionIsMeta: false,
@@ -235,6 +236,22 @@ describe("SettingsDialog", () => {
     expect(dialog.className).toContain("max-h-[calc(100vh-2rem)]");
   });
 
+  it("背景の不透明度（スライダー）を変えて保存できる。100%未満では説明が出る", async () => {
+    const { onSave } = setup();
+    await fontsLoaded();
+    const slider = screen.getByLabelText(/背景の不透明度/);
+    expect(slider).toHaveValue("100");
+    expect(screen.queryByText(/後ろが透けて見えます/)).toBeNull();
+    fireEvent.change(slider, { target: { value: "70" } });
+    expect(screen.getByText("背景の不透明度（70%）")).toBeInTheDocument();
+    expect(screen.getByText(/後ろが透けて見えます/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ backgroundOpacity: 70 }),
+    );
+  });
+
   it("端末エミュレーションの設定（カーソルの形・バックスペース・Option）を保存できる", async () => {
     const { user, onSave } = setup();
     await fontsLoaded();
@@ -270,6 +287,7 @@ describe("SettingsDialog", () => {
       fontSize: 18,
       scrollback: 2000,
       cursorBlink: false,
+      backgroundOpacity: 100,
       cursorStyle: "block",
       backspaceKey: "del",
       optionIsMeta: false,

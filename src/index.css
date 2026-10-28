@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+/* 背景の不透明度を下げたとき、窓の背後が見えるように、地色を付けない（地色は各部が持つ）。 */
+html,
+body,
+#root {
+  background: transparent;
+}

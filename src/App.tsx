@@ -52,6 +52,7 @@ import {
   shortcutFor,
   type Bindings,
 } from "./lib/shortcuts";
+import { cn } from "./lib/utils";
 import { runSnippet, type Snippet } from "./lib/snippets";
 import type { SplitDir } from "./lib/layout";
 import { readSplit, serializeTab } from "./lib/session-layout";
@@ -873,7 +874,13 @@ function App() {
   );
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
+    <div
+      className={cn(
+        "flex h-screen flex-col text-neutral-100",
+        // 背景を半透明にするときは、窓の背後が見えるよう、全体の地色を付けない。
+        settings.backgroundOpacity >= 100 && "bg-neutral-900",
+      )}
+    >
       <h1 className="sr-only">LinkTerm</h1>
       <TabBar
         tabs={state.tabs}

@@ -4,7 +4,7 @@ import { computeRects, type Divider, type SplitDir } from "../lib/layout";
 import { activePaneIdOf, layoutOf, panesOf, type Tab } from "../lib/tabs";
 import type { Appearance, AutoReconnect } from "../lib/settings";
 import type { HighlightRule } from "../lib/highlight";
-import { themeFor } from "../lib/themes";
+import { backgroundFor } from "../lib/themes";
 import { cn } from "../lib/utils";
 import { TerminalTab } from "./TerminalTab";
 
@@ -61,7 +61,15 @@ export function TerminalWorkspace({
 }: Props) {
   if (tabs.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center text-neutral-500">
+      <div
+        style={{
+          backgroundColor: backgroundFor(
+            appearance?.theme,
+            appearance?.backgroundOpacity ?? 100,
+          ),
+        }}
+        className="flex flex-1 items-center justify-center text-neutral-500"
+      >
         「＋」から新しい接続を開始してください
       </div>
     );
@@ -105,7 +113,12 @@ export function TerminalWorkspace({
           <div
             key={tab.id}
             data-tab-id={tab.id}
-            style={{ backgroundColor: themeFor(appearance?.theme).background }}
+            style={{
+              backgroundColor: backgroundFor(
+                appearance?.theme,
+                appearance?.backgroundOpacity ?? 100,
+              ),
+            }}
             className={cn(
               "absolute inset-0 p-1",
               tab.id !== activeId && "hidden",

@@ -108,6 +108,7 @@ describe("TerminalWorkspace", () => {
           fontSize: 13,
           scrollback: 10,
           cursorBlink: true,
+          backgroundOpacity: 100,
           cursorStyle: "block",
           backspaceKey: "del",
           optionIsMeta: false,
@@ -120,6 +121,34 @@ describe("TerminalWorkspace", () => {
       (screen.getByTestId("term-a").closest("[data-tab-id]") as HTMLElement)
         .style.backgroundColor,
     ).toMatch(/^(#002b36|rgb\(0, 43, 54\))$/i);
+  });
+
+  it("背景を半透明にすると、各タブの背景も半透明になる", () => {
+    render(
+      <TerminalWorkspace
+        tabs={[tab("a")]}
+        activeId="a"
+        onStatusChange={() => {}}
+        onSecretsConsumed={() => {}}
+        onEditAndReconnect={() => {}}
+        appearance={{
+          fontFamily: "Menlo",
+          fontSize: 13,
+          scrollback: 10,
+          cursorBlink: true,
+          backgroundOpacity: 50,
+          cursorStyle: "block",
+          backspaceKey: "del",
+          optionIsMeta: false,
+          theme: "solarized-dark",
+          copyOnSelect: false,
+        }}
+      />,
+    );
+    const el = screen
+      .getByTestId("term-a")
+      .closest("[data-tab-id]") as HTMLElement;
+    expect(el.style.backgroundColor).toBe("rgba(0, 43, 54, 0.5)");
   });
 
   describe("画面分割", () => {

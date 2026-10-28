@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { THEME_IDS } from "./themes";
+import { OPACITY_MAX, OPACITY_MIN, THEME_IDS } from "./themes";
 
 // 範囲・既定値は Rust 側（src-tauri/src/settings.rs）と揃える。Rust 側の検証が正。
 export const FONT_SIZE_MIN = 8;
@@ -107,6 +107,21 @@ export const settingsSchema = z.object({
   fontSize: fontSizeSchema,
   scrollback: scrollbackSchema,
   cursorBlink: z.boolean(),
+  backgroundOpacity: z
+    .number(
+      `背景の不透明度は${OPACITY_MIN}〜${OPACITY_MAX}%の整数で入力してください`,
+    )
+    .int(
+      `背景の不透明度は${OPACITY_MIN}〜${OPACITY_MAX}%の整数で入力してください`,
+    )
+    .min(
+      OPACITY_MIN,
+      `背景の不透明度は${OPACITY_MIN}〜${OPACITY_MAX}%の整数で入力してください`,
+    )
+    .max(
+      OPACITY_MAX,
+      `背景の不透明度は${OPACITY_MIN}〜${OPACITY_MAX}%の整数で入力してください`,
+    ),
   cursorStyle: z.enum(CURSOR_STYLES),
   backspaceKey: z.enum(BACKSPACE_KEYS),
   optionIsMeta: z.boolean(),
@@ -137,6 +152,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   scrollback: 10_000,
   cursorBlink: true,
+  backgroundOpacity: 100,
   cursorStyle: "block",
   backspaceKey: "del",
   optionIsMeta: false,
@@ -153,6 +169,7 @@ export type Appearance = Pick<
   | "fontSize"
   | "scrollback"
   | "cursorBlink"
+  | "backgroundOpacity"
   | "cursorStyle"
   | "backspaceKey"
   | "optionIsMeta"

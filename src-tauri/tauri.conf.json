@@ -10,11 +10,13 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "LinkTerm",
         "width": 1100,
-        "height": 720
+        "height": 720,
+        "transparent": true
       }
     ],
     "security": {
