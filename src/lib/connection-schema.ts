@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseLoginScript, scriptUsesPassword } from "./auto-login";
 import { TAB_COLOR_IDS } from "./tab-colors";
 import type { StartRequest } from "./terminal-api";
 
@@ -41,6 +42,8 @@ export const defaultConnectionValues = {
   forwards: "",
   socksPorts: "",
   remoteForwards: "",
+  loginScript: "",
+  loginPassword: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -224,38 +227,70 @@ const ssh = z
     }
   });
 
-const telnet = z.object({
-  type: z.literal("telnet"),
-  encoding,
-  termType,
-  tabColor,
-  localEcho,
-  host: required("ホスト"),
-  port,
-  txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
-  rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
-});
+/** 自動ログイン（Telnet / シリアル）。パスワードは保存しない。 */
+const loginScript = z
+  .string()
+  .default("")
+  .refine(
+    (v) => parseLoginScript(v).ok,
+    "自動ログインの書き方が正しくありません",
+  );
+const loginPassword = z.string().default("");
 
-const serial = z.object({
-  type: z.literal("serial"),
-  encoding,
-  tabColor,
-  localEcho,
-  serialPort: required("ポート").refine(
-    (v) => v.startsWith("/dev/") && v.length > 5 && !v.includes(".."),
-    "ポート名は /dev/ から始まるデバイスのパスで入力してください",
-  ),
-  baudRate: z
-    .number("ボーレートを入力してください")
-    .int("ボーレートは整数で入力してください")
-    .min(1, "ボーレートは1以上で入力してください"),
-  dataBits: z.enum(["Five", "Six", "Seven", "Eight"]).default("Eight"),
-  parity: z.enum(["None", "Odd", "Even"]).default("None"),
-  stopBits: z.enum(["One", "Two"]).default("One"),
-  flowControl: z.enum(["None", "Software", "Hardware"]).default("None"),
-  txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
-  rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
-});
+/** `{password}` を使うスクリプトには、ログイン用パスワードが要る。 */
+const requireLoginPassword = (
+  v: { loginScript: string; loginPassword: string },
+  ctx: z.RefinementCtx,
+) => {
+  if (scriptUsesPassword(v.loginScript) && v.loginPassword === "") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["loginPassword"],
+      message: "ログイン用パスワードを入力してください",
+    });
+  }
+};
+
+const telnet = z
+  .object({
+    type: z.literal("telnet"),
+    encoding,
+    termType,
+    tabColor,
+    localEcho,
+    host: required("ホスト"),
+    port,
+    txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
+    rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
+    loginScript,
+    loginPassword,
+  })
+  .superRefine(requireLoginPassword);
+
+const serial = z
+  .object({
+    type: z.literal("serial"),
+    encoding,
+    tabColor,
+    localEcho,
+    serialPort: required("ポート").refine(
+      (v) => v.startsWith("/dev/") && v.length > 5 && !v.includes(".."),
+      "ポート名は /dev/ から始まるデバイスのパスで入力してください",
+    ),
+    baudRate: z
+      .number("ボーレートを入力してください")
+      .int("ボーレートは整数で入力してください")
+      .min(1, "ボーレートは1以上で入力してください"),
+    dataBits: z.enum(["Five", "Six", "Seven", "Eight"]).default("Eight"),
+    parity: z.enum(["None", "Odd", "Even"]).default("None"),
+    stopBits: z.enum(["One", "Two"]).default("One"),
+    flowControl: z.enum(["None", "Software", "Hardware"]).default("None"),
+    txNewline: z.enum(["Cr", "Lf", "CrLf"]).default("Cr"),
+    rxNewline: z.enum(["Raw", "LfToCrLf", "CrToCrLf"]).default("Raw"),
+    loginScript,
+    loginPassword,
+  })
+  .superRefine(requireLoginPassword);
 
 export const connectionSchema = z.discriminatedUnion("type", [
   local,
@@ -357,6 +392,33 @@ export function connectionTitle(v: ConnectionValues): string {
 }
 
 /**
+ * 開くたびに秘密情報の入力が要る接続か（パスワード認証の SSH、`{password}` を使う自動ログイン）。
+ * 秘密情報は保存しないため、保存済みの設定・履歴・復元したタブは、入力するまで接続できない。
+ */
+export function requiresSecretAtOpen(v: {
+  type?: unknown;
+  authKind?: unknown;
+  loginScript?: unknown;
+}): boolean {
+  if (v.type === "ssh") return v.authKind === "password";
+  if (v.type === "telnet" || v.type === "serial") {
+    return (
+      typeof v.loginScript === "string" && scriptUsesPassword(v.loginScript)
+    );
+  }
+  return false;
+}
+
+/** 必要な秘密情報が、いま空になっている（消去済みの）接続か。 */
+export function isSecretMissing(v: ConnectionValues): boolean {
+  if (!requiresSecretAtOpen(v)) return false;
+  if (v.type === "ssh") return v.password === "";
+  if (v.type === "telnet" || v.type === "serial")
+    return (v.loginPassword ?? "") === "";
+  return false;
+}
+
+/**
  * 保存済みの設定（プロファイル・前回のタブ構成）を接続設定として読む。
  *
  * 秘密情報は保存しないため、パスワード認証の SSH はパスワード欄が空のまま読めるようにする
@@ -368,19 +430,24 @@ export function parseSavedValues(raw: unknown): ConnectionValues | null {
   const {
     password: _password,
     passphrase: _passphrase,
+    loginPassword: _loginPassword,
     ...rest
   } = raw as Record<string, unknown>;
   // 検証を通すためだけの仮の値。読み込み後に空へ戻す。
-  const candidate =
-    rest.type === "ssh" && rest.authKind === "password"
-      ? { ...rest, password: "placeholder" }
-      : rest;
+  let candidate: Record<string, unknown> = rest;
+  if (rest.type === "ssh" && rest.authKind === "password") {
+    candidate = { ...rest, password: "placeholder" };
+  } else if (requiresSecretAtOpen(rest)) {
+    candidate = { ...rest, loginPassword: "placeholder" };
+  }
   const parsed = connectionSchema.safeParse(candidate);
   if (!parsed.success) return null;
   const values = parsed.data;
-  return values.type === "ssh"
-    ? { ...values, password: "", passphrase: "" }
-    : values;
+  if (values.type === "ssh") return { ...values, password: "", passphrase: "" };
+  if (values.type === "telnet" || values.type === "serial") {
+    return { ...values, loginPassword: "" };
+  }
+  return values;
 }
 
 /** 保存・表示に使う値から、パスワード類を取り除く。 */
@@ -390,5 +457,6 @@ export function stripSecrets(
   const rest: Record<string, unknown> = { ...values };
   delete rest.password;
   delete rest.passphrase;
+  delete rest.loginPassword;
   return rest;
 }

@@ -3,9 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAutoReconnect } from "../hooks/useAutoReconnect";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import {
+  isSecretMissing,
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
+import { LoginRunner, parseLoginScript } from "../lib/auto-login";
 import { registerPaneInput } from "../lib/pane-input";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance, AutoReconnect } from "../lib/settings";
@@ -67,10 +69,20 @@ export function TerminalTab({
   const termRef = useRef<TerminalHandle>(null);
   const startedRef = useRef(false);
 
-  const onData = useCallback(
-    (data: Uint8Array) => termRef.current?.write(data),
-    [],
-  );
+  /** 自動ログイン（Telnet / シリアルで、スクリプトがあるとき）。 */
+  const loginRef = useRef<LoginRunner | null>(null);
+  const decoderRef = useRef<TextDecoder | null>(null);
+
+  const onData = useCallback((data: Uint8Array) => {
+    termRef.current?.write(data);
+    const runner = loginRef.current;
+    if (runner && !runner.done) {
+      // 出力が届いた時点で、セッションは確立している。
+      runner.begin();
+      decoderRef.current ??= new TextDecoder();
+      runner.feed(decoderRef.current.decode(data, { stream: true }));
+    }
+  }, []);
   const { status, sessionId, error, remoteEcho, start, write, resize } =
     useTerminalSession({ onData });
 
@@ -143,15 +155,63 @@ export function TerminalTab({
     termRef.current?.focus();
   };
 
+  const note = useCallback((text: string) => {
+    termRef.current?.write(new TextEncoder().encode(`\r\n--- ${text} ---\r\n`));
+  }, []);
+
+  /** 接続し、自動ログインのスクリプトがあれば始める。 */
+  const launch = useCallback(async () => {
+    loginRef.current?.stop();
+    loginRef.current = null;
+    decoderRef.current = null;
+    const request = toStartRequest(
+      values,
+      termRef.current?.size() ?? { cols: 80, rows: 24 },
+    );
+    let runner: LoginRunner | null = null;
+    if (values.type === "telnet" || values.type === "serial") {
+      const parsed = parseLoginScript(values.loginScript ?? "");
+      if (parsed.ok && parsed.steps.length > 0) {
+        // パスワードはここで取り込む（接続後、画面側の保持分は消される）。
+        runner = new LoginRunner({
+          steps: parsed.steps,
+          password: values.loginPassword ?? "",
+          send: (data) =>
+            write(data).catch((e: unknown) =>
+              console.error("自動ログインの送信に失敗しました:", e),
+            ),
+          onDone: () => note("自動ログインを完了しました"),
+          onTimeout: (waiting) =>
+            note(`自動ログイン: 「${waiting}」が表示されないため中断しました`),
+        });
+        loginRef.current = runner;
+      }
+    }
+    const connected = await start(request);
+    if (!runner || loginRef.current !== runner) return;
+    if (connected) runner.begin();
+    else runner.stop();
+  }, [values, start, write, note]);
+
+  useEffect(() => {
+    // 切断・エラーになったら、自動ログインは続けない。
+    if (status === "closed" || status === "error") loginRef.current?.stop();
+  }, [status]);
+
+  useEffect(
+    () => () => {
+      loginRef.current?.stop();
+    },
+    [],
+  );
+
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。
     if (startedRef.current || deferStart) return;
     startedRef.current = true;
-    void start(
-      toStartRequest(values, termRef.current?.size() ?? { cols: 80, rows: 24 }),
-    );
+    void launch();
     onSecretsConsumed(tabId);
-  }, [start, values, tabId, onSecretsConsumed, deferStart]);
+  }, [launch, tabId, onSecretsConsumed, deferStart]);
 
   useEffect(() => {
     onStatusChange(tabId, status);
@@ -181,10 +241,7 @@ export function TerminalTab({
   );
 
   /** パスワード認証のSSHは、消去済みのパスワードを入力し直す必要がある。 */
-  const needsSecret =
-    values.type === "ssh" &&
-    values.authKind === "password" &&
-    values.password === "";
+  const needsSecret = isSecretMissing(values);
 
   const reconnect = useCallback(() => {
     if (needsSecret) {
@@ -197,17 +254,14 @@ export function TerminalTab({
         new TextEncoder().encode("\r\n--- 再接続 ---\r\n"),
       );
     }
-    void start(
-      toStartRequest(values, termRef.current?.size() ?? { cols: 80, rows: 24 }),
-    );
+    void launch();
     onSecretsConsumed(tabId);
   }, [
     needsSecret,
     onEditAndReconnect,
     onSecretsConsumed,
     tabId,
-    start,
-    values,
+    launch,
     status,
   ]);
 

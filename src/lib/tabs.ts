@@ -207,8 +207,16 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
     case "scrubSecrets": {
       const tab = findTabOfPane(state, action.id);
       const pane = tab && panesOf(tab).find((p) => p.id === action.id);
-      if (!tab || !pane || pane.values.type !== "ssh") return state;
-      const values = { ...pane.values, password: "", passphrase: "" };
+      if (!tab || !pane) return state;
+      const v = pane.values;
+      let values: ConnectionValues;
+      if (v.type === "ssh") {
+        values = { ...v, password: "", passphrase: "" };
+      } else if (v.type === "telnet" || v.type === "serial") {
+        values = { ...v, loginPassword: "" };
+      } else {
+        return state;
+      }
       return replaceTab(
         state,
         updatePane(tab, action.id, (p) => ({ ...p, values })),

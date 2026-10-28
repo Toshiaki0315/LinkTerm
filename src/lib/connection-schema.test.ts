@@ -7,6 +7,9 @@ import {
   parseSavedValues,
   defaultConnectionValues,
   toStartRequest,
+  isSecretMissing,
+  requiresSecretAtOpen,
+  stripSecrets,
 } from "./connection-schema";
 
 const SIZE = { cols: 80, rows: 24 };
@@ -619,5 +622,92 @@ describe("タブの色", () => {
     expect(
       parseSavedValues({ type: "local", tabColor: "blue" })?.tabColor,
     ).toBe("blue");
+  });
+});
+
+describe("自動ログイン（Telnet / シリアル）", () => {
+  const telnet = (extra: Record<string, unknown> = {}) =>
+    connectionSchema.safeParse({
+      type: "telnet",
+      host: "h",
+      port: 23,
+      ...extra,
+    });
+
+  it("スクリプトは省略でき、書式が正しくなければ拒否する", () => {
+    expect(telnet().success).toBe(true);
+    expect(telnet({ loginScript: "login: => admin" }).success).toBe(true);
+    expect(telnet({ loginScript: "書式が違う行" }).success).toBe(false);
+  });
+
+  it("{password} を使うスクリプトには、ログイン用パスワードが要る", () => {
+    const script = "Password: => {password}";
+    const r = telnet({ loginScript: script });
+    expect(r.success).toBe(false);
+    expect(telnet({ loginScript: script, loginPassword: "x" }).success).toBe(
+      true,
+    );
+    const s = connectionSchema.safeParse({
+      type: "serial",
+      serialPort: "/dev/cu.x",
+      baudRate: 9600,
+      loginScript: script,
+    });
+    expect(s.success).toBe(false);
+  });
+
+  it("requiresSecretAtOpen / isSecretMissing", () => {
+    expect(requiresSecretAtOpen({ type: "local" })).toBe(false);
+    expect(requiresSecretAtOpen({ type: "ssh", authKind: "password" })).toBe(
+      true,
+    );
+    expect(requiresSecretAtOpen({ type: "ssh", authKind: "agent" })).toBe(
+      false,
+    );
+    expect(
+      requiresSecretAtOpen({ type: "telnet", loginScript: "P: => {password}" }),
+    ).toBe(true);
+    expect(
+      requiresSecretAtOpen({ type: "telnet", loginScript: "a: => b" }),
+    ).toBe(false);
+    const withPw = telnet({
+      loginScript: "P: => {password}",
+      loginPassword: "x",
+    });
+    expect(withPw.success && isSecretMissing(withPw.data)).toBe(false);
+    const empty = withPw.success ? { ...withPw.data, loginPassword: "" } : null;
+    expect(empty && isSecretMissing(empty)).toBe(true);
+  });
+
+  it("保存する値・読み込む値から、ログイン用パスワードを除く", () => {
+    const parsed = telnet({
+      loginScript: "P: => {password}",
+      loginPassword: "tn-secret",
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(stripSecrets(parsed.data)).not.toHaveProperty("loginPassword");
+    expect(JSON.stringify(stripSecrets(parsed.data))).not.toContain(
+      "tn-secret",
+    );
+    // 保存値に紛れていても捨て、スクリプトを残す（パスワードは入力待ちの空）
+    const loaded = parseSavedValues({
+      type: "telnet",
+      host: "h",
+      port: 23,
+      loginScript: "P: => {password}",
+      loginPassword: "leak",
+    });
+    expect(loaded).toMatchObject({
+      loginScript: "P: => {password}",
+      loginPassword: "",
+    });
+  });
+
+  it("接続要求には含めない（スクリプトは画面側で実行する）", () => {
+    const v = telnet({ loginScript: "login: => a" });
+    expect(v.success && toStartRequest(v.data, SIZE)).not.toHaveProperty(
+      "loginScript",
+    );
   });
 });

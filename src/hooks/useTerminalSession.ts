@@ -114,8 +114,9 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
     };
   }, [applyClosed]);
 
+  /** 接続を始める。接続できたら `true`。 */
   const start = useCallback(
-    async (request: StartRequest) => {
+    async (request: StartRequest): Promise<boolean> => {
       setStatus("connecting");
       setError(null);
       setRemoteEcho(null);
@@ -125,7 +126,7 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
         if (!mountedRef.current) {
           // 接続中にタブが閉じられた場合、確立したセッションを残さない。
           await closeSession(id);
-          return;
+          return false;
         }
         idRef.current = id;
         endedRef.current = false;
@@ -140,9 +141,11 @@ export function useTerminalSession({ onData }: UseTerminalSessionOptions) {
         if (earlyClosed.current.has(id)) {
           applyClosed(earlyClosed.current.get(id) ?? null);
         }
+        return true;
       } catch (e) {
         setStatus("error");
         setError(errorMessage(e));
+        return false;
       } finally {
         startingRef.current = false;
         earlyData.current.clear();

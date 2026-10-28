@@ -563,6 +563,49 @@ describe("ConnectionDialog", () => {
     });
   });
 
+  describe("自動ログイン", () => {
+    it("ローカルシェル・SSH では表示しない", async () => {
+      const { user } = setup();
+      expect(screen.queryByLabelText("自動ログイン（任意）")).toBeNull();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      expect(screen.queryByLabelText("自動ログイン（任意）")).toBeNull();
+    });
+
+    it("Telnet でスクリプトを入力して接続できる。{password} を使うときだけパスワード欄が出る", async () => {
+      const { user, onSubmit } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "telnet");
+      await user.type(screen.getByLabelText("ホスト"), "router");
+      expect(screen.queryByLabelText("ログイン用パスワード")).toBeNull();
+      await user.click(screen.getByLabelText("自動ログイン（任意）"));
+      await user.paste("login: => admin\nPassword: => {password}");
+      const pw = await screen.findByLabelText("ログイン用パスワード");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(
+        await screen.findByText(/ログイン用パスワードを入力/),
+      ).toBeVisible();
+      expect(onSubmit).not.toHaveBeenCalled();
+      await user.type(pw, "s3cret");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        type: "telnet",
+        loginScript: "login: => admin\nPassword: => {password}",
+        loginPassword: "s3cret",
+      });
+    });
+
+    it("書式が正しくないスクリプトは接続できない", async () => {
+      const { user, onSubmit } = setup();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "telnet");
+      await user.type(screen.getByLabelText("ホスト"), "router");
+      await user.click(screen.getByLabelText("自動ログイン（任意）"));
+      await user.paste("書式が違う");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      expect(await screen.findByText(/書き方が正しくありません/)).toBeVisible();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("端末の種類 (TERM)", () => {
     it("SSH では選べ、選んだ値で接続する", async () => {
       const { user, onSubmit } = setup();

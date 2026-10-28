@@ -409,4 +409,25 @@ describe("画面分割", () => {
     const s = tabsReducer(split(base(), "p2"), { type: "close", id: "a" });
     expect(s.tabs).toEqual([]);
   });
+
+  it("scrubSecrets: Telnet / シリアルのログイン用パスワードも消す", () => {
+    const telnetValues = {
+      type: "telnet",
+      encoding: "UTF-8",
+      termType: "xterm-256color",
+      localEcho: "auto",
+      host: "h",
+      port: 23,
+      txNewline: "Cr",
+      rxNewline: "Raw",
+      loginScript: "P: => {password}",
+      loginPassword: "secret",
+    } as const;
+    let s = tabsReducer(initialTabsState, {
+      type: "add",
+      tab: { id: "a", title: "a", values: telnetValues },
+    });
+    s = tabsReducer(s, { type: "scrubSecrets", id: "a" });
+    expect(s.tabs[0].values).toEqual({ ...telnetValues, loginPassword: "" });
+  });
 });

@@ -66,7 +66,7 @@ describe("useTerminalSession", () => {
     let resolve!: (id: string) => void;
     api.startSession.mockReturnValue(new Promise<string>((r) => (resolve = r)));
     const { result } = await setup();
-    let p!: Promise<void>;
+    let p!: Promise<boolean>;
     act(() => {
       p = result.current.start(LOCAL);
     });
@@ -109,7 +109,7 @@ describe("useTerminalSession", () => {
     let resolve!: (id: string) => void;
     api.startSession.mockReturnValue(new Promise<string>((r) => (resolve = r)));
     const { result, onData } = await setup();
-    let p!: Promise<void>;
+    let p!: Promise<boolean>;
     act(() => {
       p = result.current.start(LOCAL);
     });
@@ -221,7 +221,7 @@ describe("useTerminalSession", () => {
     let resolve!: (id: string) => void;
     api.startSession.mockReturnValue(new Promise<string>((r) => (resolve = r)));
     const { result, unmount } = await setup();
-    let p!: Promise<void>;
+    let p!: Promise<boolean>;
     act(() => {
       p = result.current.start(LOCAL);
     });
@@ -277,7 +277,7 @@ describe("useTerminalSession", () => {
         new Promise<string>((r) => (resolve = r)),
       );
       const { result } = await setup();
-      let p!: Promise<void>;
+      let p!: Promise<boolean>;
       act(() => {
         p = result.current.start(LOCAL);
       });

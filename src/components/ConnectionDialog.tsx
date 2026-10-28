@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { scriptUsesPassword } from "../lib/auto-login";
 import {
   useForm,
   useWatch,
@@ -58,6 +59,10 @@ interface FormValues {
   remember: boolean;
   keyPath: string;
   passphrase: string;
+  /** 自動ログインのスクリプト（Telnet / シリアル）。 */
+  loginScript: string;
+  /** スクリプトの `{password}` に使う値。保存しない。 */
+  loginPassword: string;
   txNewline: "Cr" | "Lf" | "CrLf";
   rxNewline: "Raw" | "LfToCrLf" | "CrToCrLf";
   serialPort: string;
@@ -160,6 +165,7 @@ export function ConnectionDialog({
   });
   const type = useWatch({ control, name: "type" });
   const authKind = useWatch({ control, name: "authKind" });
+  const loginScript = useWatch({ control, name: "loginScript" });
   const [portList, setPortList] = useState<{
     ports: string[];
     error: string | null;
@@ -595,6 +601,46 @@ export function ConnectionDialog({
                 )}
               </Field>
             </div>
+          )}
+
+          {(type === "telnet" || type === "serial") && (
+            <>
+              <Field
+                label="自動ログイン（任意）"
+                error={message(errors, "loginScript")}
+              >
+                {(id) => (
+                  <textarea
+                    id={id}
+                    rows={3}
+                    spellCheck={false}
+                    placeholder={"login: => admin\nPassword: => {password}"}
+                    className="w-full rounded-md border border-neutral-600 bg-neutral-900 px-3 py-2 font-mono text-sm placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                    {...register("loginScript")}
+                  />
+                )}
+              </Field>
+              <p className="-mt-2 text-xs text-neutral-400">
+                1行に「待つ文字列 =&gt; 送る文字列」。送ったあとに Enter
+                を付けます。{"{password}"}
+                は下のパスワードに置き換わります。
+              </p>
+              {scriptUsesPassword(loginScript ?? "") && (
+                <Field
+                  label="ログイン用パスワード"
+                  error={message(errors, "loginPassword")}
+                >
+                  {(id) => (
+                    <Input
+                      id={id}
+                      type="password"
+                      autoComplete="off"
+                      {...register("loginPassword")}
+                    />
+                  )}
+                </Field>
+              )}
+            </>
           )}
 
           {type === "serial" && (

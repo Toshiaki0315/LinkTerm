@@ -10,14 +10,15 @@ const session = vi.hoisted(() => ({
     error: null as string | null,
     remoteEcho: null as boolean | null,
   },
+  onData: (_d: Uint8Array) => {},
   start: vi.fn(),
   write: vi.fn(),
   resize: vi.fn(),
   close: vi.fn(),
 }));
 vi.mock("../hooks/useTerminalSession", () => ({
-  useTerminalSession: () => ({
-    ...session.state,
+  useTerminalSession: ({ onData }: { onData: (d: Uint8Array) => void }) => ({
+    ...((session.onData = onData), session.state),
     start: session.start,
     write: session.write,
     resize: session.resize,
@@ -91,6 +92,8 @@ const telnet: ConnectionValues = {
   port: 23,
   txNewline: "Cr",
   rxNewline: "Raw",
+  loginScript: "",
+  loginPassword: "",
 };
 const sshPassword: ConnectionValues = {
   type: "ssh",
@@ -134,7 +137,7 @@ beforeEach(() => {
     error: null,
     remoteEcho: null,
   };
-  session.start.mockResolvedValue(undefined);
+  session.start.mockResolvedValue(true);
   session.write.mockResolvedValue(undefined);
   clipboard.copyText.mockReset().mockResolvedValue(undefined);
   clipboard.pasteText.mockReset().mockResolvedValue("pasted text");
@@ -439,6 +442,71 @@ describe("TerminalTab", () => {
       await user.click(screen.getByRole("button", { name: "検索を閉じる" }));
       expect(termSearch.clearSearch).toHaveBeenCalled();
       expect(termSearch.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("自動ログイン", () => {
+    const withScript = (script: string, password = ""): ConnectionValues =>
+      ({
+        ...telnet,
+        loginScript: script,
+        loginPassword: password,
+      }) as ConnectionValues;
+    const output = (text: string) =>
+      act(() => session.onData(new TextEncoder().encode(text)));
+
+    it("出力に待つ文字列が出たら、送る文字列を Enter 付きで送る", async () => {
+      setup(withScript("login: => admin\nPassword: => {password}", "s3cret"));
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("Welcome\r\nlogin: ");
+      expect(session.write).toHaveBeenLastCalledWith("admin\r");
+      output("Password: ");
+      expect(session.write).toHaveBeenLastCalledWith("s3cret\r");
+      await waitFor(() =>
+        expect(termWrite).toHaveBeenLastCalledWith(expect.any(Uint8Array)),
+      );
+      const last = new TextDecoder().decode(termWrite.mock.lastCall![0]);
+      expect(last).toContain("自動ログインを完了しました");
+    });
+
+    it("パスワードを画面（ローカルエコー）には出さない", async () => {
+      setup(withScript("Password: => {password}", "s3cret"));
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      termWrite.mockClear();
+      output("Password: ");
+      const shown = termWrite.mock.calls
+        .map((c) => new TextDecoder().decode(c[0]))
+        .join("");
+      expect(shown).not.toContain("s3cret");
+    });
+
+    it("待たない手順は、接続できたらすぐ送る", async () => {
+      setup(withScript("=> hello"));
+      await waitFor(() =>
+        expect(session.write).toHaveBeenCalledWith("hello\r"),
+      );
+    });
+
+    it("接続に失敗したら、何も送らない", async () => {
+      session.start.mockResolvedValue(false);
+      setup(withScript("=> hello"));
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(session.write).not.toHaveBeenCalled();
+    });
+
+    it("スクリプトがなければ、出力に反応しない", async () => {
+      setup(telnet);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("login: ");
+      expect(session.write).not.toHaveBeenCalled();
+    });
+
+    it("SSH では使わない", async () => {
+      setup(sshPassword);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("login: ");
+      expect(session.write).not.toHaveBeenCalled();
     });
   });
 

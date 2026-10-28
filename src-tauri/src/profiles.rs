@@ -13,7 +13,7 @@ use thiserror::Error;
 
 pub const MAX_NAME_CHARS: usize = 100;
 /// 保存してはならないキー。
-pub const SECRET_KEYS: &[&str] = &["password", "passphrase"];
+pub const SECRET_KEYS: &[&str] = &["password", "passphrase", "loginPassword"];
 
 #[derive(Debug, Error)]
 pub enum ProfileError {
@@ -218,12 +218,17 @@ mod tests {
         let mut v = ssh("h");
         v["password"] = json!("hunter2");
         v["passphrase"] = json!("pp");
+        v["loginPassword"] = json!("tn-secret");
         let saved = s.save(None, "x", v).unwrap();
+        assert!(saved.values.get("loginPassword").is_none());
         assert!(saved.values.get("password").is_none());
         assert!(saved.values.get("passphrase").is_none());
         assert_eq!(saved.values["host"], "h");
         let raw = std::fs::read_to_string(dir.join("nested").join("profiles.json")).unwrap();
-        assert!(!raw.contains("hunter2") && !raw.contains("\"pp\""), "{raw}");
+        assert!(
+            !raw.contains("hunter2") && !raw.contains("tn-secret") && !raw.contains("\"pp\""),
+            "{raw}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

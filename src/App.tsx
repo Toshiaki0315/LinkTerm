@@ -19,7 +19,9 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import {
   connectionSchema,
   connectionTitle,
+  isSecretMissing,
   parseSavedValues,
+  requiresSecretAtOpen,
   stripSecrets,
   type ConnectionValues,
 } from "./lib/connection-schema";
@@ -227,8 +229,7 @@ function App() {
               openTab(values, {
                 title: saved.title,
                 // パスワードは保存していないため、パスワード認証のSSHは「接続」を待つ。
-                deferStart:
-                  values.type === "ssh" && values.authKind === "password",
+                deferStart: requiresSecretAtOpen(values),
               });
             });
             if (activeIndex !== null) {
@@ -250,7 +251,7 @@ function App() {
           const raw = profile?.values;
           if (!profile || !raw) {
             notices.push("起動時に開く保存済みの接続が見つかりません");
-          } else if (raw.type === "ssh" && raw.authKind === "password") {
+          } else if (requiresSecretAtOpen(raw)) {
             // パスワードは保存していないため、検証の前に、入力用の接続ダイアログを開く。
             setDialog({ initialValues: raw as DialogInitialValues });
           } else {
@@ -359,7 +360,7 @@ function App() {
       const pane = panesOf(tab).find((p) => p.id === paneId);
       if (!pane) return;
       const v = pane.values;
-      if (v.type === "ssh" && v.authKind === "password" && v.password === "") {
+      if (isSecretMissing(v)) {
         setDialog({ initialValues: v, split: { tabId, dir } });
         return;
       }
@@ -493,7 +494,7 @@ function App() {
   const onOpenRecent = useCallback(
     (entry: RecentEntry) => {
       const v = entry.values;
-      if (v.type === "ssh" && v.authKind === "password") {
+      if (requiresSecretAtOpen(v)) {
         setDialog({ initialValues: v });
         return;
       }
@@ -531,10 +532,7 @@ function App() {
     (id: string) => {
       const tab = state.tabs.find((t) => t.id === id);
       if (!tab) return;
-      const needsSecret =
-        tab.values.type === "ssh" &&
-        tab.values.authKind === "password" &&
-        tab.values.password === "";
+      const needsSecret = isSecretMissing(tab.values);
       if (needsSecret) {
         setDialog({ initialValues: tab.values });
         return;
