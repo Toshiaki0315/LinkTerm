@@ -536,7 +536,7 @@ export function ConnectionDialog({
                   <Input
                     id={id}
                     autoComplete="off"
-                    placeholder="9000:localhost:3000（サーバーの localhost:9000 → この Mac の localhost:3000）"
+                    placeholder="9000:localhost:3000（サーバーの localhost:9000 → この Mac の localhost:3000）。待ち受けアドレスは 0.0.0.0:9000:… のように先頭へ"
                     {...register("remoteForwards")}
                   />
                 )}

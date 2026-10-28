@@ -1118,6 +1118,7 @@ fn remote(bind_port: u16, dest_port: u16) -> RemoteForward {
         bind_port,
         dest_host: "127.0.0.1".into(),
         dest_port,
+        bind_address: None,
     }
 }
 
@@ -1159,6 +1160,44 @@ async fn remote_forward_relays_server_side_connections_to_a_local_destination() 
         .unwrap();
     assert_eq!(&buf, b"from server");
     s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_forward_bind_address_is_sent_to_the_server() {
+    let h = start_server_with(None, true).await;
+    let mut forwards = vec![remote(0, 1), remote(0, 2), remote(0, 3), remote(0, 4)];
+    forwards[0].bind_address = Some("0.0.0.0".into());
+    forwards[1].bind_address = Some("*".into()); // すべてのインターフェース（空の指定で伝える）
+    forwards[2].bind_address = Some("localhost".into());
+    // 指定なしは、これまでどおりループバック。
+    let mut s = connect_with_remote(&h, forwards).await.unwrap();
+    let addrs: Vec<String> = h
+        .state
+        .remote_requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(a, _)| a.clone())
+        .collect();
+    assert_eq!(addrs, ["0.0.0.0", "", "localhost", "localhost"]);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_remote_bind_address_is_rejected_before_any_request() {
+    let h = start_server_with(None, true).await;
+    for bad in ["bad host", "a;b", "x/y", "\n", &"a".repeat(300)] {
+        let mut f = remote(0, 1);
+        f.bind_address = Some(bad.into());
+        match connect_with_remote(&h, vec![remote(0, 2), f]).await {
+            Err(TerminalError::ConnectionFailed(m)) => {
+                assert!(m.contains("待ち受けアドレス"), "{m}");
+            }
+            other => panic!("拒否されるはず: {:?}", other.err()),
+        }
+    }
+    // 不正な指定があったら、前の転送も含めて、サーバーへは何も要求しない。
+    assert!(h.state.remote_requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

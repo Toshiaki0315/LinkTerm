@@ -112,6 +112,45 @@ export function parseForwards(text: string): ForwardSpec[] | null {
   return result;
 }
 
+/** `-R` の1件。待ち受けアドレスは省略できる（サーバーの `localhost`）。 */
+export interface RemoteForwardSpec extends ForwardSpec {
+  bindAddress?: string;
+}
+
+/** サーバーの待ち受けアドレスとして使える形（ホスト名・IPv4/IPv6・`*`）。 */
+const isBindAddress = (text: string) =>
+  text === "*" || (text.length <= 253 && /^[A-Za-z0-9._:-]+$/.test(text));
+
+/**
+ * リモートフォワード（-R）の指定を読む。`[待ち受けアドレス:]サーバー側ポート:転送先ホスト:転送先ポート` の
+ * カンマ区切り。空欄は転送なし。形式が正しくなければ null。
+ * IPv6 の待ち受けアドレスは `[::1]:9000:host:80` のように角括弧で囲む。
+ */
+export function parseRemoteForwards(text: string): RemoteForwardSpec[] | null {
+  const spec = text.trim();
+  if (spec === "") return [];
+  const result: RemoteForwardSpec[] = [];
+  for (const raw of spec.split(",")) {
+    let item = raw.trim();
+    let bindAddress: string | undefined;
+    const bracket = /^\[([^\]]+)\]:(.*)$/.exec(item);
+    if (bracket) {
+      bindAddress = bracket[1];
+      item = bracket[2];
+    }
+    const parts = item.split(":");
+    if (!bracket && parts.length === 4) bindAddress = parts.shift();
+    else if (parts.length !== 3) return null;
+    if (bindAddress !== undefined && !isBindAddress(bindAddress)) return null;
+    const forward = parseForwards(parts.join(":"));
+    if (forward === null || forward.length !== 1) return null;
+    result.push(
+      bindAddress === undefined ? forward[0] : { ...forward[0], bindAddress },
+    );
+  }
+  return result;
+}
+
 /** SOCKS プロキシ（-D）の待ち受けポート（カンマ区切り）を読む。空欄は指定なし、不正なら null。 */
 export function parseSocksPorts(text: string): number[] | null {
   const spec = text.trim();
@@ -182,8 +221,8 @@ const ssh = z
       .trim()
       .default("")
       .refine(
-        (v) => parseForwards(v) !== null,
-        "リモートフォワードは サーバー側ポート:転送先ホスト:転送先ポート の形式で指定してください",
+        (v) => parseRemoteForwards(v) !== null,
+        "リモートフォワードは [待ち受けアドレス:]サーバー側ポート:転送先ホスト:転送先ポート の形式で指定してください",
       ),
     socksPorts: z
       .string()
@@ -317,7 +356,7 @@ export function toStartRequest(
         useSshConfig: v.useSshConfig,
         jumpHosts: v.jumpHosts,
         forwards: parseForwards(v.forwards ?? "") ?? [],
-        remoteForwards: parseForwards(v.remoteForwards ?? "") ?? [],
+        remoteForwards: parseRemoteForwards(v.remoteForwards ?? "") ?? [],
         dynamicForwards: parseSocksPorts(v.socksPorts ?? "") ?? [],
         termType: v.termType,
         encoding: v.encoding,

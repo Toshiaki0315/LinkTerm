@@ -3,6 +3,7 @@ import {
   connectionSchema,
   connectionTitle,
   parseForwards,
+  parseRemoteForwards,
   parseSocksPorts,
   parseSavedValues,
   defaultConnectionValues,
@@ -468,6 +469,80 @@ describe("parseSavedValues（保存済みの設定の読み込み）", () => {
         forwards: [],
       });
     });
+  });
+});
+
+describe("parseRemoteForwards", () => {
+  it("待ち受けアドレスは省略できる（先頭に付けて指定する）", () => {
+    expect(parseRemoteForwards("")).toEqual([]);
+    expect(parseRemoteForwards("9000:localhost:3000")).toEqual([
+      { bindPort: 9000, destHost: "localhost", destPort: 3000 },
+    ]);
+    expect(
+      parseRemoteForwards("0.0.0.0:9000:localhost:3000, *:9001:h:1, 9002:h:2"),
+    ).toEqual([
+      {
+        bindAddress: "0.0.0.0",
+        bindPort: 9000,
+        destHost: "localhost",
+        destPort: 3000,
+      },
+      { bindAddress: "*", bindPort: 9001, destHost: "h", destPort: 1 },
+      { bindPort: 9002, destHost: "h", destPort: 2 },
+    ]);
+  });
+
+  it("IPv6 の待ち受けアドレスは角括弧で囲む", () => {
+    expect(parseRemoteForwards("[::1]:9000:localhost:3000")).toEqual([
+      {
+        bindAddress: "::1",
+        bindPort: 9000,
+        destHost: "localhost",
+        destPort: 3000,
+      },
+    ]);
+    expect(parseRemoteForwards("[::1:9000:h:1")).toBeNull();
+  });
+
+  it("形式が違う・使えない文字・ポートの範囲外は null", () => {
+    for (const bad of [
+      "9000",
+      "9000:h",
+      "1:2:3:4:5",
+      "bad host:9000:h:1",
+      "a;b:9000:h:1",
+      "0.0.0.0:0:h:1",
+      "0.0.0.0:9000:h:70000",
+      "0.0.0.0:9000:bad host:1",
+      ":9000:h:1",
+      "9000:h:1,",
+    ]) {
+      expect(parseRemoteForwards(bad), bad).toBeNull();
+    }
+  });
+
+  it("接続要求では、待ち受けアドレスを bindAddress として渡す。-L には使えない", () => {
+    const v = connectionSchema.safeParse({
+      type: "ssh",
+      host: "h",
+      port: 22,
+      username: "u",
+      authKind: "agent",
+      remoteForwards: "0.0.0.0:9000:localhost:3000",
+    });
+    expect(
+      v.success && toStartRequest(v.data, { cols: 80, rows: 24 }),
+    ).toMatchObject({
+      remoteForwards: [
+        {
+          bindAddress: "0.0.0.0",
+          bindPort: 9000,
+          destHost: "localhost",
+          destPort: 3000,
+        },
+      ],
+    });
+    expect(parseForwards("0.0.0.0:8080:h:80")).toBeNull();
   });
 });
 

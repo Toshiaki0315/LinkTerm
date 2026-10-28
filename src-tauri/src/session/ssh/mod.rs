@@ -65,15 +65,38 @@ pub struct SshConfig {
     pub remote_forwards: Vec<RemoteForward>,
 }
 
-/// リモートフォワード（`ssh -R bind_port:dest_host:dest_port`）。
-/// サーバー側の `localhost:bind_port` への接続を、このMacから `dest_host:dest_port` へ中継する。
-/// サーバー側の待ち受けはループバックに限る。
+/// リモートフォワード（`ssh -R [bind_address:]bind_port:dest_host:dest_port`）。
+/// サーバー側の `bind_address:bind_port` への接続を、このMacから `dest_host:dest_port` へ中継する。
+/// `bind_address` を省略するとループバック（`localhost`）。`*` はすべてのインターフェース
+/// （サーバー側で `GatewayPorts` が許可されている場合のみ有効）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteForward {
     pub bind_port: u16,
     pub dest_host: String,
     pub dest_port: u16,
+    /// サーバー側の待ち受けアドレス。省略は `localhost`。
+    #[serde(default)]
+    pub bind_address: Option<String>,
+}
+
+/// サーバーへ伝える待ち受けアドレスにする。省略は `localhost`、`*` は空（RFC 4254 の「すべて」）。
+/// ホスト名・IPアドレスに使える文字だけを許す。
+fn remote_bind_address(address: Option<&str>) -> Result<String, TerminalError> {
+    match address {
+        None | Some("") => Ok("localhost".into()),
+        Some("*") => Ok(String::new()),
+        Some(a)
+            if a.len() <= 253
+                && a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')) =>
+        {
+            Ok(a.to_owned())
+        }
+        Some(a) => Err(TerminalError::ConnectionFailed(format!(
+            "リモートフォワードの待ち受けアドレスが不正です: {a}"
+        ))),
+    }
 }
 
 /// ローカルポートフォワード（`ssh -L bind_port:dest_host:dest_port`）。
@@ -566,10 +589,15 @@ async fn start_remote_forwards(
     forwards: &[RemoteForward],
     table: &RemoteTable,
 ) -> Result<Vec<u16>, TerminalError> {
+    // 1つでも不正な指定があれば、サーバーへは何も要求しない。
+    let addresses = forwards
+        .iter()
+        .map(|f| remote_bind_address(f.bind_address.as_deref()))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut ports = Vec::new();
-    for forward in forwards {
+    for (forward, address) in forwards.iter().zip(addresses) {
         let granted = handle
-            .tcpip_forward("localhost", u32::from(forward.bind_port))
+            .tcpip_forward(address, u32::from(forward.bind_port))
             .await
             .map_err(|e| {
                 TerminalError::ConnectionFailed(format!(

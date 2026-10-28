@@ -136,11 +136,65 @@ fn parse_local_forward(value: &str) -> Option<LocalForward> {
     })
 }
 
-/// 設定の1区画（`Host` 行から次の `Host` 行まで）。先頭のグローバル設定は全ホストに適用する。
+/// `RemoteForward [bind_address:]port host:hostport` を読む。IPv6 の待ち受けアドレスは `[::1]:9000` の形。
+/// 不正な値（使えない文字を含む待ち受けアドレスなど）は読み飛ばす。
+fn parse_remote_forward(value: &str) -> Option<RemoteForward> {
+    let mut parts = value.split_whitespace();
+    let bind_spec = parts.next()?;
+    let forward = parse_local_forward(value)?;
+    let bind_address = match bind_spec.rsplit_once(':') {
+        Some((address, _)) => {
+            let address = address.trim_start_matches('[').trim_end_matches(']');
+            if address.is_empty()
+                || !address
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '*'))
+            {
+                return None;
+            }
+            Some(address.to_owned())
+        }
+        None => None,
+    };
+    Some(RemoteForward {
+        bind_port: forward.bind_port,
+        dest_host: forward.dest_host,
+        dest_port: forward.dest_port,
+        bind_address,
+    })
+}
+
+/// 区画が当てはまる条件。すべての条件（AND）を満たしたときだけ適用する。
+/// 条件が1つもなければ（先頭のグローバル設定・`Match all`）、全ホストに適用する。
+#[derive(Debug, Default, Clone)]
+struct Condition {
+    /// ホスト名（別名）のパターン一覧。`Host` と、`Match host` / `Match originalhost`。
+    hosts: Vec<Vec<String>>,
+    /// ユーザー名のパターン一覧（`Match user`）。
+    users: Vec<Vec<String>>,
+    /// 評価できない条件（`exec` など）を含む。どのホストにも当てはまらない。
+    never: bool,
+}
+
+impl Condition {
+    fn applies(&self, host: &str, user: Option<&str>) -> bool {
+        if self.never {
+            return false;
+        }
+        if !self.hosts.iter().all(|p| patterns_match(p, host)) {
+            return false;
+        }
+        // ユーザー名が分からないときは、user の条件には当てはまらない。
+        self.users
+            .iter()
+            .all(|p| user.is_some_and(|u| patterns_match(p, u)))
+    }
+}
+
+/// 設定の1区画（`Host` / `Match` 行から次の行まで）。先頭のグローバル設定は全ホストに適用する。
 #[derive(Debug, Default)]
 struct Block {
-    /// `None` はグローバル（全ホスト）。
-    patterns: Option<Vec<String>>,
+    cond: Condition,
     options: Vec<(Keyword, String)>,
 }
 
@@ -240,22 +294,48 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-/// `Match` 行の条件を、`Host` と同じパターン一覧にする。
-/// 対応するのは `all` と、単独の `host` / `originalhost`。それ以外（`user` `exec` や複数条件）は
-/// 評価できないので、どのホストにも当てはまらない（空の一覧）ものとして扱う。
-fn match_patterns(args: &[String]) -> Option<Vec<String>> {
-    let lower: Vec<String> = args.iter().map(|a| a.to_ascii_lowercase()).collect();
-    match lower.as_slice() {
-        [all] if all == "all" => None,
-        [key, _] if key == "host" || key == "originalhost" => Some(
-            args[1]
-                .split(',')
-                .filter(|p| !p.is_empty())
-                .map(str::to_owned)
-                .collect(),
-        ),
-        _ => Some(Vec::new()),
+/// パターン一覧（`a,b,!c`）を分ける。
+fn split_patterns(text: &str) -> Vec<String> {
+    text.split(',')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `Match` 行の条件を読む。対応するのは `all`、`host` / `originalhost`、`user`（複数並べると、すべてを満たす）。
+/// それ以外（`exec` `localuser` `canonical` など）や、引数のない指定は評価できないので、
+/// どのホストにも当てはまらないものとして扱う。
+fn match_condition(args: &[String]) -> Condition {
+    let mut cond = Condition::default();
+    let mut i = 0;
+    while i < args.len() {
+        let key = args[i].to_ascii_lowercase();
+        match key.as_str() {
+            "all" => i += 1,
+            "host" | "originalhost" | "user" => {
+                let Some(value) = args.get(i + 1) else {
+                    cond.never = true;
+                    break;
+                };
+                let patterns = split_patterns(value);
+                if patterns.is_empty() {
+                    cond.never = true;
+                    break;
+                }
+                if key == "user" {
+                    cond.users.push(patterns);
+                } else {
+                    cond.hosts.push(patterns);
+                }
+                i += 2;
+            }
+            _ => {
+                cond.never = true;
+                break;
+            }
+        }
     }
+    cond
 }
 
 /// `Include` の最大のたどり深さ。
@@ -379,13 +459,16 @@ impl SshConfig {
             match keyword.as_str() {
                 "host" => {
                     blocks.push(Block {
-                        patterns: Some(args),
+                        cond: Condition {
+                            hosts: vec![args],
+                            ..Condition::default()
+                        },
                         options: Vec::new(),
                     });
                 }
                 "match" => {
                     blocks.push(Block {
-                        patterns: match_patterns(&args),
+                        cond: match_condition(&args),
                         options: Vec::new(),
                     });
                 }
@@ -456,8 +539,14 @@ impl SshConfig {
         expand_tilde(value, self.home.as_deref())
     }
 
-    /// `host`（別名）を解決する。
+    /// `host`（別名）を解決する。ユーザー名が分かっていない前提（`Match user` には当てはまらない）。
     pub fn resolve(&self, host: &str) -> ResolvedHost {
+        self.resolve_for(host, None)
+    }
+
+    /// `host`（別名）を、接続するユーザー名 `requested_user`（ダイアログで指定したもの）を使って解決する。
+    /// `Match user` は、指定したユーザー、なければそれより前の区画の `User` で判定する。
+    pub fn resolve_for(&self, host: &str, requested_user: Option<&str>) -> ResolvedHost {
         let mut hostname: Option<String> = None;
         let mut user: Option<String> = None;
         let mut port: Option<u16> = None;
@@ -467,11 +556,8 @@ impl SshConfig {
         let mut dynamic_forwards = Vec::new();
         let mut remote_forwards = Vec::new();
         for block in &self.blocks {
-            let applies = block
-                .patterns
-                .as_ref()
-                .is_none_or(|patterns| patterns_match(patterns, host));
-            if !applies {
+            let known_user = requested_user.or(user.as_deref());
+            if !block.cond.applies(host, known_user) {
                 continue;
             }
             for (keyword, value) in &block.options {
@@ -491,11 +577,7 @@ impl SshConfig {
                     Keyword::IdentityFile => identity_files.push(self.expand_path(value)),
                     Keyword::LocalForward => local_forwards.extend(parse_local_forward(value)),
                     Keyword::RemoteForward => {
-                        remote_forwards.extend(parse_local_forward(value).map(|f| RemoteForward {
-                            bind_port: f.bind_port,
-                            dest_host: f.dest_host,
-                            dest_port: f.dest_port,
-                        }));
+                        remote_forwards.extend(parse_remote_forward(value));
                     }
                     Keyword::DynamicForward => dynamic_forwards.extend(parse_bind_port(value)),
                     Keyword::ProxyJump => {
@@ -524,8 +606,7 @@ impl SshConfig {
         for pattern in self
             .blocks
             .iter()
-            .filter_map(|b| b.patterns.as_ref())
-            .flatten()
+            .flat_map(|b| b.cond.hosts.iter().flatten())
         {
             let concrete = !pattern.is_empty()
                 && !pattern.contains(['*', '?', '!'])
@@ -582,9 +663,9 @@ pub fn resolve_target(
             "ホスト名を指定してください".into(),
         ));
     }
-    let resolved = config.resolve(host);
-
     let typed_user = request.username.trim();
+    let resolved = config.resolve_for(host, (!typed_user.is_empty()).then_some(typed_user));
+
     let username = if typed_user.is_empty() {
         resolved.user.clone().ok_or_else(|| {
             SshConfigError::InvalidTarget(format!(
@@ -1103,11 +1184,35 @@ mod tests {
             bind_port: 9000,
             dest_host: "x".into(),
             dest_port: 1,
+            bind_address: None,
         }];
         let merged = merge_remote_forwards(dialog, r.remote_forwards);
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].dest_host, "x");
         assert_eq!(merged[1].bind_port, 9001);
+    }
+
+    #[test]
+    fn remote_forward_bind_address_is_read() {
+        let c = cfg(
+            "Host a\n  RemoteForward 0.0.0.0:9000 localhost:3000\n  RemoteForward *:9001 h:1\n  RemoteForward [::1]:9002 h:2\n  RemoteForward localhost:9003 h:3\n  RemoteForward 9004 h:4\n  RemoteForward bad host:9005 h:5\n  RemoteForward a;b:9006 h:6\n",
+        );
+        let r = c.resolve("a");
+        let got: Vec<(Option<&str>, u16)> = r
+            .remote_forwards
+            .iter()
+            .map(|f| (f.bind_address.as_deref(), f.bind_port))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (Some("0.0.0.0"), 9000),
+                (Some("*"), 9001),
+                (Some("::1"), 9002),
+                (Some("localhost"), 9003),
+                (None, 9004),
+            ]
+        );
     }
 
     #[test]
@@ -1406,5 +1511,62 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("IdentityFile"), "{err}");
         assert!(pick_identity_file(Path::new(""), &[], None).is_err());
+    }
+
+    #[test]
+    fn match_user_uses_the_requested_user_or_an_earlier_user_directive() {
+        let c = cfg(
+            "Match user alice\n  Port 2201\nMatch user bob,carol\n  Port 2202\nMatch user *,!root\n  IdentityFile /k/notroot\n",
+        );
+        // 指定したユーザーで当てはまる。
+        assert_eq!(c.resolve_for("h", Some("alice")).port, Some(2201));
+        assert_eq!(c.resolve_for("h", Some("carol")).port, Some(2202));
+        assert_eq!(c.resolve_for("h", Some("root")).port, None);
+        assert!(c.resolve_for("h", Some("root")).identity_files.is_empty());
+        assert_eq!(c.resolve_for("h", Some("dave")).identity_files.len(), 1);
+        // ユーザーが分からなければ、user の条件には当てはまらない。
+        assert_eq!(c.resolve("h").port, None);
+        assert!(c.resolve("h").identity_files.is_empty());
+        // 前の User の指定（ホスト別）が、あとの Match user の判定に使われる。
+        let c = cfg("Host h\n  User alice\nMatch user alice\n  Port 2201\n");
+        assert_eq!(c.resolve("h").port, Some(2201));
+        assert_eq!(c.resolve("other").port, None);
+    }
+
+    #[test]
+    fn match_with_several_criteria_requires_all_of_them() {
+        let c = cfg(
+            "Match host web*,db* user alice\n  Port 2201\nMatch originalhost web1 user bob\n  Port 2202\nMatch host web*,!web9\n  IdentityFile /k/web\n",
+        );
+        assert_eq!(c.resolve_for("web1", Some("alice")).port, Some(2201));
+        assert_eq!(c.resolve_for("web1", Some("bob")).port, Some(2202));
+        assert_eq!(c.resolve_for("web1", Some("carol")).port, None);
+        assert_eq!(c.resolve_for("app", Some("alice")).port, None);
+        assert_eq!(c.resolve_for("web1", None).port, None);
+        assert_eq!(c.resolve_for("web1", Some("x")).identity_files.len(), 1);
+        assert!(c.resolve_for("web9", Some("x")).identity_files.is_empty());
+    }
+
+    #[test]
+    fn match_with_unsupported_criteria_never_applies() {
+        let c = cfg(
+            "Match exec \"true\"\n  Port 1\nMatch host h localuser me\n  Port 2\nMatch canonical\n  Port 3\nMatch host\n  Port 4\nMatch user alice exec \"x\"\n  Port 5\n",
+        );
+        assert_eq!(c.resolve_for("h", Some("alice")).port, None);
+    }
+
+    #[test]
+    fn resolve_target_matches_user_against_the_typed_user() {
+        let c = cfg("Match user alice\n  Port 2201\n  HostName a.example\n");
+        let req = |user: &str| RequestedTarget {
+            host: "h".into(),
+            port: DEFAULT_SSH_PORT,
+            username: user.into(),
+            jump_hosts: String::new(),
+        };
+        let t = resolve_target(&c, &req("alice")).unwrap();
+        assert_eq!((t.port, t.hostname.as_str()), (2201, "a.example"));
+        let t = resolve_target(&c, &req("bob")).unwrap();
+        assert_eq!((t.port, t.hostname.as_str()), (22, "h"));
     }
 }
