@@ -55,6 +55,8 @@ export class TimestampStamper {
   private enabled = false;
   /** 有効にした時点の位置。これより後の行だけに付ける。 */
   private baseline: Marker | undefined;
+  /** 有効にした時点の、その行（カーソル行）の内容。あとから文字が足されたかの判定に使う。 */
+  private baselineText = "";
   private stamps = new Map<number, Stamp>();
 
   constructor(
@@ -67,7 +69,9 @@ export class TimestampStamper {
     if (enabled === this.enabled) return;
     this.enabled = enabled;
     if (enabled) {
+      const buf = this.term.buffer.active;
       this.baseline = this.term.registerMarker(0);
+      this.baselineText = this.lineText(buf.baseY + buf.cursorY);
     } else {
       this.clear();
       this.baseline?.dispose();
@@ -83,11 +87,10 @@ export class TimestampStamper {
     const last = buf.baseY + buf.cursorY;
     const base =
       this.baseline && !this.baseline.isDisposed ? this.baseline.line : -1;
-    const first = Math.max(
-      base + 1,
-      last - Math.min(count, MAX_SCAN_LINES) + 1,
-      0,
-    );
+    // 有効にした時点の行にも、あとから文字が足されていれば付ける（その行から始める）。
+    const from =
+      base >= 0 && this.lineText(base) !== this.baselineText ? base : base + 1;
+    const first = Math.max(from, last - Math.min(count, MAX_SCAN_LINES) + 1, 0);
     for (let y = first; y <= last; y += 1) this.stampLine(y, last);
     this.prune(first);
   }
@@ -105,6 +108,18 @@ export class TimestampStamper {
       s.marker.dispose();
     }
     this.stamps.clear();
+  }
+
+  /** この行の文字列（空のセルは空白、右端の空白は除く）。 */
+  private lineText(y: number): string {
+    const line = this.term.buffer.active.getLine(y);
+    if (!line) return "";
+    let text = "";
+    for (let x = 0; x < this.term.cols; x += 1) {
+      const cell = line.getCell(x);
+      if (cell && cell.getWidth() > 0) text += cell.getChars() || " ";
+    }
+    return text.trimEnd();
   }
 
   /** この行の、文字のある最後の列（なければ -1）。 */

@@ -107,6 +107,27 @@ describe("TimestampStamper", () => {
     expect(el.textContent).toBe("10:00:05");
   });
 
+  it("オンにした時点のカーソル行に、あとから文字が出力されたら、その行にも時刻を付ける（出力のない間は付けない）", () => {
+    const f = fakeTerm(["old", "prompt$ "]);
+    let now = new Date(2024, 0, 1, 10, 0, 0).getTime();
+    const s = new TimestampStamper(f.term, () => now);
+    s.setEnabled(true);
+    s.scanRecent(10);
+    expect(f.decorations).toHaveLength(0);
+    // 同じ行に入力のエコーなどが続いた（改行はまだ）。
+    now += 3000;
+    f.state.lines[1] = "prompt$ ls";
+    s.scanRecent(10);
+    expect(f.decorations).toHaveLength(1);
+    const el = document.createElement("span");
+    (f.decorations[0].options.onRender as (e: HTMLElement) => void)(el);
+    expect(el.textContent).toBe("10:00:03");
+    // その後に改行があっても、同じ行を付け直さない。
+    push(f, "output");
+    s.scanRecent(10);
+    expect(f.decorations).toHaveLength(2);
+  });
+
   it("同じ行を何度調べても、時刻は付け直さない（最初に現れた時刻のまま）", () => {
     const f = fakeTerm(["base"]);
     let now = new Date(2024, 0, 1, 10, 0, 0).getTime();
