@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
@@ -16,6 +17,16 @@ import { TimestampStamper, type StampTerm } from "../lib/timestamp-stamper";
 
 /** xterm.js のオプションとして設定する外観（コピー設定は含まない）。 */
 type XtermAppearance = Omit<Appearance, "copyOnSelect" | "backspaceKey">;
+
+/** 画像表示（sixel / iTerm2 方式）の上限。大きな画像でメモリを使い切らないよう、控えめにする。 */
+export const IMAGE_ADDON_OPTIONS = {
+  /** 1枚の最大の画素数（4096 x 2048 相当）。 */
+  pixelLimit: 4096 * 2048,
+  /** 保持する画像の合計（MB）。古いものから捨てる。 */
+  storageLimit: 64,
+  sixelSizeLimit: 10_000_000,
+  iipSizeLimit: 10_000_000,
+} as const;
 
 const DEFAULT_APPEARANCE: Appearance = {
   fontFamily: DEFAULT_SETTINGS.fontFamily,
@@ -150,6 +161,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       const term = new Terminal({
         ...options,
         linkHandler: { activate: activateLink },
+        // 画像表示のアドオンが、実験的な API を使う。
+        allowProposedApi: true,
         macOptionIsMeta: meta,
         theme: themeFor(initialTheme).xterm,
       });
@@ -159,6 +172,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       term.loadAddon(searchAddon);
       searchRef.current = searchAddon;
       term.loadAddon(new WebLinksAddon(activateLink));
+      try {
+        term.loadAddon(new ImageAddon({ ...IMAGE_ADDON_OPTIONS }));
+      } catch (e) {
+        // 画像表示が使えない環境でも、端末そのものは使えるようにする。
+        console.error("画像表示を有効にできませんでした:", e);
+      }
       term.open(container);
       termRef.current = term;
       // 画面の文字列を調べて色を付ける（テストの偽物など、バッファを持たない場合は使わない）。

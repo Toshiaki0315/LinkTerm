@@ -79,6 +79,18 @@ vi.mock("@xterm/addon-search", () => ({
     }
   },
 }));
+const image = vi.hoisted(() => ({
+  options: [] as Array<Record<string, unknown>>,
+  failOnLoad: false,
+}));
+vi.mock("@xterm/addon-image", () => ({
+  ImageAddon: class {
+    constructor(options: Record<string, unknown>) {
+      if (image.failOnLoad) throw new Error("no canvas");
+      image.options.push(options);
+    }
+  },
+}));
 const links = vi.hoisted(() => ({
   handlers: [] as Array<(event: MouseEvent, uri: string) => void>,
 }));
@@ -827,6 +839,32 @@ describe("TerminalView", () => {
       open(new MouseEvent("click", { metaKey: true }), "javascript:alert(1)");
       open(new MouseEvent("click", { metaKey: true }), "file:///etc/passwd");
       expect(opener.openExternalUrl).not.toHaveBeenCalled();
+    });
+
+    it("画像表示（sixel / iTerm2）を、控えめな上限つきで有効にする", () => {
+      image.options.length = 0;
+      mount();
+      expect(image.options).toHaveLength(1);
+      expect(image.options[0]).toMatchObject({
+        pixelLimit: 4096 * 2048,
+        storageLimit: 64,
+        sixelSizeLimit: 10_000_000,
+        iipSizeLimit: 10_000_000,
+      });
+      expect(xterm.instances[0].options.allowProposedApi).toBe(true);
+    });
+
+    it("画像表示を読み込めない環境でも、端末は使える（エラーはコンソールへ）", () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      image.failOnLoad = true;
+      try {
+        expect(() => mount()).not.toThrow();
+        expect(xterm.instances.length).toBeGreaterThan(0);
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        image.failOnLoad = false;
+        spy.mockRestore();
+      }
     });
 
     it("OSC 8 のリンク（出力が埋め込んだリンク）も、⌘+クリックで開く。http / https 以外は開かない", () => {
