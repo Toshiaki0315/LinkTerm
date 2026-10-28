@@ -334,6 +334,99 @@ describe("App", () => {
     });
   });
 
+  describe("コマンドパレット", () => {
+    const openPalette = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      return screen.findByRole("combobox", { name: "コマンドを検索" });
+    };
+
+    it("⌘⇧P で開き、絞り込んで Enter で実行する（新しい接続のダイアログが開く）", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      const input = await openPalette(user);
+      await user.type(input, "新しい接続");
+      await user.keyboard("{Enter}");
+      expect(
+        await screen.findByRole("dialog", { name: /接続/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("combobox", { name: "コマンドを検索" }),
+      ).toBeNull();
+    });
+
+    it("Esc で閉じる。パレット表示中は、ほかのショートカット（⌘T）を受け付けない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await openPalette(user);
+      await user.keyboard("{Meta>}t{/Meta}");
+      expect(screen.queryByLabelText("接続種別")).toBeNull();
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("combobox", { name: "コマンドを検索" }),
+        ).toBeNull(),
+      );
+    });
+
+    it("保存済みの接続を、パレットから開ける", async () => {
+      api.listProfiles.mockResolvedValue([
+        {
+          id: "p1",
+          name: "ローカルの作業用",
+          values: { type: "local", encoding: "UTF-8" },
+        },
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      const input = await openPalette(user);
+      await user.type(input, "作業用");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    });
+
+    it("タブを切り替える・スニペットを実行する", async () => {
+      api.getSnippets.mockResolvedValue([
+        {
+          id: "s1",
+          name: "経路確認",
+          text: "ls",
+          lineDelayMs: 0,
+          sendEnter: true,
+        },
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}t{/Meta}");
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await user.keyboard("{Meta>}t{/Meta}");
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      const ids = screen
+        .getAllByTestId(/^term-/)
+        .map((e) => e.getAttribute("data-testid")!.replace("term-", ""));
+      const sent: string[] = [];
+      const off = registerPaneInput(ids[0], (d) => sent.push(d));
+
+      // 先頭のタブへ移動（2つ目がアクティブだった）
+      let input = await openPalette(user);
+      await user.type(input, "タブへ移動 local");
+      await user.keyboard("{Enter}");
+      await waitFor(() =>
+        expect(screen.getAllByRole("tab")[0]).toHaveAttribute(
+          "aria-selected",
+          "true",
+        ),
+      );
+
+      input = await openPalette(user);
+      await user.type(input, "経路確認");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(sent).toEqual(["ls\r"]));
+      off();
+    });
+  });
+
   describe("同時入力", () => {
     const openTab = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.keyboard("{Meta>}t{/Meta}");

@@ -116,4 +116,11 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("i", { metaKey: true }))).toBeNull();
     expect(shortcutFor(key("I", { ctrlKey: true, shiftKey: true }))).toBeNull();
   });
+
+  it("⌘⇧P はコマンドパレット（⇧なしは無視）", () => {
+    expect(shortcutFor(key("P", { metaKey: true, shiftKey: true }))).toEqual({
+      type: "palette",
+    });
+    expect(shortcutFor(key("p", { metaKey: true }))).toBeNull();
+  });
 });

@@ -11,6 +11,8 @@ export type ShortcutAction =
   | { type: "nextPane" }
   /** 同時入力のオン・オフ（⌘⇧I）。 */
   | { type: "broadcast" }
+  /** コマンドパレットを開く（⌘⇧P）。 */
+  | { type: "palette" }
   | { type: "previousPane" };
 
 export interface KeyEventLike {
@@ -35,6 +37,7 @@ export function shortcutFor(event: KeyEventLike): ShortcutAction | null {
     if (key === "[" || key === "{") return { type: "previous" };
     if (key === "d") return { type: "split", dir: "column" };
     if (key === "i") return { type: "broadcast" };
+    if (key === "p") return { type: "palette" };
     return null;
   }
   if (key === "t") return { type: "new" };

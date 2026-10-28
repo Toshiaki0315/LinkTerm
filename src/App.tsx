@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import { CommandPalette } from "./components/CommandPalette";
 import { HighlightsDialog } from "./components/HighlightsDialog";
 import { SnippetsDialog } from "./components/SnippetsDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
@@ -40,6 +42,7 @@ import {
   type BroadcastMode,
 } from "./lib/broadcast";
 import type { HighlightRule } from "./lib/highlight";
+import { buildPaletteCommands } from "./lib/palette-commands";
 import { sendToPane } from "./lib/pane-input";
 import { shortcutFor } from "./lib/shortcuts";
 import { runSnippet, type Snippet } from "./lib/snippets";
@@ -140,6 +143,7 @@ function App() {
     return () => clearTimeout(timer);
   }, [recentDirty, recentPayload]);
 
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** 同時入力の範囲。 */
   const [broadcast, setBroadcast] = useState<BroadcastMode>("off");
 
@@ -450,6 +454,7 @@ function App() {
     settingsOpen ||
     snippetsOpen ||
     highlightsOpen ||
+    paletteOpen ||
     hostKeyQueue.length > 0;
 
   // 見たタブの印は消す（切り替えたとき・ウィンドウに戻ったとき）。
@@ -502,6 +507,9 @@ function App() {
         }
         case "split":
           if (activeTab) splitTab(activeTab.id, action.dir);
+          break;
+        case "palette":
+          setPaletteOpen(true);
           break;
         case "broadcast":
           setBroadcast((m) => (m === "off" ? "tab" : "off"));
@@ -659,6 +667,92 @@ function App() {
     );
   }, []);
 
+  /** 保存済みの接続を開く。秘密情報が要る接続は、入力用のダイアログを開く。 */
+  const onOpenProfile = useCallback(
+    (profile: SavedProfile) => {
+      const raw = profile.values;
+      if (requiresSecretAtOpen(raw)) {
+        setDialog({ initialValues: raw as DialogInitialValues });
+        return;
+      }
+      const values = parseSavedValues(raw);
+      if (!values) {
+        setNotice(`保存済みの接続「${profile.name}」の内容が不正です`);
+        return;
+      }
+      addTab(values);
+    },
+    [addTab],
+  );
+
+  const paletteCommands = useMemo(
+    () =>
+      buildPaletteCommands({
+        tabs: state.tabs,
+        activeId: state.activeId,
+        snippets,
+        recents: recent.list,
+        profiles,
+        broadcast,
+        actions: {
+          newConnection: () => setDialog({}),
+          openSettings: () => setSettingsOpen(true),
+          closePane: () => {
+            if (activeTab) {
+              dispatch({
+                type: "closePane",
+                tabId: activeTab.id,
+                paneId: activePaneIdOf(activeTab),
+              });
+            }
+          },
+          nextTab: () => dispatch({ type: "activateRelative", delta: 1 }),
+          previousTab: () => dispatch({ type: "activateRelative", delta: -1 }),
+          activateTab: (id) => dispatch({ type: "activate", id }),
+          split: (dir) => {
+            if (activeTab) splitTab(activeTab.id, dir);
+          },
+          cyclePane: (delta) => {
+            if (activeTab) {
+              dispatch({ type: "cyclePane", tabId: activeTab.id, delta });
+            }
+          },
+          find: () => {
+            const id = activeTab ? activePaneIdOf(activeTab) : null;
+            if (id) setFindSignals((s) => ({ ...s, [id]: (s[id] ?? 0) + 1 }));
+          },
+          duplicateTab: onDuplicateTab,
+          setColor: (color) => {
+            if (activeTab) {
+              dispatch({ type: "setColor", id: activeTab.id, color });
+            }
+          },
+          setBroadcast,
+          runSnippet: onRunSnippet,
+          manageSnippets: () => setSnippetsOpen(true),
+          manageHighlights: () => setHighlightsOpen(true),
+          openRecent: onOpenRecent,
+          clearRecents: onClearRecents,
+          openProfile: onOpenProfile,
+        },
+      }),
+    [
+      state.tabs,
+      state.activeId,
+      activeTab,
+      snippets,
+      recent.list,
+      profiles,
+      broadcast,
+      splitTab,
+      onDuplicateTab,
+      onRunSnippet,
+      onOpenRecent,
+      onClearRecents,
+      onOpenProfile,
+    ],
+  );
+
   return (
     <div className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
       <h1 className="sr-only">LinkTerm</h1>
@@ -751,6 +845,11 @@ function App() {
         settings={settings}
         profiles={profiles}
         onSave={onSaveSettings}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        commands={paletteCommands}
       />
       <HighlightsDialog
         open={highlightsOpen}
