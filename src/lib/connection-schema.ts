@@ -42,6 +42,7 @@ export const defaultConnectionValues = {
   forwards: "",
   socksPorts: "",
   remoteForwards: "",
+  agentForwarding: false,
   loginScript: "",
   loginPassword: "",
   authKind: "password",
@@ -224,6 +225,8 @@ const ssh = z
         (v) => parseRemoteForwards(v) !== null,
         "リモートフォワードは [待ち受けアドレス:]サーバー側ポート:転送先ホスト:転送先ポート の形式で指定してください",
       ),
+    /** SSH Agent を接続先へ転送する（-A）。信頼できる接続先だけで使う。 */
+    agentForwarding: z.boolean().default(false),
     socksPorts: z
       .string()
       .trim()
@@ -357,6 +360,7 @@ export function toStartRequest(
         jumpHosts: v.jumpHosts,
         forwards: parseForwards(v.forwards ?? "") ?? [],
         remoteForwards: parseRemoteForwards(v.remoteForwards ?? "") ?? [],
+        agentForwarding: v.agentForwarding ?? false,
         dynamicForwards: parseSocksPorts(v.socksPorts ?? "") ?? [],
         termType: v.termType,
         encoding: v.encoding,

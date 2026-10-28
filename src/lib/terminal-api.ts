@@ -50,6 +50,8 @@ export type StartRequest =
         destPort: number;
         bindAddress?: string;
       }>;
+      /** SSH Agent を接続先へ転送する（-A）。 */
+      agentForwarding?: boolean;
       /** ローカルポートフォワード（-L）。127.0.0.1 でのみ待ち受ける。 */
       forwards?: Array<{
         bindPort: number;

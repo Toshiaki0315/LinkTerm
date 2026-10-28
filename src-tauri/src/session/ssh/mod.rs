@@ -63,6 +63,11 @@ pub struct SshConfig {
     pub dynamic_forwards: Vec<u16>,
     /// リモートフォワード（`-R`）。
     pub remote_forwards: Vec<RemoteForward>,
+    /// SSH Agent を接続先へ転送する（`-A`）。接続先が、あなたの鍵で（秘密鍵は渡さずに）署名できるようになる。
+    /// 信頼できる接続先だけで使うこと。
+    pub agent_forwarding: bool,
+    /// 転送する SSH Agent の Unix ソケット（通常は環境変数 `SSH_AUTH_SOCK`）。`agent_forwarding` のときに必要。
+    pub agent_socket: Option<PathBuf>,
 }
 
 /// リモートフォワード（`ssh -R [bind_address:]bind_port:dest_host:dest_port`）。
@@ -118,6 +123,9 @@ struct ClientHandler {
     rejection: Arc<Mutex<Option<TerminalError>>>,
     /// リモートフォワード（`-R`）で、サーバーが開くチャネルの中継先。キーはサーバー側の待ち受けポート。
     remote_forwards: RemoteTable,
+    /// エージェント転送を許す接続先（目的のホスト）だけが持つ、手元のエージェントのソケット。
+    /// `None` のとき、サーバーが開くエージェントのチャネルは拒否する。
+    agent_socket: Option<PathBuf>,
 }
 
 /// サーバー側のポート → このMac側の中継先 `(ホスト, ポート)`。
@@ -147,6 +155,27 @@ impl client::Handler for ClientHandler {
         };
         tokio::spawn(async move {
             let Ok(mut local) = tokio::net::TcpStream::connect((host.as_str(), port)).await else {
+                return;
+            };
+            reply.accept().await;
+            let mut stream = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut local, &mut stream).await;
+        });
+        Ok(())
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // 転送を求めていない接続（踏み台を含む）では、開かれても拒否する（`reply` を破棄すると拒否になる）。
+        let Some(path) = self.agent_socket.clone() else {
+            return Ok(());
+        };
+        tokio::spawn(async move {
+            let Ok(mut local) = tokio::net::UnixStream::connect(&path).await else {
                 return;
             };
             reply.accept().await;
@@ -405,6 +434,7 @@ async fn open_hop(
     known_hosts: Arc<dyn KnownHostsStore>,
     approver: Arc<dyn HostKeyApprover>,
     remote_forwards: RemoteTable,
+    agent_socket: Option<PathBuf>,
 ) -> Result<Handle<ClientHandler>, TerminalError> {
     let (host, port) = hop.address();
     let rejection = Arc::new(Mutex::new(None));
@@ -415,6 +445,7 @@ async fn open_hop(
         approver,
         rejection: rejection.clone(),
         remote_forwards,
+        agent_socket,
     };
     let connected = match via {
         None => client::connect(client_config, (host, port), handler).await,
@@ -465,6 +496,18 @@ impl SshSession {
             ..Default::default()
         });
 
+        // エージェント転送は、求めたときだけ。手元のエージェントがなければ、接続する前に失敗させる。
+        let agent_socket = if config.agent_forwarding {
+            Some(config.agent_socket.clone().ok_or_else(|| {
+                TerminalError::ConnectionFailed(
+                    "エージェント転送には、環境変数 SSH_AUTH_SOCK の SSH Agent が必要です（起動していません）"
+                        .into(),
+                )
+            })?)
+        } else {
+            None
+        };
+
         // 踏み台を順に経由する。各ホストの鍵は、それぞれ確認・保存する。
         let mut jumps: Vec<Handle<ClientHandler>> = Vec::new();
         for hop in &config.jump_hosts {
@@ -481,6 +524,8 @@ impl SshSession {
                 known_hosts.clone(),
                 approver.clone(),
                 RemoteTable::default(),
+                // 踏み台には、エージェントを渡さない。
+                None,
             )
             .await?;
             authenticate_jump(&mut handle, hop, &config.auth).await?;
@@ -498,6 +543,7 @@ impl SshSession {
             known_hosts,
             approver,
             remote_table.clone(),
+            agent_socket.clone(),
         )
         .await?;
 
@@ -521,6 +567,11 @@ impl SshSession {
             )
             .await
             .map_err(|e| TerminalError::ConnectionFailed(format!("PTY要求に失敗: {e}")))?;
+        if agent_socket.is_some() {
+            channel.agent_forward(false).await.map_err(|e| {
+                TerminalError::ConnectionFailed(format!("エージェント転送の要求に失敗: {e}"))
+            })?;
+        }
         channel
             .request_shell(false)
             .await

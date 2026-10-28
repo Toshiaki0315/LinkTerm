@@ -32,6 +32,7 @@
 - [ ] 「リモートフォワード」に `9000:localhost:3000` を入れて接続（Mac で `python3 -m http.server 3000`）→ サーバー上で `curl http://localhost:9000` が Mac の内容を返す。サーバーが `AllowTcpForwarding no` なら「許可しませんでした」と出る。
 - [ ] 「リモートフォワード」に `0.0.0.0:9000:localhost:3000` を入れ、サーバーが `GatewayPorts yes`（または `clientspecified`）なら、サーバーの外部インターフェースからも届く。許可されていなければ接続時にエラーになる。
 - [ ] `~/.ssh/config` に `Match user alice` / `Match host web* user bob` を書き、ダイアログのユーザー名に応じて設定が適用される。
+- [ ] 接続ダイアログの「SSH Agent を接続先へ転送する（-A）」をオンにして接続 → 接続先で `ssh-add -l` が手元の鍵を表示し、そこからさらに別のサーバーへ（鍵なしで）ssh できる。オフ（既定）では `ssh-add -l` が使えない。`ssh-agent` が起動していないとエラーになる。
 - [ ] 使用中のポートを指定 → 「待ち受けできません」と出て接続しない。LAN 側の別端末からは繋がらない。
 
 ## 4. 検索・タブ

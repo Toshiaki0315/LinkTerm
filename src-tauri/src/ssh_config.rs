@@ -107,8 +107,10 @@ pub struct ResolvedHost {
     pub local_forwards: Vec<LocalForward>,
     /// `DynamicForward`（`-D`）の待ち受けポート。設定の順。
     pub dynamic_forwards: Vec<u16>,
-    /// `RemoteForward`（`-R`）。設定の順。サーバー側の待ち受けは常にループバック。
+    /// `RemoteForward`（`-R`）。設定の順。
     pub remote_forwards: Vec<RemoteForward>,
+    /// `ForwardAgent yes`。パスや変数名の指定には対応しない（有効にしない）。
+    pub forward_agent: bool,
 }
 
 /// `[bind_address:]port` のポート部分（`DynamicForward` の引数）。不正なら `None`。
@@ -208,6 +210,7 @@ enum Keyword {
     LocalForward,
     DynamicForward,
     RemoteForward,
+    ForwardAgent,
 }
 
 #[derive(Debug, Default)]
@@ -484,6 +487,7 @@ impl SshConfig {
                         "localforward" => Keyword::LocalForward,
                         "dynamicforward" => Keyword::DynamicForward,
                         "remoteforward" => Keyword::RemoteForward,
+                        "forwardagent" => Keyword::ForwardAgent,
                         _ => continue,
                     };
                     if let Some(value) = args.first() {
@@ -554,6 +558,7 @@ impl SshConfig {
         let mut identity_files = Vec::new();
         let mut local_forwards = Vec::new();
         let mut dynamic_forwards = Vec::new();
+        let mut forward_agent: Option<bool> = None;
         let mut remote_forwards = Vec::new();
         for block in &self.blocks {
             let known_user = requested_user.or(user.as_deref());
@@ -580,6 +585,11 @@ impl SshConfig {
                         remote_forwards.extend(parse_remote_forward(value));
                     }
                     Keyword::DynamicForward => dynamic_forwards.extend(parse_bind_port(value)),
+                    Keyword::ForwardAgent => {
+                        if forward_agent.is_none() {
+                            forward_agent = Some(value.eq_ignore_ascii_case("yes"));
+                        }
+                    }
                     Keyword::ProxyJump => {
                         if proxy_jump.is_none() {
                             proxy_jump = parse_jump_list(value).ok();
@@ -597,6 +607,7 @@ impl SshConfig {
             local_forwards,
             dynamic_forwards,
             remote_forwards,
+            forward_agent: forward_agent.unwrap_or(false),
         }
     }
 
@@ -648,6 +659,8 @@ pub struct EffectiveTarget {
     pub dynamic_forwards: Vec<u16>,
     /// `~/.ssh/config` の `RemoteForward`。
     pub remote_forwards: Vec<RemoteForward>,
+    /// `~/.ssh/config` の `ForwardAgent yes`。
+    pub forward_agent: bool,
 }
 
 /// ダイアログの指定と設定ファイルから、実際の接続先を決める。
@@ -699,6 +712,7 @@ pub fn resolve_target(
         local_forwards: resolved.local_forwards,
         dynamic_forwards: resolved.dynamic_forwards,
         remote_forwards: resolved.remote_forwards,
+        forward_agent: resolved.forward_agent,
     })
 }
 
@@ -855,6 +869,7 @@ mod tests {
                 local_forwards: vec![],
                 dynamic_forwards: vec![],
                 remote_forwards: vec![],
+                forward_agent: false,
             }
         );
     }
@@ -1568,5 +1583,30 @@ mod tests {
         assert_eq!((t.port, t.hostname.as_str()), (2201, "a.example"));
         let t = resolve_target(&c, &req("bob")).unwrap();
         assert_eq!((t.port, t.hostname.as_str()), (22, "h"));
+    }
+
+    #[test]
+    fn forward_agent_is_read_with_the_first_value_winning_and_only_yes_enables_it() {
+        let c = cfg(
+            "Host a\n  ForwardAgent yes\nHost b\n  ForwardAgent no\nHost c\n  ForwardAgent ~/agent.sock\nHost d\n  ForwardAgent YES\nHost *\n  ForwardAgent no\n",
+        );
+        assert!(c.resolve("a").forward_agent);
+        assert!(!c.resolve("b").forward_agent);
+        // パスや変数名の指定には対応しない（有効にしない）。
+        assert!(!c.resolve("c").forward_agent);
+        assert!(c.resolve("d").forward_agent);
+        assert!(!c.resolve("other").forward_agent);
+        // 先に当てはまった指定が優先される（a は後の `Host *` の no より先）。
+        let t = resolve_target(
+            &c,
+            &RequestedTarget {
+                host: "a".into(),
+                port: DEFAULT_SSH_PORT,
+                username: "u".into(),
+                jump_hosts: String::new(),
+            },
+        )
+        .unwrap();
+        assert!(t.forward_agent);
     }
 }

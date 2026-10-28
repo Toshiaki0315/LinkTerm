@@ -143,6 +143,7 @@ describe("toStartRequest", () => {
       forwards: [],
       dynamicForwards: [],
       remoteForwards: [],
+      agentForwarding: false,
       termType: "xterm-256color",
       encoding: "UTF-8",
       auth: { kind: "password", password: "pw", remember: true },
@@ -468,6 +469,35 @@ describe("parseSavedValues（保存済みの設定の読み込み）", () => {
         jumpHosts: "",
         forwards: [],
       });
+    });
+  });
+});
+
+describe("エージェント転送（-A）", () => {
+  const base = {
+    type: "ssh",
+    host: "h",
+    port: 22,
+    username: "u",
+    authKind: "agent",
+  };
+
+  it("既定はオフ。オンにすると、接続要求の agentForwarding が真になる", () => {
+    const off = connectionSchema.parse(base);
+    expect(toStartRequest(off, { cols: 80, rows: 24 })).toMatchObject({
+      agentForwarding: false,
+    });
+    const on = connectionSchema.parse({ ...base, agentForwarding: true });
+    expect(toStartRequest(on, { cols: 80, rows: 24 })).toMatchObject({
+      agentForwarding: true,
+    });
+  });
+
+  it("保存済みの接続（古い形式を含む）を読んでも、オフのまま", () => {
+    const loaded = parseSavedValues({ ...base });
+    expect(loaded).toMatchObject({ agentForwarding: false });
+    expect(parseSavedValues({ ...base, agentForwarding: true })).toMatchObject({
+      agentForwarding: true,
     });
   });
 });

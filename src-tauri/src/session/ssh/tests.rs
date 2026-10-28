@@ -32,6 +32,12 @@ struct ServerState {
     subsystems: Mutex<Vec<String>>,
     /// サブシステム要求を拒否する。
     reject_subsystem: std::sync::atomic::AtomicBool,
+    /// エージェント転送を要求されたか。
+    agent_requested: std::sync::atomic::AtomicBool,
+    /// 転送されたエージェントのチャネルで、手元のソケットから返ってきたデータ。
+    agent_reply: Mutex<Option<Vec<u8>>>,
+    /// エージェント転送を受けたあと、転送先のチャネルを開こうとするか（試験用）。
+    open_agent_channel: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone)]
@@ -194,6 +200,41 @@ impl server::Handler for MockServer {
         session.data(channel, b"welcome\r\n".to_vec())
     }
 
+    async fn agent_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        self.state
+            .agent_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = channel;
+        if self
+            .state
+            .open_agent_channel
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            // サーバーから、エージェント用のチャネルを開き、データを送って、返事を記録する。
+            let handle = session.handle();
+            let state = self.state.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let Ok(channel) = handle.channel_open_agent().await else {
+                    return;
+                };
+                let mut stream = channel.into_stream();
+                if stream.write_all(b"ping").await.is_err() {
+                    return;
+                }
+                let mut buf = [0u8; 4];
+                if stream.read_exact(&mut buf).await.is_ok() {
+                    *state.agent_reply.lock().unwrap() = Some(buf.to_vec());
+                }
+            });
+        }
+        Ok(true)
+    }
+
     async fn subsystem_request(
         &mut self,
         channel: ChannelId,
@@ -315,6 +356,8 @@ fn config(port: u16, auth: SshAuth) -> SshConfig {
         forwards: vec![],
         dynamic_forwards: vec![],
         remote_forwards: vec![],
+        agent_forwarding: false,
+        agent_socket: None,
     }
 }
 
@@ -1298,4 +1341,105 @@ async fn open_sftp_on_a_closed_session_is_an_error() {
     .unwrap();
     s.close().await.unwrap();
     assert!(s.open_sftp().await.is_err());
+}
+
+/// 手元のエージェントの代わりの Unix ソケット（受け取った4バイトを大文字にして返す）。
+async fn fake_agent_socket(dir: &std::path::Path) -> std::path::PathBuf {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let path = dir.join("agent.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut conn, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4];
+                if conn.read_exact(&mut buf).await.is_ok() {
+                    let _ = conn.write_all(&buf.to_ascii_uppercase()).await;
+                }
+            });
+        }
+    });
+    path
+}
+
+async fn connect_with_agent(
+    h: &Harness,
+    forwarding: bool,
+    socket: Option<std::path::PathBuf>,
+) -> Result<SshSession, TerminalError> {
+    let mut cfg = config(h.port, password("secret"));
+    cfg.agent_forwarding = forwarding;
+    cfg.agent_socket = socket;
+    SshSession::connect(
+        cfg,
+        Arc::new(InMemoryKnownHosts::default()),
+        Arc::new(Approve(true)),
+    )
+    .await
+}
+
+async fn wait_for<T>(mut f: impl FnMut() -> Option<T>) -> Option<T> {
+    for _ in 0..100 {
+        if let Some(v) = f() {
+            return Some(v);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    None
+}
+
+#[tokio::test]
+async fn agent_forwarding_relays_the_servers_agent_channel_to_the_local_socket() {
+    let dir = temp_dir("agent");
+    let socket = fake_agent_socket(&dir).await;
+    let h = start_server(None).await;
+    h.state
+        .open_agent_channel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut s = connect_with_agent(&h, true, Some(socket)).await.unwrap();
+    // 要求は返事を待たずに送るため、サーバーが受けるまで少し待つ。
+    assert!(
+        wait_for(|| h
+            .state
+            .agent_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then_some(()))
+        .await
+        .is_some()
+    );
+    let reply = wait_for(|| h.state.agent_reply.lock().unwrap().clone()).await;
+    assert_eq!(reply.as_deref(), Some(&b"PING"[..]));
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_forwarding_is_off_by_default_and_requires_a_local_agent() {
+    let h = start_server(None).await;
+    // 指定しなければ、エージェント転送を要求しない。
+    let mut s = connect_with_agent(&h, false, None).await.unwrap();
+    assert!(
+        !h.state
+            .agent_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    s.close().await.unwrap();
+    // 転送を求めたのに、手元のエージェントがなければ、接続前に分かりやすく失敗する。
+    match connect_with_agent(&h, true, None).await {
+        Err(TerminalError::ConnectionFailed(m)) => assert!(m.contains("SSH_AUTH_SOCK"), "{m}"),
+        other => panic!("失敗するはず: {:?}", other.err()),
+    }
+}
+
+#[tokio::test]
+async fn agent_channels_are_refused_when_forwarding_was_not_requested() {
+    let dir = temp_dir("agent-off");
+    let socket = fake_agent_socket(&dir).await;
+    let h = start_server(None).await;
+    h.state
+        .open_agent_channel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    // 転送を求めていない（ソケットがあっても使わない）。サーバーが勝手に開いたチャネルは拒否される。
+    let mut s = connect_with_agent(&h, false, Some(socket)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(h.state.agent_reply.lock().unwrap().is_none());
+    s.close().await.unwrap();
 }

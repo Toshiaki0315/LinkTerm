@@ -65,6 +65,7 @@ interface FormValues {
   forwards: string;
   socksPorts: string;
   remoteForwards: string;
+  agentForwarding: boolean;
   authKind: "password" | "keychain" | "keyFile" | "agent";
   password: string;
   remember: boolean;
@@ -541,6 +542,19 @@ export function ConnectionDialog({
                   />
                 )}
               </Field>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  {...register("agentForwarding")}
+                />
+                <span>
+                  SSH Agent を接続先へ転送する（-A）
+                  <span className="block text-xs text-amber-300">
+                    接続先の管理者や侵入者が、接続中はあなたの鍵で署名できてしまいます。信頼できる接続先だけで使ってください。
+                  </span>
+                </span>
+              </label>
               <Field
                 label="SOCKS プロキシ（-D）のポート"
                 error={message(errors, "socksPorts")}

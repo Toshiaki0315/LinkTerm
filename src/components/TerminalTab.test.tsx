@@ -124,6 +124,7 @@ const sshPassword: ConnectionValues = {
   forwards: "",
   socksPorts: "",
   remoteForwards: "",
+  agentForwarding: false,
   authKind: "password",
   password: "pw",
   remember: false,

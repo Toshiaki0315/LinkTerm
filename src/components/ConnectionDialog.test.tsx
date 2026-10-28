@@ -681,6 +681,27 @@ describe("ConnectionDialog", () => {
     });
   });
 
+  describe("エージェント転送", () => {
+    it("SSH でだけ表示する。オンにして接続すると agentForwarding が真になる。警告も表示する", async () => {
+      const { user, onSubmit } = setup();
+      expect(screen.queryByLabelText(/SSH Agent を接続先へ転送/)).toBeNull();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      expect(
+        screen.getByText(/信頼できる接続先だけで使ってください/),
+      ).toBeInTheDocument();
+      await user.type(screen.getByLabelText("ホスト"), "h");
+      await user.type(screen.getByLabelText("ユーザー名"), "u");
+      await user.selectOptions(screen.getByLabelText("認証方式"), "agent");
+      expect(
+        screen.getByLabelText(/SSH Agent を接続先へ転送/),
+      ).not.toBeChecked();
+      await user.click(screen.getByLabelText(/SSH Agent を接続先へ転送/));
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].agentForwarding).toBe(true);
+    });
+  });
+
   describe("端末の種類 (TERM)", () => {
     it("SSH では選べ、選んだ値で接続する", async () => {
       const { user, onSubmit } = setup();

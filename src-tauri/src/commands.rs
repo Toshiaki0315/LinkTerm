@@ -332,6 +332,9 @@ pub struct StartSsh {
     /// リモートフォワード（`-R`）。
     #[serde(default)]
     remote_forwards: Vec<RemoteForward>,
+    /// SSH Agent を接続先へ転送する（`-A`）。~/.ssh/config の `ForwardAgent yes` でも有効になる。
+    #[serde(default)]
+    agent_forwarding: bool,
 }
 
 fn default_true() -> bool {
@@ -417,6 +420,8 @@ pub async fn start_ssh(state: State<'_, AppState>, req: StartSsh) -> CommandResu
             forwards,
             dynamic_forwards,
             remote_forwards,
+            agent_forwarding: req.agent_forwarding || target.forward_agent,
+            agent_socket: std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
         },
         state.known_hosts.clone(),
         state.approver.clone(),
