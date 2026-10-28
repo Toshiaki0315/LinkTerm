@@ -28,36 +28,60 @@ pub fn handle_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
+/// メニューの表示名（OS の言語設定によらず日本語で表示する）。
+pub const MENU_LABELS: &[&str] = &[
+    "LinkTermについて",
+    "サービス",
+    "LinkTermを隠す",
+    "ほかを隠す",
+    "すべてを表示",
+    "LinkTermを終了",
+    "編集",
+    "取り消す",
+    "やり直す",
+    "切り取り",
+    "コピー",
+    "貼り付け",
+    "すべてを選択",
+    "表示",
+    "フルスクリーンにする",
+    "ウィンドウ",
+    "しまう",
+    "拡大/縮小",
+];
+
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let settings = MenuItemBuilder::with_id(SETTINGS_MENU_ID, "設定…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "LinkTerm")
-        .about(None)
+        .about_with_text("LinkTermについて", None)
         .separator()
         .item(&settings)
         .separator()
-        .services()
+        .services_with_text("サービス")
         .separator()
-        .hide()
-        .hide_others()
-        .show_all()
+        .hide_with_text("LinkTermを隠す")
+        .hide_others_with_text("ほかを隠す")
+        .show_all_with_text("すべてを表示")
         .separator()
-        .quit()
+        .quit_with_text("LinkTermを終了")
         .build()?;
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+    let edit_menu = SubmenuBuilder::new(app, "編集")
+        .undo_with_text("取り消す")
+        .redo_with_text("やり直す")
         .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+        .cut_with_text("切り取り")
+        .copy_with_text("コピー")
+        .paste_with_text("貼り付け")
+        .select_all_with_text("すべてを選択")
         .build()?;
-    let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
-    let window_menu = SubmenuBuilder::new(app, "Window")
-        .minimize()
-        .maximize()
+    let view_menu = SubmenuBuilder::new(app, "表示")
+        .fullscreen_with_text("フルスクリーンにする")
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "ウィンドウ")
+        .minimize_with_text("しまう")
+        .maximize_with_text("拡大/縮小")
         .build()?;
     Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
 }
@@ -73,6 +97,13 @@ mod tests {
             event_for_menu_id(SETTINGS_MENU_ID),
             Some(EVENT_OPEN_SETTINGS)
         );
+    }
+
+    #[test]
+    fn menu_labels_are_japanese() {
+        for label in MENU_LABELS {
+            assert!(!label.is_ascii(), "{label}");
+        }
     }
 
     #[test]
