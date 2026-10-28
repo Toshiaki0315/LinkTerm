@@ -135,3 +135,14 @@ export const profile = (
   values: Record<string, unknown>,
   extra: { folder?: string; tags?: string[] } = {},
 ) => ({ id, name, values, ...extra });
+
+/** パスワード認証の SSH を開く。 */
+export async function openSshTab(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "新しい接続" }).click();
+  await page.getByLabel("接続種別").selectOption("ssh");
+  await page.getByLabel("ホスト").fill("example.com");
+  await page.getByLabel("ユーザー名").fill("alice");
+  await page.getByLabel("パスワード", { exact: true }).fill("pw");
+  await page.getByRole("button", { name: "接続", exact: true }).click();
+  await expect(page.locator(".xterm").first()).toBeVisible();
+}

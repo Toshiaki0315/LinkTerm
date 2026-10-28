@@ -26,6 +26,8 @@ interface E2E {
   written: Array<{ id: string; data: string }>;
   /** 偽のリモートのフォルダー（パス → 中身）。SFTP の画面試験用。 */
   remote: Record<string, Array<{ name: string; isDir: boolean; size: number }>>;
+  /** 出した通知（Tauri の通知プラグインは `window.Notification` を置き換える）。 */
+  notifications: Array<{ title: string; options: unknown }>;
   /** ファイル選択ダイアログが返すパス。 */
   pickedFiles: string[];
   /** 保存ダイアログが返すパス（null ならキャンセル）。 */
@@ -68,6 +70,7 @@ const e2e: E2E = {
     "/home/alice/docs": [{ name: "b.md", isDir: false, size: 20 }],
     "/home": [{ name: "alice", isDir: true, size: 0 }],
   },
+  notifications: [],
   pickedFiles: ["/Users/me/up.txt"],
   savePath: "/Users/me/screen.txt",
   existing: [],
@@ -83,6 +86,19 @@ const e2e: E2E = {
   },
 };
 window.__e2e = e2e;
+
+// 通知プラグインが本物の環境で行う置き換えを真似る（出した通知を記録する）。
+class FakeNotification {
+  static permission = "granted";
+  static async requestPermission() {
+    return "granted";
+  }
+  constructor(title: string, options?: unknown) {
+    e2e.notifications.push({ title, options });
+  }
+}
+(window as unknown as { Notification: unknown }).Notification =
+  FakeNotification;
 
 // 再読み込み（アプリの再起動に当たる）をまたいで、保存した内容を残す。
 const STORE_KEY = "linkterm-e2e-store";
