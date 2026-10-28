@@ -31,6 +31,8 @@ export interface PaletteActions {
   openProfile(profile: SavedProfile): void;
   openShortcuts(): void;
   manageProfiles(): void;
+  /** 操作中のペインの、各行の時刻表示を切り替える。 */
+  toggleTimestamps(): void;
   /** ~/.ssh/config の別名で、新しい SSH 接続のダイアログを開く。 */
   openSshHost(alias: string): void;
 }
@@ -43,6 +45,8 @@ export interface PaletteContext {
   profiles: SavedProfile[];
   /** ~/.ssh/config の Host の別名。 */
   sshHosts: string[];
+  /** 操作中のペインで、時刻表示がオンか。 */
+  timestampsOn: boolean;
   broadcast: BroadcastMode;
   /** いまのショートカット（ヒントの表示用）。 */
   bindings: Bindings;
@@ -80,6 +84,13 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
     add("タブ", "duplicate", "タブを複製", () => a.duplicateTab(activeTab.id), {
       keywords: "duplicate copy",
     });
+    add(
+      "タブ",
+      "timestamps",
+      `タイムスタンプ表示を${ctx.timestampsOn ? "オフ" : "オン"}にする`,
+      a.toggleTimestamps,
+      { keywords: "timestamp 時刻 日時" },
+    );
     add("タブ", "find", "画面内を検索", a.find, {
       hint: hint("find"),
       keywords: "find search",

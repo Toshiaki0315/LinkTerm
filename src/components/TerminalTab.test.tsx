@@ -648,6 +648,46 @@ describe("TerminalTab", () => {
     });
   });
 
+  describe("タイムスタンプ表示", () => {
+    const mount = (show: boolean, onToggle?: () => void) =>
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="t"
+          values={telnet}
+          active
+          showTimestamps={show}
+          onToggleTimestamps={onToggle}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+
+    it("渡さなければボタンを出さない", () => {
+      mount(false);
+      expect(
+        screen.queryByRole("button", { name: "タイムスタンプ表示" }),
+      ).toBeNull();
+    });
+
+    it("ボタンで切り替える。いまの状態を aria-pressed で示す", async () => {
+      const onToggle = vi.fn();
+      const user = userEvent.setup();
+      const view = mount(true, onToggle);
+      const button = screen.getByRole("button", { name: "タイムスタンプ表示" });
+      expect(button).toHaveAttribute("aria-pressed", "true");
+      await user.click(button);
+      expect(onToggle).toHaveBeenCalledTimes(1);
+      view.unmount();
+      mount(false, onToggle);
+      expect(
+        screen.getByRole("button", { name: "タイムスタンプ表示" }),
+      ).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
   describe("同時入力", () => {
     it("キー入力はこのペインに送り、同時入力の通知も出す", () => {
       const onBroadcast = vi.fn();

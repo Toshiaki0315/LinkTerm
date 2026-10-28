@@ -10,6 +10,7 @@ import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
 import { themeFor } from "../lib/themes";
 import type { HighlightRule } from "../lib/highlight";
 import { HighlightScanner, type ScanTerm } from "../lib/highlight-scanner";
+import { TimestampStamper, type StampTerm } from "../lib/timestamp-stamper";
 
 /** xterm.js のオプションとして設定する外観（コピー設定は含まない）。 */
 type XtermAppearance = Omit<Appearance, "copyOnSelect" | "backspaceKey">;
@@ -56,6 +57,8 @@ interface Props {
   appearance?: Appearance;
   /** キーワードのハイライト規則。 */
   highlightRules?: HighlightRule[];
+  /** 各行の右端に、その行が現れた時刻を重ねて表示する。 */
+  showTimestamps?: boolean;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   /** 右クリック。ブラウザ標準のメニューは出さず、画面上の位置を通知する。 */
@@ -69,6 +72,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       active,
       appearance = DEFAULT_APPEARANCE,
       highlightRules,
+      showTimestamps = false,
       onInput,
       onResize,
       onContextMenu,
@@ -80,6 +84,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     const fitRef = useRef<FitAddon | null>(null);
     const searchRef = useRef<SearchAddon | null>(null);
     const scannerRef = useRef<HighlightScanner | null>(null);
+    const stamperRef = useRef<TimestampStamper | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const {
@@ -148,6 +153,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
       if (term.buffer?.active) {
         const scanner = new HighlightScanner(term as unknown as ScanTerm);
         scannerRef.current = scanner;
+        stamperRef.current = new TimestampStamper(term as unknown as StampTerm);
       }
       fitRef.current = fit;
 
@@ -173,6 +179,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         resizeSub.dispose();
         scannerRef.current?.dispose();
         scannerRef.current = null;
+        stamperRef.current?.dispose();
+        stamperRef.current = null;
         term.dispose();
         termRef.current = null;
         fitRef.current = null;
@@ -217,6 +225,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
     ]);
 
     useEffect(() => {
+      stamperRef.current?.setEnabled(showTimestamps);
+    }, [showTimestamps]);
+
+    useEffect(() => {
       scannerRef.current?.setRules(highlightRules ?? []);
     }, [highlightRules]);
 
@@ -235,7 +247,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
           // 書き込みが画面に反映されてから、新しく増えた行を調べる。
           let lines = 2;
           for (const byte of data) if (byte === 0x0a) lines += 1;
-          term.write(data, () => scannerRef.current?.scanRecent(lines));
+          term.write(data, () => {
+            scannerRef.current?.scanRecent(lines);
+            stamperRef.current?.scanRecent(lines);
+          });
         },
         size: () => ({
           cols: termRef.current?.cols ?? 80,

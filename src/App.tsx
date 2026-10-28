@@ -157,6 +157,15 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
+  /** 各行に時刻を表示しているペイン。 */
+  const [timestamps, setTimestamps] = useState<ReadonlySet<string>>(new Set());
+  const toggleTimestamps = useCallback((paneId: string) => {
+    setTimestamps((s) => {
+      const next = new Set(s);
+      if (!next.delete(paneId)) next.add(paneId);
+      return next;
+    });
+  }, []);
   /** ~/.ssh/config の Host の別名（パレットの候補用）。 */
   const [sshHosts, setSshHosts] = useState<string[]>([]);
 
@@ -761,6 +770,9 @@ function App() {
         recents: recent.list,
         profiles,
         sshHosts,
+        timestampsOn: activeTab
+          ? timestamps.has(activePaneIdOf(activeTab))
+          : false,
         broadcast,
         bindings,
         actions: {
@@ -805,6 +817,9 @@ function App() {
           openProfile: onOpenProfile,
           openShortcuts: () => setShortcutsOpen(true),
           manageProfiles: () => setProfilesOpen(true),
+          toggleTimestamps: () => {
+            if (activeTab) toggleTimestamps(activePaneIdOf(activeTab));
+          },
           openSshHost: (alias) =>
             setDialog({
               initialValues: {
@@ -817,6 +832,8 @@ function App() {
       }),
     [
       sshHosts,
+      timestamps,
+      toggleTimestamps,
       state.tabs,
       state.activeId,
       activeTab,
@@ -898,6 +915,8 @@ function App() {
         autoReconnect={settings.autoReconnect}
         findSignals={findSignals}
         highlightRules={highlightRules}
+        timestamps={timestamps}
+        onToggleTimestamps={toggleTimestamps}
         onAttention={onAttention}
         onBroadcast={onBroadcast}
         onActivatePane={(tabId, paneId) =>

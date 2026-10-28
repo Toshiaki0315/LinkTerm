@@ -1,4 +1,4 @@
-import { FolderOpen, Search } from "lucide-react";
+import { Clock, FolderOpen, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAutoReconnect } from "../hooks/useAutoReconnect";
 import { useTerminalSession } from "../hooks/useTerminalSession";
@@ -47,6 +47,10 @@ interface Props {
   findSignal?: number;
   /** 復元したタブ: 自動では接続せず、「接続」ボタンで接続する。 */
   deferStart?: boolean;
+  /** 各行に時刻を表示するか。 */
+  showTimestamps?: boolean;
+  /** 時刻の表示を切り替える。省略するとボタンを出さない。 */
+  onToggleTimestamps?: () => void;
   /** キー入力・貼り付けを、ほかのペインにも送る（同時入力）。省略すると送らない。 */
   onBroadcast?: (data: string) => void;
   /** キーワードのハイライト規則（色付けと、見つけたときの通知）。 */
@@ -73,6 +77,8 @@ export function TerminalTab({
   findSignal = 0,
   deferStart = false,
   highlightRules,
+  showTimestamps = false,
+  onToggleTimestamps,
   onAttention,
   onBroadcast,
   onSplit,
@@ -347,6 +353,21 @@ export function TerminalTab({
             sessionId={status === "connected" ? sessionId : null}
           />
         )}
+        {onToggleTimestamps && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="タイムスタンプ表示"
+            aria-pressed={showTimestamps}
+            title="各行に時刻を表示（右端）"
+            className={
+              showTimestamps ? "bg-sky-500/20 text-sky-300" : undefined
+            }
+            onClick={onToggleTimestamps}
+          >
+            <Clock className="h-4 w-4" />
+          </Button>
+        )}
         {values.type === "ssh" && status === "connected" && sessionId && (
           <Button
             variant="ghost"
@@ -402,6 +423,7 @@ export function TerminalTab({
         active={active}
         appearance={appearance}
         highlightRules={highlightRules}
+        showTimestamps={showTimestamps}
         onInput={onInput}
         onResize={onResize}
         onContextMenu={({ x, y }) =>

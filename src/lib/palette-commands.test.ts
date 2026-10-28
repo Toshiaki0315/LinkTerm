@@ -39,6 +39,7 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     openShortcuts: vi.fn(),
     manageProfiles: vi.fn(),
     openSshHost: vi.fn(),
+    toggleTimestamps: vi.fn(),
   };
 }
 
@@ -51,6 +52,7 @@ const build = (over: Partial<PaletteContext> = {}) => {
     recents: [],
     profiles: [],
     sshHosts: [],
+    timestampsOn: false,
     broadcast: "off",
     bindings: DEFAULT_BINDINGS,
     actions: a as unknown as PaletteActions,
@@ -223,5 +225,15 @@ describe("buildPaletteCommands", () => {
     );
     byId("ssh-host-bastion").run();
     expect(a.openSshHost).toHaveBeenCalledWith("bastion");
+  });
+
+  it("タイムスタンプ表示の切り替えは、いまの状態に合わせた題名で出る", () => {
+    expect(build().byId("timestamps").title).toBe(
+      "タイムスタンプ表示をオンにする",
+    );
+    const on = build({ timestampsOn: true });
+    expect(on.byId("timestamps").title).toBe("タイムスタンプ表示をオフにする");
+    on.byId("timestamps").run();
+    expect(on.a.toggleTimestamps).toHaveBeenCalled();
   });
 });

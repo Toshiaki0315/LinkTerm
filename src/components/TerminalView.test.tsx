@@ -250,6 +250,72 @@ describe("TerminalView", () => {
       expect(decoration.dispose).toHaveBeenCalled();
     });
 
+    it("タイムスタンプ表示をオンにした後に出た行の右端へ、時刻の装飾を付ける", () => {
+      const lines = ["base"];
+      const buffer = {
+        active: {
+          type: "normal",
+          baseY: 0,
+          get cursorY() {
+            return lines.length - 1;
+          },
+          length: 1,
+          getLine: (y: number) => ({
+            isWrapped: false,
+            getCell: (x: number) => ({
+              getChars: () => lines[y]?.[x] ?? "",
+              getWidth: () => 1,
+            }),
+          }),
+        },
+      };
+      xterm.next.buffer = buffer;
+      const ref = createRef<TerminalHandle>();
+      const { rerender } = render(
+        <TerminalView
+          ref={ref}
+          active
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const term = xterm.instances[0] as unknown as {
+        registerDecoration: ReturnType<typeof vi.fn>;
+        write: ReturnType<typeof vi.fn>;
+      };
+      rerender(
+        <TerminalView
+          ref={ref}
+          active
+          showTimestamps
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      lines.push("new output");
+      ref.current!.write(new TextEncoder().encode("new output\n"));
+      (term.write.mock.lastCall![1] as () => void)();
+      expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+      expect(term.registerDecoration.mock.calls[0][0]).toMatchObject({
+        anchor: "right",
+        width: 9,
+      });
+      // オフにすると外す。
+      const decoration = term.registerDecoration.mock.results[0].value as {
+        dispose: ReturnType<typeof vi.fn>;
+      };
+      rerender(
+        <TerminalView
+          ref={ref}
+          active
+          showTimestamps={false}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(decoration.dispose).toHaveBeenCalled();
+    });
+
     it("バッファを持たない端末でも、書き込みは動く", () => {
       xterm.next.buffer = undefined;
       const ref = createRef<TerminalHandle>();

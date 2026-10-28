@@ -44,6 +44,8 @@ vi.mock("./components/TerminalTab", () => ({
     onSecretsConsumed,
     onAttention,
     onBroadcast,
+    showTimestamps,
+    onToggleTimestamps,
   }: {
     tabId: string;
     appearance?: { fontSize: number; fontFamily: string };
@@ -53,18 +55,22 @@ vi.mock("./components/TerminalTab", () => ({
     onSecretsConsumed: (id: string) => void;
     onAttention?: () => void;
     onBroadcast?: (data: string) => void;
+    showTimestamps?: boolean;
+    onToggleTimestamps?: () => void;
   }) => (
     <div
       data-testid={`term-${tabId}`}
       data-font-size={appearance?.fontSize}
       data-find-signal={findSignal}
       data-defer-start={deferStart ? "true" : "false"}
+      data-timestamps={showTimestamps ? "on" : "off"}
       data-font-family={appearance?.fontFamily}
     >
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
       <button onClick={() => onSecretsConsumed(tabId)}>consume</button>
       <button onClick={() => onAttention?.()}>attention-{tabId}</button>
       <button onClick={() => onBroadcast?.("typed")}>type-{tabId}</button>
+      <button onClick={() => onToggleTimestamps?.()}>stamp-{tabId}</button>
     </div>
   ),
 }));
@@ -430,6 +436,35 @@ describe("App", () => {
       await user.keyboard("{Enter}");
       await waitFor(() => expect(sent).toEqual(["ls\r"]));
       off();
+    });
+  });
+
+  describe("タイムスタンプ表示", () => {
+    it("端末のボタンとパレットから、操作中のペインの表示を切り替える", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}t{/Meta}");
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      const term = screen.getAllByTestId(/^term-/)[0];
+      const id = term.getAttribute("data-testid")!.replace("term-", "");
+      expect(term).toHaveAttribute("data-timestamps", "off");
+
+      await user.click(screen.getByRole("button", { name: `stamp-${id}` }));
+      expect(term).toHaveAttribute("data-timestamps", "on");
+
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      await user.type(
+        await screen.findByRole("combobox", { name: "コマンドを検索" }),
+        "タイムスタンプ",
+      );
+      expect(screen.getByRole("option")).toHaveTextContent(
+        "タイムスタンプ表示をオフにする",
+      );
+      await user.keyboard("{Enter}");
+      await waitFor(() =>
+        expect(term).toHaveAttribute("data-timestamps", "off"),
+      );
     });
   });
 

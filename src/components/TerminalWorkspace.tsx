@@ -18,6 +18,9 @@ interface Props {
   autoReconnect?: AutoReconnect;
   /** ペインごとの検索要求の回数。増えたペインが検索バーを開く。 */
   findSignals?: Record<string, number>;
+  /** 各行に時刻を表示するペイン。 */
+  timestamps?: ReadonlySet<string>;
+  onToggleTimestamps?: (paneId: string) => void;
   /** キー入力・貼り付けの同時入力（ペインの ID と入力）。 */
   onBroadcast?: (paneId: string, data: string) => void;
   /** キーワードのハイライト規則。 */
@@ -47,6 +50,8 @@ export function TerminalWorkspace({
   autoReconnect,
   findSignals,
   highlightRules,
+  timestamps,
+  onToggleTimestamps,
   onAttention,
   onBroadcast,
   onActivatePane,
@@ -141,6 +146,11 @@ export function TerminalWorkspace({
                       autoReconnect={autoReconnect}
                       findSignal={findSignals?.[pane.id] ?? 0}
                       highlightRules={highlightRules}
+                      showTimestamps={timestamps?.has(pane.id) ?? false}
+                      onToggleTimestamps={
+                        onToggleTimestamps &&
+                        (() => onToggleTimestamps(pane.id))
+                      }
                       onBroadcast={
                         onBroadcast && ((data) => onBroadcast(pane.id, data))
                       }
