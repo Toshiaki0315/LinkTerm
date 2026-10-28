@@ -37,6 +37,7 @@ import {
   listProfiles,
   saveRecentConnections,
   saveProfile,
+  updateProfile,
   startSessionLog,
   stopSessionLog,
   onTerminalClosed,
@@ -268,10 +269,55 @@ describe("接続プロファイル", () => {
     await expect(deleteProfile("p1")).resolves.toBe(true);
     expect(invoke.mock.calls).toEqual([
       ["list_profiles"],
-      ["save_profile", { id: null, name: "n", values: { type: "local" } }],
-      ["save_profile", { id: "p1", name: "n2", values: { type: "local" } }],
+      [
+        "save_profile",
+        {
+          id: null,
+          name: "n",
+          values: { type: "local" },
+          folder: null,
+          tags: null,
+        },
+      ],
+      [
+        "save_profile",
+        {
+          id: "p1",
+          name: "n2",
+          values: { type: "local" },
+          folder: null,
+          tags: null,
+        },
+      ],
       ["delete_profile", { id: "p1" }],
     ]);
+  });
+});
+
+describe("接続プロファイルの整理", () => {
+  it("フォルダーとタグを付けて保存できる。更新は名前・フォルダー・タグだけを送る", async () => {
+    invoke.mockResolvedValueOnce({});
+    await saveProfile({
+      name: "n",
+      values: { type: "local" },
+      folder: "本番",
+      tags: ["web"],
+    });
+    expect(invoke).toHaveBeenLastCalledWith("save_profile", {
+      id: null,
+      name: "n",
+      values: { type: "local" },
+      folder: "本番",
+      tags: ["web"],
+    });
+    invoke.mockResolvedValueOnce(null);
+    await updateProfile({ id: "p1", name: "x", folder: "", tags: ["a"] });
+    expect(invoke).toHaveBeenLastCalledWith("update_profile", {
+      id: "p1",
+      name: "x",
+      folder: null,
+      tags: ["a"],
+    });
   });
 });
 

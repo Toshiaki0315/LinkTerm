@@ -16,7 +16,7 @@ use crate::fonts::{FontError, FontFamily};
 use crate::highlights::{HighlightError, HighlightRule, HighlightStore};
 use crate::keybindings::{KeyBinding, KeybindingError, KeybindingStore};
 use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
-use crate::profiles::{Profile, ProfileError, ProfileStore};
+use crate::profiles::{Placement, Profile, ProfileError, ProfileStore};
 use crate::recent::{RecentConnection, RecentError, RecentStore};
 use crate::session::{
     Codec, ControlSignal, CredentialStore, FileKnownHosts, HostKeyApprover, KeychainStore,
@@ -741,14 +741,36 @@ pub fn list_profiles(state: State<'_, AppState>) -> CommandResult<Vec<Profile>> 
 }
 
 /// 接続プロファイルを保存する（`id` があれば更新）。パスワード類は保存されない。
+/// `tags` を渡したときだけ、フォルダーとタグも更新する（省略すると今のまま・新規なら空）。
 #[tauri::command]
 pub fn save_profile(
     state: State<'_, AppState>,
     id: Option<String>,
     name: String,
     values: serde_json::Value,
+    folder: Option<String>,
+    tags: Option<Vec<String>>,
 ) -> CommandResult<Profile> {
-    Ok(state.profiles.save(id.as_deref(), &name, values)?)
+    let placement = match tags {
+        Some(tags) => Some(Placement::normalized(folder.as_deref(), &tags)?),
+        None => None,
+    };
+    Ok(state
+        .profiles
+        .save_with(id.as_deref(), &name, values, placement)?)
+}
+
+/// 接続プロファイルの名前・フォルダー・タグだけを変える。存在しなければ `None`。
+#[tauri::command]
+pub fn update_profile(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    folder: Option<String>,
+    tags: Vec<String>,
+) -> CommandResult<Option<Profile>> {
+    let placement = Placement::normalized(folder.as_deref(), &tags)?;
+    Ok(state.profiles.update_meta(&id, &name, placement)?)
 }
 
 #[tauri::command]

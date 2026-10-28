@@ -37,6 +37,8 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     clearRecents: vi.fn(),
     openProfile: vi.fn(),
     openShortcuts: vi.fn(),
+    manageProfiles: vi.fn(),
+    openSshHost: vi.fn(),
   };
 }
 
@@ -48,6 +50,7 @@ const build = (over: Partial<PaletteContext> = {}) => {
     snippets: [],
     recents: [],
     profiles: [],
+    sshHosts: [],
     broadcast: "off",
     bindings: DEFAULT_BINDINGS,
     actions: a as unknown as PaletteActions,
@@ -193,5 +196,32 @@ describe("buildPaletteCommands", () => {
     const { byId, a } = build();
     byId("shortcuts").run();
     expect(a.openShortcuts).toHaveBeenCalled();
+  });
+
+  it("保存済みの接続は、フォルダーを前に付け、タグで検索できる。管理画面を開ける", () => {
+    const { byId, a } = build({
+      profiles: [
+        {
+          id: "p",
+          name: "web-01",
+          values: {},
+          folder: "本番",
+          tags: ["東京", "nginx"],
+        },
+      ],
+    });
+    expect(byId("profile-p").title).toBe("保存済みの接続: 本番 / web-01");
+    expect(byId("profile-p").keywords).toBe("東京 nginx");
+    byId("profiles").run();
+    expect(a.manageProfiles).toHaveBeenCalled();
+  });
+
+  it("~/.ssh/config のホストを、SSH 接続の項目にする", () => {
+    const { byId, a } = build({ sshHosts: ["prod-web", "bastion"] });
+    expect(byId("ssh-host-prod-web").title).toBe(
+      "SSH 接続（~/.ssh/config）: prod-web",
+    );
+    byId("ssh-host-bastion").run();
+    expect(a.openSshHost).toHaveBeenCalledWith("bastion");
   });
 });

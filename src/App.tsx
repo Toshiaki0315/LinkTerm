@@ -11,6 +11,7 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import { ProfilesDialog } from "./components/ProfilesDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { CommandPalette } from "./components/CommandPalette";
 import { HighlightsDialog } from "./components/HighlightsDialog";
@@ -64,6 +65,8 @@ import {
   getSessionState,
   getSettings,
   listProfiles,
+  listSshHosts,
+  updateProfile,
   onHostKeyRequest,
   onOpenSettings,
   pendingHostKeyRequests,
@@ -153,6 +156,18 @@ function App() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  /** ~/.ssh/config の Host の別名（パレットの候補用）。 */
+  const [sshHosts, setSshHosts] = useState<string[]>([]);
+
+  const reloadSshHosts = useCallback(() => {
+    listSshHosts()
+      .then(setSshHosts)
+      .catch((e: unknown) => console.error("SSH設定の一覧を読めません:", e));
+  }, []);
+  useEffect(() => {
+    reloadSshHosts();
+  }, [reloadSshHosts]);
   /** 初期値から変えたショートカット。 */
   const [keyOverrides, setKeyOverrides] = useState<
     Array<{ id: string; binding: string }>
@@ -490,6 +505,7 @@ function App() {
     highlightsOpen ||
     paletteOpen ||
     shortcutsOpen ||
+    profilesOpen ||
     hostKeyQueue.length > 0;
 
   // 見たタブの印は消す（切り替えたとき・ウィンドウに戻ったとき）。
@@ -544,6 +560,7 @@ function App() {
           if (activeTab) splitTab(activeTab.id, action.dir);
           break;
         case "palette":
+          reloadSshHosts();
           setPaletteOpen(true);
           break;
         case "broadcast":
@@ -572,7 +589,14 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalOpen, state.activeId, activeTab, splitTab, bindings]);
+  }, [
+    modalOpen,
+    state.activeId,
+    activeTab,
+    splitTab,
+    bindings,
+    reloadSshHosts,
+  ]);
 
   const addTab = useCallback(
     (values: ConnectionValues, options?: SubmitOptions) => {
@@ -628,6 +652,14 @@ function App() {
   const onClearRecents = useCallback(
     () => setRecent({ list: [], dirty: true }),
     [],
+  );
+
+  const onUpdateProfile = useCallback(
+    async (p: { id: string; name: string; folder: string; tags: string[] }) => {
+      await updateProfile(p);
+      await reloadProfiles();
+    },
+    [reloadProfiles],
   );
 
   const onDeleteProfile = useCallback(
@@ -728,6 +760,7 @@ function App() {
         snippets,
         recents: recent.list,
         profiles,
+        sshHosts,
         broadcast,
         bindings,
         actions: {
@@ -771,9 +804,19 @@ function App() {
           clearRecents: onClearRecents,
           openProfile: onOpenProfile,
           openShortcuts: () => setShortcutsOpen(true),
+          manageProfiles: () => setProfilesOpen(true),
+          openSshHost: (alias) =>
+            setDialog({
+              initialValues: {
+                type: "ssh",
+                host: alias,
+                useSshConfig: true,
+              } as DialogInitialValues,
+            }),
         },
       }),
     [
+      sshHosts,
       state.tabs,
       state.activeId,
       activeTab,
@@ -887,6 +930,14 @@ function App() {
           setSettingsOpen(false);
           setShortcutsOpen(true);
         }}
+      />
+      <ProfilesDialog
+        open={profilesOpen}
+        onOpenChange={setProfilesOpen}
+        profiles={profiles}
+        onOpenProfile={onOpenProfile}
+        onUpdate={onUpdateProfile}
+        onDelete={onDeleteProfile}
       />
       <ShortcutsDialog
         open={shortcutsOpen}

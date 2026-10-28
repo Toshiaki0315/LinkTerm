@@ -63,6 +63,7 @@ pub fn run() {
             sftp_commands::sftp_mkdir,
             sftp_commands::sftp_remove,
             sftp_commands::sftp_cancel,
+            commands::update_profile,
             commands::get_keybindings,
             commands::save_keybindings,
             commands::get_highlight_rules,

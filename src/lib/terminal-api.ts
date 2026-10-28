@@ -82,6 +82,10 @@ export interface SavedProfile {
   name: string;
   /** 接続フォームの値（パスワード類は含まれない）。 */
   values: Record<string, unknown>;
+  /** 入れるフォルダー（1階層）。なければ、どこにも入れない。 */
+  folder?: string;
+  /** タグ。 */
+  tags?: string[];
 }
 
 export interface FontFamily {
@@ -228,11 +232,30 @@ export const saveProfile = (profile: {
   id?: string;
   name: string;
   values: Record<string, unknown>;
+  /** 渡したとき（`tags` も一緒に）だけ、フォルダーとタグを更新する。 */
+  folder?: string;
+  tags?: string[];
 }) =>
   invoke<SavedProfile>("save_profile", {
     id: profile.id ?? null,
     name: profile.name,
     values: profile.values,
+    folder: profile.folder ?? null,
+    tags: profile.tags ?? null,
+  });
+
+/** 名前・フォルダー・タグだけを変える。見つからなければ `null`。 */
+export const updateProfile = (profile: {
+  id: string;
+  name: string;
+  folder: string;
+  tags: string[];
+}) =>
+  invoke<SavedProfile | null>("update_profile", {
+    id: profile.id,
+    name: profile.name,
+    folder: profile.folder === "" ? null : profile.folder,
+    tags: profile.tags,
   });
 
 export const deleteProfile = (id: string) =>

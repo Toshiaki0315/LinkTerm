@@ -563,6 +563,61 @@ describe("ConnectionDialog", () => {
     });
   });
 
+  describe("保存済みの接続の整理", () => {
+    it("保存するときにフォルダーとタグを指定できる", async () => {
+      const { user, onSubmit } = setup();
+      await user.click(screen.getByLabelText("この接続を保存する"));
+      await user.clear(screen.getByLabelText("保存名"));
+      await user.type(screen.getByLabelText("保存名"), "作業用");
+      await user.type(screen.getByLabelText("フォルダー（任意）"), "本番");
+      await user.type(
+        screen.getByLabelText("タグ（任意・カンマ区切り）"),
+        "web, 東京,web",
+      );
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][1]).toMatchObject({
+        saveAs: { name: "作業用", folder: "本番", tags: ["web", "東京"] },
+      });
+    });
+
+    it("保存済みの接続は、フォルダーごとにまとめて選べる。選ぶとフォルダー・タグも入る", async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={() => {}}
+          onSubmit={onSubmit}
+          profiles={[
+            {
+              id: "p1",
+              name: "web-01",
+              values: { type: "local", encoding: "UTF-8" },
+              folder: "本番",
+              tags: ["東京"],
+            },
+            {
+              id: "p2",
+              name: "手元",
+              values: { type: "local", encoding: "UTF-8" },
+            },
+          ]}
+        />,
+      );
+      const select = screen.getByLabelText("保存済みの接続");
+      expect(
+        select.querySelector('optgroup[label="本番"] option'),
+      ).toHaveTextContent("web-01");
+      await user.selectOptions(select, "p1");
+      await user.click(screen.getByLabelText("この接続を保存する"));
+      expect(screen.getByLabelText("フォルダー（任意）")).toHaveValue("本番");
+      expect(screen.getByLabelText("タグ（任意・カンマ区切り）")).toHaveValue(
+        "東京",
+      );
+    });
+  });
+
   describe("自動ログイン", () => {
     it("ローカルシェル・SSH では表示しない", async () => {
       const { user } = setup();

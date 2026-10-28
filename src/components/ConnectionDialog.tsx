@@ -21,6 +21,13 @@ import {
   listSshHosts,
   type SavedProfile,
 } from "../lib/terminal-api";
+import {
+  NO_FOLDER,
+  folderNames,
+  formatTags,
+  groupProfiles,
+  parseTagInput,
+} from "../lib/profile-groups";
 import { connectionKey, recentLabel, type RecentEntry } from "../lib/recent";
 import { TAB_COLORS } from "../lib/tab-colors";
 import { Button } from "./ui/button";
@@ -39,6 +46,10 @@ interface FormValues {
   profileId: string;
   saveProfile: boolean;
   profileName: string;
+  /** 保存するときのフォルダー。 */
+  profileFolder: string;
+  /** 保存するときのタグ（カンマ区切り）。 */
+  profileTags: string;
   type: ConnectionValues["type"];
   encoding: (typeof ENCODINGS)[number];
   /** 端末の種類（TERM）。SSH / Telnet で使う。 */
@@ -92,13 +103,21 @@ interface Props {
 
 /** 接続と同時に保存する場合の指定。`values` にパスワード類は含まれない。 */
 export interface SubmitOptions {
-  saveAs?: { id?: string; name: string; values: Record<string, unknown> };
+  saveAs?: {
+    id?: string;
+    name: string;
+    values: Record<string, unknown>;
+    folder: string;
+    tags: string[];
+  };
 }
 
 const EXTRA_DEFAULTS = {
   profileId: "",
   saveProfile: false,
   profileName: "",
+  profileFolder: "",
+  profileTags: "",
   serialPortManual: false,
 };
 
@@ -245,6 +264,8 @@ export function ConnectionDialog({
       ...EXTRA_DEFAULTS,
       ...(profile?.values as Partial<FormValues> | undefined),
       profileId: profile ? id : "",
+      profileFolder: profile?.folder ?? "",
+      profileTags: formatTags(profile?.tags),
     });
   };
 
@@ -268,7 +289,8 @@ export function ConnectionDialog({
       setError("username", { message: "ユーザー名を入力してください" });
       return;
     }
-    const { profileId, saveProfile, profileName } = getValues();
+    const { profileId, saveProfile, profileName, profileFolder, profileTags } =
+      getValues();
     let options: SubmitOptions | undefined;
     if (saveProfile) {
       const name = profileName.trim();
@@ -281,6 +303,8 @@ export function ConnectionDialog({
           id: profileId || undefined,
           name,
           values: stripSecrets(values),
+          folder: profileFolder.trim(),
+          tags: parseTagInput(profileTags),
         },
       };
     }
@@ -328,11 +352,23 @@ export function ConnectionDialog({
                     })}
                   >
                     <option value="">（新規）</option>
-                    {profiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                    {groupProfiles(profiles).map((g) =>
+                      g.folder === NO_FOLDER ? (
+                        g.profiles.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))
+                      ) : (
+                        <optgroup key={g.folder} label={g.folder}>
+                          {g.profiles.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ),
+                    )}
                   </Select>
                 )}
               </Field>
@@ -757,15 +793,45 @@ export function ConnectionDialog({
             この接続を保存する
           </label>
           {saveProfile && (
-            <Field label="保存名" error={message(errors, "profileName")}>
-              {(id) => (
-                <Input
-                  id={id}
-                  autoComplete="off"
-                  {...register("profileName")}
-                />
-              )}
-            </Field>
+            <>
+              <Field label="保存名" error={message(errors, "profileName")}>
+                {(id) => (
+                  <Input
+                    id={id}
+                    autoComplete="off"
+                    {...register("profileName")}
+                  />
+                )}
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="フォルダー（任意）">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      autoComplete="off"
+                      list="profile-folder-suggestions"
+                      placeholder="例: 本番"
+                      {...register("profileFolder")}
+                    />
+                  )}
+                </Field>
+                <Field label="タグ（任意・カンマ区切り）">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      autoComplete="off"
+                      placeholder="例: web, 東京"
+                      {...register("profileTags")}
+                    />
+                  )}
+                </Field>
+              </div>
+              <datalist id="profile-folder-suggestions">
+                {folderNames(profiles).map((f) => (
+                  <option key={f} value={f} />
+                ))}
+              </datalist>
+            </>
           )}
 
           <div className="mt-2 flex justify-end gap-2">

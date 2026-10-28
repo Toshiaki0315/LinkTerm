@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   saveSessionState: vi.fn(),
   listFonts: vi.fn(),
   listSshHosts: vi.fn(),
+  updateProfile: vi.fn(),
   saveSettings: vi.fn(),
   onOpenSettings: vi.fn(),
   saveProfile: vi.fn(),
@@ -108,6 +109,7 @@ beforeEach(() => {
   api.saveSessionState.mockResolvedValue(undefined);
   api.listFonts.mockResolvedValue([]);
   api.listSshHosts.mockResolvedValue([]);
+  api.updateProfile.mockResolvedValue(null);
   api.saveSettings.mockImplementation(async (s) => s);
   api.onOpenSettings.mockImplementation(async (cb) => {
     openSettingsFromMenu = cb;
@@ -431,6 +433,79 @@ describe("App", () => {
     });
   });
 
+  describe("接続の整理", () => {
+    const openPalette = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      return screen.findByRole("combobox", { name: "コマンドを検索" });
+    };
+
+    it("パレットで、タグを使って保存済みの接続を探して開ける", async () => {
+      api.listProfiles.mockResolvedValue([
+        {
+          id: "p1",
+          name: "web-01",
+          values: { type: "local", encoding: "UTF-8" },
+          folder: "本番",
+          tags: ["東京"],
+        },
+        {
+          id: "p2",
+          name: "db-01",
+          values: { type: "local", encoding: "UTF-8" },
+          folder: "検証",
+        },
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      const input = await openPalette(user);
+      await user.type(input, "東京");
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+      expect(screen.getByRole("option")).toHaveTextContent("本番 / web-01");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    });
+
+    it("管理画面で編集すると更新して一覧を読み直す", async () => {
+      api.listProfiles.mockResolvedValue([
+        {
+          id: "p1",
+          name: "web-01",
+          values: { type: "local", encoding: "UTF-8" },
+        },
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      const input = await openPalette(user);
+      await user.type(input, "保存済みの接続を管理");
+      await user.keyboard("{Enter}");
+      await user.click(
+        await screen.findByRole("button", { name: "web-01 を編集" }),
+      );
+      await user.type(screen.getByLabelText("フォルダー"), "本番");
+      api.listProfiles.mockClear();
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.updateProfile).toHaveBeenCalled());
+      expect(api.updateProfile).toHaveBeenCalledWith({
+        id: "p1",
+        name: "web-01",
+        folder: "本番",
+        tags: [],
+      });
+      await waitFor(() => expect(api.listProfiles).toHaveBeenCalled());
+    });
+
+    it("~/.ssh/config のホストをパレットから選ぶと、そのホストで SSH 接続のダイアログが開く", async () => {
+      api.listSshHosts.mockResolvedValue(["prod-web"]);
+      const user = userEvent.setup();
+      render(<App />);
+      const input = await openPalette(user);
+      await user.type(input, "prod-web");
+      await user.keyboard("{Enter}");
+      expect(await screen.findByLabelText("ホスト")).toHaveValue("prod-web");
+      expect(screen.getByLabelText("接続種別")).toHaveValue("ssh");
+    });
+  });
+
   describe("ショートカットの設定", () => {
     it("保存済みの割り当てで動く（古いキーは動かない）", async () => {
       api.getKeybindings.mockResolvedValue([
@@ -694,6 +769,8 @@ describe("App", () => {
       id: undefined,
       name: "手元のシェル",
       values: expect.objectContaining({ type: "local" }),
+      folder: "",
+      tags: [],
     });
     await waitFor(() =>
       expect(api.listProfiles.mock.calls.length).toBeGreaterThanOrEqual(2),

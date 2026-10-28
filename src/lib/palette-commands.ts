@@ -3,6 +3,7 @@ import type { PaletteCommand } from "./command-search";
 import { recentLabel, type RecentEntry } from "./recent";
 import type { Snippet } from "./snippets";
 import { TAB_COLORS, type TabColorId } from "./tab-colors";
+import { profileDisplayName } from "./profile-groups";
 import type { SavedProfile } from "./terminal-api";
 import type { SplitDir } from "./layout";
 import { formatBinding, type Bindings, type ShortcutId } from "./shortcuts";
@@ -29,6 +30,9 @@ export interface PaletteActions {
   clearRecents(): void;
   openProfile(profile: SavedProfile): void;
   openShortcuts(): void;
+  manageProfiles(): void;
+  /** ~/.ssh/config の別名で、新しい SSH 接続のダイアログを開く。 */
+  openSshHost(alias: string): void;
 }
 
 export interface PaletteContext {
@@ -37,6 +41,8 @@ export interface PaletteContext {
   snippets: Snippet[];
   recents: RecentEntry[];
   profiles: SavedProfile[];
+  /** ~/.ssh/config の Host の別名。 */
+  sshHosts: string[];
   broadcast: BroadcastMode;
   /** いまのショートカット（ヒントの表示用）。 */
   bindings: Bindings;
@@ -164,8 +170,23 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
     );
   }
   for (const p of ctx.profiles) {
-    add("保存済みの接続", `profile-${p.id}`, `保存済みの接続: ${p.name}`, () =>
-      a.openProfile(p),
+    add(
+      "保存済みの接続",
+      `profile-${p.id}`,
+      `保存済みの接続: ${profileDisplayName(p)}`,
+      () => a.openProfile(p),
+      { keywords: (p.tags ?? []).join(" ") },
+    );
+  }
+  add("保存済みの接続", "profiles", "保存済みの接続を管理…", a.manageProfiles, {
+    keywords: "profiles フォルダー タグ 整理",
+  });
+  for (const alias of ctx.sshHosts) {
+    add(
+      "SSH の設定",
+      `ssh-host-${alias}`,
+      `SSH 接続（~/.ssh/config）: ${alias}`,
+      () => a.openSshHost(alias),
     );
   }
   return list;
