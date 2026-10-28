@@ -32,5 +32,7 @@ export default defineConfig(() => ({
     environment: "happy-dom",
     setupFiles: ["./src/test/setup.ts"],
     globals: false,
+    // e2e/ は Playwright の試験（`npm run test:e2e`）。
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 }));

@@ -1,6 +1,15 @@
 import type { Marker } from "./highlight-scanner";
 
 /** `TimestampStamper` が使う xterm の機能（試験で差し替えられるよう、必要な部分だけ）。 */
+/** xterm の `IDecoration` のうち、使う部分。 */
+export interface StampDecoration {
+  dispose(): void;
+  /** 要素が描画されるたびに呼ばれるイベント（オプションではなく、登録の関数）。 */
+  onRender(listener: (element: HTMLElement) => void): unknown;
+  /** 一度でも描画されていれば、その要素。 */
+  element?: HTMLElement;
+}
+
 export interface StampTerm {
   cols: number;
   buffer: {
@@ -23,8 +32,7 @@ export interface StampTerm {
     anchor: "right";
     x: number;
     width: number;
-    onRender: (element: HTMLElement) => void;
-  }): { dispose(): void } | undefined;
+  }): StampDecoration | undefined;
 }
 
 /** 時刻の表示幅（`HH:MM:SS` の 8 列と、余白 1 列）。 */
@@ -154,16 +162,19 @@ export class TimestampStamper {
       anchor: "right",
       x: 0,
       width: STAMP_WIDTH,
-      onRender: (el) => {
-        el.textContent = text;
-        el.style.cssText =
-          "color:#9ca3af;text-align:right;pointer-events:none;background:rgba(0,0,0,0.35)";
-      },
     });
     if (!decoration) {
       marker.dispose();
       return;
     }
+    // 要素は xterm が描画するときに作る。中身はそのたびに入れる。
+    const paint = (el: HTMLElement) => {
+      el.textContent = text;
+      el.style.cssText =
+        "color:#9ca3af;text-align:right;pointer-events:none;background:rgba(0,0,0,0.35)";
+    };
+    decoration.onRender(paint);
+    if (decoration.element) paint(decoration.element);
     this.stamps.set(y, { marker, decoration });
   }
 

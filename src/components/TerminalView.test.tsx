@@ -55,7 +55,10 @@ vi.mock("@xterm/xterm", () => ({
       isDisposed: false,
       dispose: vi.fn(),
     }));
-    registerDecoration = vi.fn(() => ({ dispose: vi.fn() }));
+    registerDecoration = vi.fn(() => ({
+      dispose: vi.fn(),
+      onRender: vi.fn(),
+    }));
     constructor(options: Record<string, unknown> = {}) {
       this.options = { ...options };
       xterm.instances.push(this as never);

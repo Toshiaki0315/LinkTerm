@@ -13,3 +13,5 @@ src-tauri/target/
 # IDEs
 .vscode/
 .idea/
+test-results
+playwright-report

@@ -13,6 +13,9 @@ function fakeTerm(lines: string[], cols = 40, type = "normal") {
   const decorations: Array<{
     options: Record<string, unknown>;
     dispose: ReturnType<typeof vi.fn>;
+    /** xterm が要素を描画した（`onRender` を発火した）ことにする。 */
+    render: (el: HTMLElement) => void;
+    element: HTMLElement | undefined;
   }> = [];
   const term: StampTerm = {
     cols,
@@ -57,9 +60,20 @@ function fakeTerm(lines: string[], cols = 40, type = "normal") {
       return m;
     },
     registerDecoration: (options) => {
+      const listeners: Array<(el: HTMLElement) => void> = [];
       const d = {
         options: options as unknown as Record<string, unknown>,
         dispose: vi.fn(),
+        element: undefined as HTMLElement | undefined,
+        // xterm の `IDecoration.onRender` は、登録の関数（イベント）。オプションではない。
+        onRender: (cb: (el: HTMLElement) => void) => {
+          listeners.push(cb);
+          return { dispose: vi.fn() };
+        },
+        render(el: HTMLElement) {
+          this.element = el;
+          for (const l of listeners) l(el);
+        },
       };
       decorations.push(d);
       return d;
@@ -86,6 +100,41 @@ describe("formatClock", () => {
 });
 
 describe("TimestampStamper", () => {
+  it("時刻の中身は、xterm が要素を描画したとき（onRender イベント）に入れる。オプションとして渡さない", () => {
+    const f = fakeTerm(["base"]);
+    const now = new Date(2024, 0, 1, 10, 0, 0).getTime();
+    const s = new TimestampStamper(f.term, () => now);
+    s.setEnabled(true);
+    push(f, "output");
+    s.scanRecent(10);
+    expect(f.decorations[0].options).not.toHaveProperty("onRender");
+    const el = document.createElement("div");
+    f.decorations[0].render(el);
+    expect(el.textContent).toBe("10:00:00");
+    expect(el.style.pointerEvents).toBe("none");
+    // 描き直されても、同じ時刻を入れ直す。
+    const again = document.createElement("div");
+    f.decorations[0].render(again);
+    expect(again.textContent).toBe("10:00:00");
+  });
+
+  it("要素がすでに描画されていれば、すぐに中身を入れる", () => {
+    const f = fakeTerm(["base"]);
+    const now = new Date(2024, 0, 1, 10, 0, 0).getTime();
+    const el = document.createElement("div");
+    const orig = f.term.registerDecoration;
+    f.term.registerDecoration = (options) => {
+      const d = orig(options) as { element?: HTMLElement };
+      d.element = el;
+      return d as never;
+    };
+    const s = new TimestampStamper(f.term, () => now);
+    s.setEnabled(true);
+    push(f, "output");
+    s.scanRecent(10);
+    expect(el.textContent).toBe("10:00:00");
+  });
+
   it("有効にした後に出た行だけに、右端へ時刻を付ける（それ以前の行には付けない）", () => {
     const f = fakeTerm(["old line", "prompt$ "]);
     let now = new Date(2024, 0, 1, 10, 0, 0).getTime();
@@ -103,7 +152,7 @@ describe("TimestampStamper", () => {
       width: 9,
     });
     const el = document.createElement("span");
-    (f.decorations[0].options.onRender as (e: HTMLElement) => void)(el);
+    f.decorations[0].render(el);
     expect(el.textContent).toBe("10:00:05");
   });
 
@@ -120,7 +169,7 @@ describe("TimestampStamper", () => {
     s.scanRecent(10);
     expect(f.decorations).toHaveLength(1);
     const el = document.createElement("span");
-    (f.decorations[0].options.onRender as (e: HTMLElement) => void)(el);
+    f.decorations[0].render(el);
     expect(el.textContent).toBe("10:00:03");
     // その後に改行があっても、同じ行を付け直さない。
     push(f, "output");
