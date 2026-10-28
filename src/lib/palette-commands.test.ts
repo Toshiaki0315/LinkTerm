@@ -40,6 +40,7 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     manageProfiles: vi.fn(),
     openSshHost: vi.fn(),
     toggleTimestamps: vi.fn(),
+    exportText: vi.fn(),
   };
 }
 
@@ -235,5 +236,14 @@ describe("buildPaletteCommands", () => {
     expect(on.byId("timestamps").title).toBe("タイムスタンプ表示をオフにする");
     on.byId("timestamps").run();
     expect(on.a.toggleTimestamps).toHaveBeenCalled();
+  });
+
+  it("画面のテキスト保存は、タブがあるときだけ出る", () => {
+    const { byId, a } = build();
+    byId("export-text").run();
+    expect(a.exportText).toHaveBeenCalled();
+    expect(
+      build({ tabs: [], activeId: null }).list.map((c) => c.id),
+    ).not.toContain("export-text");
   });
 });

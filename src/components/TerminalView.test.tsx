@@ -409,6 +409,39 @@ describe("TerminalView", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  it("getText: スクロールバックを含む画面全体を、折り返しをつなげたテキストにする", () => {
+    const rows: Array<[string, boolean]> = [
+      ["hello wor", false],
+      ["ld", true],
+      ["next   ", false],
+      ["", false],
+    ];
+    xterm.next.buffer = {
+      active: {
+        length: rows.length,
+        getLine: (y: number) => ({
+          isWrapped: rows[y][1],
+          translateToString: (trim: boolean) =>
+            trim ? rows[y][0].trimEnd() : rows[y][0],
+        }),
+      },
+    };
+    try {
+      const ref = createRef<TerminalHandle>();
+      render(
+        <TerminalView
+          ref={ref}
+          active
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(ref.current!.getText()).toBe("hello world\nnext\n");
+    } finally {
+      xterm.next.buffer = undefined;
+    }
+  });
+
   it("ハンドルから現在のサイズを取得できる", () => {
     const ref = createRef<TerminalHandle>();
     render(

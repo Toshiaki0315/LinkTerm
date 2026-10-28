@@ -35,7 +35,10 @@ const termSearch = vi.hoisted(() => ({
   selectAll: vi.fn(),
   clear: vi.fn(),
   paste: vi.fn(),
+  getText: vi.fn(() => ""),
 }));
+const exporter = vi.hoisted(() => ({ exportText: vi.fn() }));
+vi.mock("../lib/export-text", () => exporter);
 const clipboard = vi.hoisted(() => ({ copyText: vi.fn(), pasteText: vi.fn() }));
 vi.mock("../lib/clipboard", () => clipboard);
 const viewProps = vi.hoisted(() => ({
@@ -70,6 +73,7 @@ vi.mock("./TerminalView", async () => {
           selectAll: termSearch.selectAll,
           clear: termSearch.clear,
           paste: termSearch.paste,
+          getText: termSearch.getText,
         }));
         return <div data-testid="term" />;
       },
@@ -92,6 +96,7 @@ vi.mock("./SerialControls", () => ({
   ),
 }));
 
+import { runPaneAction } from "../lib/pane-actions";
 import { sendToPane } from "../lib/pane-input";
 import { TerminalTab } from "./TerminalTab";
 
@@ -846,7 +851,69 @@ describe("TerminalTab", () => {
         "すべて選択",
         "検索…",
         "画面をクリア",
+        "画面をテキストで保存…",
       ]);
+    });
+
+    describe("画面をテキストで保存", () => {
+      const clickSave = async () => {
+        openMenu();
+        await userEvent.click(
+          screen.getByRole("menuitem", { name: "画面をテキストで保存…" }),
+        );
+      };
+
+      it("画面全体のテキストを保存し、保存先を表示する", async () => {
+        termSearch.getText.mockReturnValue("line1\nline2\n");
+        exporter.exportText.mockResolvedValue("/Users/me/out.txt");
+        setup(telnet);
+        await clickSave();
+        expect(exporter.exportText).toHaveBeenCalledWith("line1\nline2\n");
+        expect(
+          await screen.findByText("保存しました: /Users/me/out.txt"),
+        ).toBeInTheDocument();
+      });
+
+      it("キャンセルしたら、何も表示しない", async () => {
+        termSearch.getText.mockReturnValue("x\n");
+        exporter.exportText.mockResolvedValue(null);
+        setup(telnet);
+        await clickSave();
+        await waitFor(() => expect(exporter.exportText).toHaveBeenCalled());
+        expect(screen.queryByText(/保存しました/)).toBeNull();
+      });
+
+      it("内容が空なら、保存せずに知らせる", async () => {
+        termSearch.getText.mockReturnValue("");
+        setup(telnet);
+        await clickSave();
+        expect(exporter.exportText).not.toHaveBeenCalled();
+        expect(
+          screen.getByText("保存する内容がありません"),
+        ).toBeInTheDocument();
+      });
+
+      it("保存に失敗したら、理由を表示する。「閉じる」で消せる", async () => {
+        termSearch.getText.mockReturnValue("x\n");
+        exporter.exportText.mockRejectedValue(new Error("保存先が不正です"));
+        setup(telnet);
+        await clickSave();
+        expect(
+          await screen.findByText("保存できません: 保存先が不正です"),
+        ).toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "閉じる" }));
+        expect(screen.queryByText(/保存できません/)).toBeNull();
+      });
+
+      it("パレットなど外部からも、同じ保存を呼べる", async () => {
+        termSearch.getText.mockReturnValue("x\n");
+        exporter.exportText.mockResolvedValue("/a.txt");
+        setup(telnet);
+        act(() => {
+          runPaneAction("t1", "exportText");
+        });
+        await waitFor(() => expect(exporter.exportText).toHaveBeenCalled());
+      });
     });
 
     it("選択がなければ「コピー」は選べない", () => {

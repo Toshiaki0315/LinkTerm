@@ -10,6 +10,8 @@ import {
 import { LoginRunner, parseLoginScript } from "../lib/auto-login";
 import { OutputMatcher, type HighlightRule } from "../lib/highlight";
 import { NOTIFY_INTERVAL_MS, Throttle, notifyMatch } from "../lib/notify";
+import { exportText } from "../lib/export-text";
+import { registerPaneActions } from "../lib/pane-actions";
 import { registerPaneInput } from "../lib/pane-input";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance, AutoReconnect } from "../lib/settings";
@@ -177,6 +179,8 @@ export function TerminalTab({
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
+  /** 画面の保存の結果（成功・失敗）の表示。 */
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [seenFindSignal, setSeenFindSignal] = useState(findSignal);
   if (findSignal !== seenFindSignal) {
     // 検索の要求が来た（⌘F）。描画中の状態更新は、値が変わったときの1回だけ。
@@ -191,6 +195,21 @@ export function TerminalTab({
   } | null>(null);
   const logError = (what: string) => (e: unknown) =>
     console.error(`${what}に失敗しました:`, e);
+  /** 画面の内容（スクロールバックを含む）を、保存ダイアログで選んだファイルへ保存する。 */
+  const saveScreenText = () => {
+    const text = termRef.current?.getText() ?? "";
+    if (text === "") {
+      setSaveNotice("保存する内容がありません");
+      return;
+    }
+    exportText(text)
+      .then((path) => setSaveNotice(path ? `保存しました: ${path}` : null))
+      .catch((e: unknown) =>
+        setSaveNotice(
+          `保存できません: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
+  };
   /** メニュー項目を作る。右クリックのイベント処理の中で呼ぶ（ref を描画中に読まないため）。 */
   const buildMenuItems = (hasSelection: boolean): ContextMenuItem[] => [
     {
@@ -215,6 +234,10 @@ export function TerminalTab({
     { label: "すべて選択", onSelect: () => termRef.current?.selectAll() },
     { label: "検索…", onSelect: () => setSearchOpen(true) },
     { label: "画面をクリア", onSelect: () => termRef.current?.clear() },
+    {
+      label: "画面をテキストで保存…",
+      onSelect: () => saveScreenText(),
+    },
     ...(onSplit
       ? [
           {
@@ -320,6 +343,16 @@ export function TerminalTab({
   );
   // スニペットや同時入力など、端末の外からの入力は、同時入力へ再び回さずに送る（ループ防止）。
   useEffect(() => registerPaneInput(tabId, sendDirect), [tabId, sendDirect]);
+  // コマンドパレットなど、ペインの外からの操作（最新の処理を呼ぶ）。
+  const saveScreenRef = useRef(saveScreenText);
+  useEffect(() => {
+    saveScreenRef.current = saveScreenText;
+  });
+  useEffect(
+    () =>
+      registerPaneActions(tabId, { exportText: () => saveScreenRef.current() }),
+    [tabId],
+  );
 
   const onResize = useCallback(
     (cols: number, rows: number) => {
@@ -429,6 +462,20 @@ export function TerminalTab({
           sessionId={sessionId}
           title={title}
         />
+      )}
+      {saveNotice && (
+        <div
+          role="status"
+          className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-neutral-800/95 px-3 py-1 text-xs text-neutral-200"
+        >
+          <span className="break-all">{saveNotice}</span>
+          <button
+            className="shrink-0 underline"
+            onClick={() => setSaveNotice(null)}
+          >
+            閉じる
+          </button>
+        </div>
       )}
       {bellFlash && (
         <div

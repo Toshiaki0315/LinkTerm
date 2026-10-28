@@ -86,6 +86,8 @@ pub enum CommandError {
     Highlight(#[from] HighlightError),
     #[error(transparent)]
     Keybinding(#[from] KeybindingError),
+    #[error(transparent)]
+    Export(#[from] crate::export::ExportError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -654,6 +656,15 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
 #[tauri::command]
 pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
     Ok(state.session_state.load()?)
+}
+
+/// 画面の内容を、保存ダイアログで選んだ場所へテキストとして保存する（所有者のみ読み書き可）。
+#[tauri::command]
+pub fn save_text_file(path: String, content: String) -> CommandResult<()> {
+    Ok(crate::export::save_text(
+        std::path::Path::new(&path),
+        &content,
+    )?)
 }
 
 /// 保存済みのショートカット（初期値から変えたものだけ）。

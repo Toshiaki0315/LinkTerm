@@ -10,6 +10,7 @@ import { isOpenableUrl, openExternalUrl } from "../lib/open-url";
 import { themeFor } from "../lib/themes";
 import type { HighlightRule } from "../lib/highlight";
 import { HighlightScanner, type ScanTerm } from "../lib/highlight-scanner";
+import { bufferToText } from "../lib/screen-text";
 import { ScanBatcher } from "../lib/scan-batcher";
 import { TimestampStamper, type StampTerm } from "../lib/timestamp-stamper";
 
@@ -41,6 +42,8 @@ export interface TerminalHandle {
   ): boolean;
   /** 検索の強調表示と選択を消す。 */
   clearSearch(): void;
+  /** スクロールバックを含む画面全体のテキスト。 */
+  getText(): string;
   hasSelection(): boolean;
   getSelection(): string;
   selectAll(): void;
@@ -282,6 +285,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(
         clearSearch: () => {
           searchRef.current?.clearDecorations();
           termRef.current?.clearSelection();
+        },
+        getText: () => {
+          const buffer = termRef.current?.buffer?.active;
+          return buffer ? bufferToText(buffer) : "";
         },
         hasSelection: () => termRef.current?.hasSelection() ?? false,
         getSelection: () => termRef.current?.getSelection() ?? "",

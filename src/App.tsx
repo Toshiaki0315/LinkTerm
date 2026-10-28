@@ -45,6 +45,7 @@ import {
 } from "./lib/broadcast";
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
+import { runPaneAction } from "./lib/pane-actions";
 import { sendToPane } from "./lib/pane-input";
 import {
   overridesOf,
@@ -817,6 +818,10 @@ function App() {
           openProfile: onOpenProfile,
           openShortcuts: () => setShortcutsOpen(true),
           manageProfiles: () => setProfilesOpen(true),
+          exportText: () => {
+            if (activeTab)
+              runPaneAction(activePaneIdOf(activeTab), "exportText");
+          },
           toggleTimestamps: () => {
             if (activeTab) toggleTimestamps(activePaneIdOf(activeTab));
           },

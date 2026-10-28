@@ -33,6 +33,8 @@ export interface PaletteActions {
   manageProfiles(): void;
   /** 操作中のペインの、各行の時刻表示を切り替える。 */
   toggleTimestamps(): void;
+  /** 操作中のペインの画面を、テキストファイルとして保存する。 */
+  exportText(): void;
   /** ~/.ssh/config の別名で、新しい SSH 接続のダイアログを開く。 */
   openSshHost(alias: string): void;
 }
@@ -91,6 +93,9 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
       a.toggleTimestamps,
       { keywords: "timestamp 時刻 日時" },
     );
+    add("タブ", "export-text", "画面をテキストで保存…", a.exportText, {
+      keywords: "export save ログ 書き出し",
+    });
     add("タブ", "find", "画面内を検索", a.find, {
       hint: hint("find"),
       keywords: "find search",
