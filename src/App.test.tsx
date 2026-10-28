@@ -78,6 +78,7 @@ vi.mock("./components/TerminalTab", () => ({
 import App from "./App";
 import { registerPaneInput } from "./lib/pane-input";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
+import type { SessionState } from "./lib/terminal-api";
 
 let openSettingsFromMenu: () => void;
 const withStartup = (startup: Settings["startup"]): Settings => ({
@@ -1154,10 +1155,7 @@ describe("App", () => {
 
   describe("画面状態の復元", () => {
     const restore = withStartup({ kind: "restore" });
-    const saved = (
-      tabs: Array<{ title: string; values: Record<string, unknown> }>,
-      active: number | null = 0,
-    ) => ({
+    const saved = (tabs: SessionState["tabs"], active: number | null = 0) => ({
       tabs,
       active,
     });
@@ -1291,6 +1289,67 @@ describe("App", () => {
         username: "alice",
       });
       expect(JSON.stringify(last)).not.toContain("top-secret");
+    });
+
+    const splitSaved = {
+      title: "分割",
+      values: { type: "local", encoding: "UTF-8" },
+      panes: [
+        { id: "p0", values: { type: "local", encoding: "UTF-8" } },
+        { id: "p1", values: telnetValues },
+      ],
+      layout: {
+        kind: "split",
+        id: "s",
+        dir: "row",
+        ratio: 0.3,
+        a: { kind: "pane", id: "p0" },
+        b: { kind: "pane", id: "p1" },
+      },
+      activePane: "p1",
+    };
+
+    it("分割していたタブは、ペインごと復元する（配置・操作中のペインを保つ）", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(saved([splitSaved]));
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(screen.getAllByTestId(/^term-/)).toHaveLength(2);
+      expect(screen.getByRole("separator")).toBeInTheDocument();
+    });
+
+    it("分割の保存データが壊れていても、先頭のペインだけのタブとして復元する", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(
+        saved([{ ...splitSaved, layout: { kind: "nonsense" } }]),
+      );
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      expect(screen.getAllByTestId(/^term-/)).toHaveLength(1);
+    });
+
+    it("分割したタブの構成を保存する（ペインごと。秘密情報は含めない）", async () => {
+      api.getSettings.mockResolvedValue(restore);
+      api.getSessionState.mockResolvedValue(saved([splitSaved]));
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      api.saveSessionState.mockClear();
+      await userEvent.setup().keyboard("{Meta>}d{/Meta}");
+      await waitFor(
+        () => {
+          const calls = api.saveSessionState.mock.calls;
+          expect(calls[calls.length - 1]?.[0].tabs[0].panes).toHaveLength(3);
+        },
+        { timeout: 3000 },
+      );
+      const calls = api.saveSessionState.mock.calls;
+      const last = calls[calls.length - 1][0];
+      expect(last.tabs[0].panes.map((p: { id: string }) => p.id)).toEqual([
+        "p0",
+        "p1",
+        "p2",
+      ]);
+      expect(last.tabs[0].layout).toBeDefined();
     });
 
     it("全部のタブを閉じたら、空の構成を保存する", async () => {

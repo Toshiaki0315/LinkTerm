@@ -11,6 +11,11 @@ use thiserror::Error;
 
 pub const MAX_TABS: usize = 100;
 pub const MAX_TITLE_CHARS: usize = 60;
+/// 1つのタブに保存するペイン数の上限。
+pub const MAX_PANES: usize = 16;
+pub const MAX_PANE_ID_CHARS: usize = 20;
+/// 配置（分割の木）を JSON にしたときの大きさの上限。
+pub const MAX_LAYOUT_BYTES: usize = 20_000;
 
 #[derive(Debug, Error)]
 pub enum SessionStateError {
@@ -31,8 +36,26 @@ pub enum SessionStateError {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SavedTab {
     pub title: String,
+    /// 接続フォームの値（パスワード類は含まれない）。分割しているときは、先頭のペインの値。
+    pub values: serde_json::Value,
+    /// 分割しているときの、すべてのペイン（先頭を含む）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panes: Vec<SavedPane>,
+    /// 分割の配置（木）。形の検証は画面側が行う。`panes` があるときだけ持つ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<serde_json::Value>,
+    /// 操作中だったペインの ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_pane: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedPane {
+    /// 配置から参照する ID（保存のたびに付け直すもの）。
+    pub id: String,
     /// 接続フォームの値（パスワード類は含まれない）。
     pub values: serde_json::Value,
 }
@@ -101,6 +124,57 @@ impl SessionStateStore {
     }
 }
 
+/// 分割の情報を検証し、ペインの値からも秘密情報を除く。
+fn sanitize_panes(tab: &mut SavedTab) -> Result<(), SessionStateError> {
+    if tab.panes.is_empty() {
+        // 分割していなければ、配置と操作中のペインは意味がない。
+        tab.layout = None;
+        tab.active_pane = None;
+        return Ok(());
+    }
+    if tab.panes.len() > MAX_PANES {
+        return Err(SessionStateError::Invalid(format!(
+            "1つのタブのペインは{MAX_PANES}個までです"
+        )));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for pane in &mut tab.panes {
+        if pane.id.is_empty() || pane.id.chars().count() > MAX_PANE_ID_CHARS {
+            return Err(SessionStateError::Invalid("ペインのIDが不正です".into()));
+        }
+        if !ids.insert(pane.id.clone()) {
+            return Err(SessionStateError::Invalid(format!(
+                "ペインのIDが重複しています: {}",
+                pane.id
+            )));
+        }
+        if !pane.values.is_object() {
+            return Err(SessionStateError::Invalid(
+                "接続設定はオブジェクトで指定してください".into(),
+            ));
+        }
+        crate::profiles::strip_secrets(&mut pane.values);
+    }
+    match &tab.layout {
+        Some(layout) if layout.is_object() => {
+            let size = serde_json::to_string(layout)
+                .map(|s| s.len())
+                .unwrap_or(usize::MAX);
+            if size > MAX_LAYOUT_BYTES {
+                return Err(SessionStateError::Invalid(
+                    "分割の配置が大きすぎます".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(SessionStateError::Invalid("分割の配置が必要です".into()));
+        }
+    }
+    // 存在しないペインを指していたら、操作中のペインは捨てる。
+    tab.active_pane = tab.active_pane.take().filter(|id| ids.contains(id));
+    Ok(())
+}
+
 /// 検証し、秘密情報を除き、タブ名を整える。
 fn sanitize(mut state: SessionState) -> Result<SessionState, SessionStateError> {
     if state.tabs.len() > MAX_TABS {
@@ -121,6 +195,7 @@ fn sanitize(mut state: SessionState) -> Result<SessionState, SessionStateError> 
         }
         tab.title = title;
         crate::profiles::strip_secrets(&mut tab.values);
+        sanitize_panes(tab)?;
     }
     // 範囲外の位置は捨てる（復元時にどのタブもアクティブにしない）。
     state.active = state.active.filter(|&i| i < state.tabs.len());
@@ -146,6 +221,9 @@ mod tests {
         SavedTab {
             title: title.into(),
             values: json!({"type": "ssh", "host": host, "port": 22, "username": "alice", "authKind": "agent"}),
+            panes: vec![],
+            layout: None,
+            active_pane: None,
         }
     }
 
@@ -216,6 +294,9 @@ mod tests {
             tabs: vec![SavedTab {
                 title: "x".into(),
                 values: json!("str"),
+                panes: vec![],
+                layout: None,
+                active_pane: None,
             }],
             active: None,
         };
@@ -314,6 +395,129 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["session_state.json".to_string()]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn split_tab() -> SavedTab {
+        let mut t = tab("分割", "a");
+        t.panes = vec![
+            SavedPane {
+                id: "p0".into(),
+                values: json!({"type": "local", "encoding": "UTF-8"}),
+            },
+            SavedPane {
+                id: "p1".into(),
+                values: json!({"type": "telnet", "host": "r", "port": 23}),
+            },
+        ];
+        t.layout = Some(json!({
+            "kind": "split", "id": "s", "dir": "row", "ratio": 0.5,
+            "a": {"kind": "pane", "id": "p0"}, "b": {"kind": "pane", "id": "p1"}
+        }));
+        t.active_pane = Some("p1".into());
+        t
+    }
+
+    #[test]
+    fn split_tabs_roundtrip_and_omit_empty_fields_for_plain_tabs() {
+        let (s, path, dir) = store("split");
+        let state = SessionState {
+            tabs: vec![split_tab(), tab("通常", "b")],
+            active: Some(0),
+        };
+        assert_eq!(s.save(state.clone()).unwrap(), state);
+        assert_eq!(SessionStateStore::new(&path).load().unwrap(), state);
+        let v = serde_json::to_value(&state).unwrap();
+        assert_eq!(v["tabs"][0]["panes"][1]["id"], "p1");
+        assert_eq!(v["tabs"][0]["activePane"], "p1");
+        assert!(v["tabs"][1].get("panes").is_none());
+        assert!(v["tabs"][1].get("layout").is_none());
+        // 古い形式（分割の項目がない）も読める。
+        let old: SessionState = serde_json::from_str(
+            r#"{"tabs":[{"title":"a","values":{"type":"local"}}],"active":0}"#,
+        )
+        .unwrap();
+        assert!(old.tabs[0].panes.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn secrets_in_split_panes_are_never_stored() {
+        let (s, path, dir) = store("split-secrets");
+        let mut t = split_tab();
+        t.panes[1].values["password"] = json!("hunter2");
+        t.panes[1].values["loginPassword"] = json!("tn-secret");
+        let saved = s
+            .save(SessionState {
+                tabs: vec![t],
+                active: Some(0),
+            })
+            .unwrap();
+        assert!(saved.tabs[0].panes[1].values.get("password").is_none());
+        assert!(saved.tabs[0].panes[1].values.get("loginPassword").is_none());
+        let raw = std::fs::read_to_string(path).unwrap();
+        assert!(!raw.contains("hunter2") && !raw.contains("tn-secret"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_split_info_is_rejected() {
+        let (s, _, dir) = store("split-invalid");
+        let state = |t: SavedTab| SessionState {
+            tabs: vec![t],
+            active: None,
+        };
+        let mut dup = split_tab();
+        dup.panes[1].id = "p0".into();
+        let mut empty_id = split_tab();
+        empty_id.panes[0].id = String::new();
+        let mut long_id = split_tab();
+        long_id.panes[0].id = "x".repeat(MAX_PANE_ID_CHARS + 1);
+        let mut no_layout = split_tab();
+        no_layout.layout = None;
+        let mut bad_values = split_tab();
+        bad_values.panes[0].values = json!("str");
+        let mut many = split_tab();
+        many.panes = (0..=MAX_PANES)
+            .map(|i| SavedPane {
+                id: format!("p{i}"),
+                values: json!({"type": "local"}),
+            })
+            .collect();
+        let mut huge = split_tab();
+        huge.layout = Some(json!({"pad": "x".repeat(MAX_LAYOUT_BYTES)}));
+        for bad in [dup, empty_id, long_id, no_layout, bad_values, many, huge] {
+            assert!(matches!(
+                s.save(state(bad)),
+                Err(SessionStateError::Invalid(_))
+            ));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_active_pane_is_dropped_and_plain_tabs_lose_stray_split_fields() {
+        let (s, _, dir) = store("split-active");
+        let mut t = split_tab();
+        t.active_pane = Some("zzz".into());
+        let saved = s
+            .save(SessionState {
+                tabs: vec![t],
+                active: None,
+            })
+            .unwrap();
+        assert_eq!(saved.tabs[0].active_pane, None);
+        let mut plain = tab("通常", "h");
+        plain.layout = Some(json!({"kind": "pane", "id": "x"}));
+        plain.active_pane = Some("x".into());
+        let saved = s
+            .save(SessionState {
+                tabs: vec![plain],
+                active: None,
+            })
+            .unwrap();
+        assert_eq!(saved.tabs[0].layout, None);
+        assert_eq!(saved.tabs[0].active_pane, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

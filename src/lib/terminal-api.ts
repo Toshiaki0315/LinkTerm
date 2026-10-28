@@ -95,8 +95,20 @@ export interface FontFamily {
 }
 
 /** 終了時のタブ構成（接続先のみ。パスワード類は含まれない）。 */
+export interface SavedTab {
+  title: string;
+  /** 分割しているときは、先頭のペインの値。 */
+  values: Record<string, unknown>;
+  /** 分割しているときの、すべてのペイン。`id` は配置から参照する。 */
+  panes?: Array<{ id: string; values: Record<string, unknown> }>;
+  /** 分割の配置（木）。 */
+  layout?: unknown;
+  /** 操作中だったペインの `id`。 */
+  activePane?: string;
+}
+
 export interface SessionState {
-  tabs: Array<{ title: string; values: Record<string, unknown> }>;
+  tabs: SavedTab[];
   active: number | null;
 }
 

@@ -111,6 +111,14 @@ export interface TabsState {
 
 export type TabsAction =
   | { type: "add"; tab: Omit<Tab, "status">; afterId?: string }
+  /** 分割したタブを、まとめて追加する（前回の画面の復元）。 */
+  | {
+      type: "addSplit";
+      tab: { id: string; title: string };
+      panes: NewPane[];
+      layout: LayoutNode;
+      activePaneId: string;
+    }
   | { type: "close"; id: string }
   | { type: "rename"; id: string; title: string }
   /** タブを `toIndex` の位置へ移動する（並べ替え）。アクティブなタブは変わらない。 */
@@ -159,6 +167,28 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
               ...state.tabs.slice(after + 1),
             ];
       return { tabs, activeId: added.id };
+    }
+    case "addSplit": {
+      if (action.panes.length === 0) return state;
+      const panes: Pane[] = action.panes.map((p) => ({
+        ...p,
+        status: "connecting",
+      }));
+      const first = panes[0];
+      const tab: Tab = {
+        id: action.tab.id,
+        title: action.tab.title,
+        values: first.values,
+        status: first.status,
+        deferStart: first.deferStart,
+      };
+      const next: Tab = {
+        ...withPanes(tab, panes, action.layout),
+        activePaneId: panes.some((p) => p.id === action.activePaneId)
+          ? action.activePaneId
+          : first.id,
+      };
+      return { tabs: [...state.tabs, next], activeId: next.id };
     }
     case "rename": {
       const title = [...action.title.trim()].slice(0, MAX_TITLE_CHARS).join("");

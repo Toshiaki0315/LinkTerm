@@ -430,4 +430,54 @@ describe("画面分割", () => {
     s = tabsReducer(s, { type: "scrubSecrets", id: "a" });
     expect(s.tabs[0].values).toEqual({ ...telnetValues, loginPassword: "" });
   });
+
+  it("addSplit: 分割したタブをまとめて追加し、操作中のペインを指定でき、先頭のペインがタブの表示項目になる", () => {
+    const layout = {
+      kind: "split",
+      id: "s",
+      dir: "row",
+      ratio: 0.4,
+      a: { kind: "pane", id: "x" },
+      b: { kind: "pane", id: "y" },
+    } as const;
+    const s = tabsReducer(initialTabsState, {
+      type: "addSplit",
+      tab: { id: "t", title: "復元" },
+      panes: [
+        { id: "x", values: local, deferStart: true },
+        { id: "y", values: local },
+      ],
+      layout,
+      activePaneId: "y",
+    });
+    const tab = s.tabs[0];
+    expect(s.activeId).toBe("t");
+    expect(tab.title).toBe("復元");
+    expect(panesOf(tab).map((p) => p.id)).toEqual(["x", "y"]);
+    expect(tab.deferStart).toBe(true);
+    expect(tab.status).toBe("connecting");
+    expect(activePaneIdOf(tab)).toBe("y");
+    expect(layoutOf(tab)).toEqual(layout);
+    // 存在しない操作中のペインは、先頭になる。ペインがなければ何もしない。
+    const t2 = tabsReducer(initialTabsState, {
+      type: "addSplit",
+      tab: { id: "t", title: "復元" },
+      panes: [
+        { id: "x", values: local },
+        { id: "y", values: local },
+      ],
+      layout,
+      activePaneId: "nope",
+    });
+    expect(activePaneIdOf(t2.tabs[0])).toBe("x");
+    expect(
+      tabsReducer(initialTabsState, {
+        type: "addSplit",
+        tab: { id: "t", title: "x" },
+        panes: [],
+        layout,
+        activePaneId: "x",
+      }),
+    ).toBe(initialTabsState);
+  });
 });

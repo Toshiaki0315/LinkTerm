@@ -27,7 +27,6 @@ import {
   isSecretMissing,
   parseSavedValues,
   requiresSecretAtOpen,
-  stripSecrets,
   type ConnectionValues,
 } from "./lib/connection-schema";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
@@ -55,6 +54,7 @@ import {
 } from "./lib/shortcuts";
 import { runSnippet, type Snippet } from "./lib/snippets";
 import type { SplitDir } from "./lib/layout";
+import { readSplit, serializeTab } from "./lib/session-layout";
 import {
   activePaneIdOf,
   initialTabsState,
@@ -322,6 +322,25 @@ function App() {
             let activeIndex: number | null = null;
             let restoredCount = 0;
             session.tabs.forEach((saved, index) => {
+              // 分割していたタブは、配置ごと復元する（読めなければ、先頭のペインだけのタブになる）。
+              const split = readSplit(saved);
+              if (split) {
+                if (index === session.active) activeIndex = restoredCount;
+                restoredCount += 1;
+                dispatch({
+                  type: "addSplit",
+                  tab: { id: crypto.randomUUID(), title: saved.title },
+                  panes: split.panes.map((p) => ({
+                    id: p.id,
+                    values: p.values,
+                    // パスワードは保存していないため、秘密情報が要る接続は「接続」を待つ。
+                    deferStart: requiresSecretAtOpen(p.values),
+                  })),
+                  layout: split.layout,
+                  activePaneId: split.activePaneId,
+                });
+                return;
+              }
               const values = parseSavedValues(saved.values);
               if (!values) {
                 skipped += 1;
@@ -379,10 +398,7 @@ function App() {
 
   /** 保存するタブ構成（パスワード類を除く）。内容が変わったときだけ保存するため、文字列にして比べる。 */
   const sessionPayload = JSON.stringify({
-    tabs: state.tabs.map((t) => ({
-      title: t.title,
-      values: stripSecrets(t.values),
-    })),
+    tabs: state.tabs.map(serializeTab),
     active: state.tabs.some((t) => t.id === state.activeId)
       ? state.tabs.findIndex((t) => t.id === state.activeId)
       : null,
