@@ -28,6 +28,8 @@ import {
   saveSettings,
   deleteProfile,
   getRecentConnections,
+  getSnippets,
+  saveSnippets,
   listProfiles,
   saveRecentConnections,
   saveProfile,
@@ -195,6 +197,24 @@ describe("最近使った接続", () => {
     expect(invoke).toHaveBeenCalledWith("save_recent_connections", {
       entries: [entry],
     });
+  });
+});
+
+describe("スニペット", () => {
+  it("取得と保存は、対応するコマンドを呼ぶ", async () => {
+    const s = {
+      id: "a",
+      name: "n",
+      text: "ls",
+      lineDelayMs: 0,
+      sendEnter: true,
+    };
+    invoke.mockResolvedValueOnce([s]);
+    await expect(getSnippets()).resolves.toEqual([s]);
+    expect(invoke).toHaveBeenCalledWith("get_snippets");
+    invoke.mockResolvedValueOnce([s]);
+    await expect(saveSnippets([s])).resolves.toEqual([s]);
+    expect(invoke).toHaveBeenCalledWith("save_snippets", { snippets: [s] });
   });
 });
 

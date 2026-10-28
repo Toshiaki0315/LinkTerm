@@ -25,6 +25,7 @@ use crate::session::{
 };
 use crate::session_state::{SessionState, SessionStateError, SessionStateStore};
 use crate::settings::{Settings, SettingsError, SettingsStore};
+use crate::snippets::{Snippet, SnippetError, SnippetStore};
 use crate::ssh_config::{
     RequestedTarget, SshConfig as SshConfigFile, SshConfigError, build_jump_hosts,
     default_config_path, merge_forwards, merge_remote_forwards, pick_identity_file, resolve_target,
@@ -75,6 +76,8 @@ pub enum CommandError {
     SessionState(#[from] SessionStateError),
     #[error(transparent)]
     Recent(#[from] RecentError),
+    #[error(transparent)]
+    Snippet(#[from] SnippetError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -182,6 +185,7 @@ pub struct AppState {
     settings: SettingsStore,
     session_state: SessionStateStore,
     recent: RecentStore,
+    snippets: SnippetStore,
 }
 
 impl AppState {
@@ -202,6 +206,7 @@ impl AppState {
             settings: SettingsStore::new(dir.join("settings.json")),
             session_state: SessionStateStore::new(dir.join("session_state.json")),
             recent: RecentStore::new(dir.join("recent.json")),
+            snippets: SnippetStore::new(dir.join("snippets.json")),
         })
     }
 }
@@ -632,6 +637,21 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
 #[tauri::command]
 pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
     Ok(state.session_state.load()?)
+}
+
+/// 保存済みのスニペット。
+#[tauri::command]
+pub fn get_snippets(state: State<'_, AppState>) -> CommandResult<Vec<Snippet>> {
+    Ok(state.snippets.load()?)
+}
+
+/// スニペットを検証して保存し、保存した内容を返す。
+#[tauri::command]
+pub fn save_snippets(
+    state: State<'_, AppState>,
+    snippets: Vec<Snippet>,
+) -> CommandResult<Vec<Snippet>> {
+    Ok(state.snippets.save(snippets)?)
 }
 
 /// 最近使った接続先（新しい順）。

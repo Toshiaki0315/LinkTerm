@@ -9,6 +9,7 @@ pub mod recent;
 pub mod session;
 pub mod session_state;
 pub mod settings;
+pub mod snippets;
 pub mod ssh_config;
 
 use tauri::Manager;
@@ -49,6 +50,8 @@ pub fn run() {
             commands::list_fonts,
             commands::get_session_state,
             commands::save_session_state,
+            commands::get_snippets,
+            commands::save_snippets,
             commands::get_recent_connections,
             commands::save_recent_connections,
             commands::get_settings,

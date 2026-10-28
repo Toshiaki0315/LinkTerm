@@ -10,6 +10,7 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import { SnippetsDialog } from "./components/SnippetsDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
 import { TabBar } from "./components/TabBar";
 import { TerminalWorkspace } from "./components/TerminalWorkspace";
@@ -30,7 +31,9 @@ import {
   toStoredRecent,
   type RecentEntry,
 } from "./lib/recent";
+import { sendToPane } from "./lib/pane-input";
 import { shortcutFor } from "./lib/shortcuts";
+import { runSnippet, type Snippet } from "./lib/snippets";
 import type { SplitDir } from "./lib/layout";
 import {
   activePaneIdOf,
@@ -48,6 +51,8 @@ import {
   pendingHostKeyRequests,
   respondHostKey,
   getRecentConnections,
+  getSnippets,
+  saveSnippets,
   saveProfile,
   saveRecentConnections,
   saveSessionState,
@@ -123,6 +128,27 @@ function App() {
     }, 200);
     return () => clearTimeout(timer);
   }, [recentDirty, recentPayload]);
+
+  const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSnippets()
+      .then((list) => {
+        if (!cancelled) setSnippets(list);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setNotice(`スニペットを読み込めません: ${describe(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSaveSnippets = useCallback(async (next: Snippet[]) => {
+    setSnippets(await saveSnippets(next));
+  }, []);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -348,7 +374,28 @@ function App() {
     [state.tabs],
   );
 
-  const modalOpen = dialogOpen || settingsOpen || hostKeyQueue.length > 0;
+  /** スニペットを、操作中のペインへ送る。 */
+  const onRunSnippet = useCallback(
+    (snippet: Snippet) => {
+      const tab = state.tabs.find((t) => t.id === state.activeId);
+      if (!tab) return;
+      const paneId = activePaneIdOf(tab);
+      runSnippet(snippet, (data) => sendToPane(paneId, data))
+        .then((done) => {
+          if (!done)
+            setNotice(
+              `「${snippet.name}」を最後まで送れませんでした（送り先が閉じられました）`,
+            );
+        })
+        .catch((e: unknown) =>
+          setNotice(`スニペットを送れません: ${describe(e)}`),
+        );
+    },
+    [state.tabs, state.activeId],
+  );
+
+  const modalOpen =
+    dialogOpen || settingsOpen || snippetsOpen || hostKeyQueue.length > 0;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // ダイアログ表示中は入力を妨げない。
@@ -551,6 +598,9 @@ function App() {
         recents={recent.list}
         onOpenRecent={onOpenRecent}
         onClearRecents={onClearRecents}
+        snippets={snippets}
+        onRunSnippet={onRunSnippet}
+        onManageSnippets={() => setSnippetsOpen(true)}
       />
       {notice && (
         <div
@@ -602,6 +652,12 @@ function App() {
         settings={settings}
         profiles={profiles}
         onSave={onSaveSettings}
+      />
+      <SnippetsDialog
+        open={snippetsOpen}
+        onOpenChange={setSnippetsOpen}
+        snippets={snippets}
+        onSave={onSaveSnippets}
       />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
     </div>

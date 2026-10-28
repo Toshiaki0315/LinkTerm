@@ -79,6 +79,7 @@ vi.mock("./SerialControls", () => ({
   ),
 }));
 
+import { sendToPane } from "../lib/pane-input";
 import { TerminalTab } from "./TerminalTab";
 
 const telnet: ConnectionValues = {
@@ -438,6 +439,16 @@ describe("TerminalTab", () => {
       await user.click(screen.getByRole("button", { name: "検索を閉じる" }));
       expect(termSearch.clearSearch).toHaveBeenCalled();
       expect(termSearch.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("外部からの入力（スニペット）", () => {
+    it("ペインの入力口として登録され、キー入力と同じ経路で送る。アンマウントで解除する", () => {
+      const { view } = setup(telnet);
+      expect(sendToPane("t1", "ls\r")).toBe(true);
+      expect(session.write).toHaveBeenCalledWith("ls\r");
+      view.unmount();
+      expect(sendToPane("t1", "x")).toBe(false);
     });
   });
 

@@ -1,6 +1,7 @@
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ChevronDown, Plus, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
+import type { Snippet } from "../lib/snippets";
 import type { Tab } from "../lib/tabs";
 import { recentLabel, type RecentEntry } from "../lib/recent";
 import { TAB_COLORS, tabColorHex, type TabColorId } from "../lib/tab-colors";
@@ -26,6 +27,12 @@ interface Props {
   recents?: RecentEntry[];
   onOpenRecent?: (entry: RecentEntry) => void;
   onClearRecents?: () => void;
+  /** スニペットの一覧。 */
+  snippets?: Snippet[];
+  /** スニペットを選んだ（操作中のペインへ送る）。渡さなければボタンを出さない。 */
+  onRunSnippet?: (snippet: Snippet) => void;
+  /** 「スニペットを管理…」。 */
+  onManageSnippets?: () => void;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -106,6 +113,9 @@ export function TabBar({
   recents = [],
   onOpenRecent,
   onClearRecents,
+  snippets = [],
+  onRunSnippet,
+  onManageSnippets,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
@@ -114,6 +124,10 @@ export function TabBar({
   const [recentMenu, setRecentMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
+  const [snippetMenu, setSnippetMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const hasMenu = Boolean(onRename || onDuplicate || onColor);
@@ -270,6 +284,40 @@ export function TabBar({
         >
           <ChevronDown className="h-4 w-4" />
         </Button>
+      )}
+      {onManageSnippets && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="スニペット"
+          title="スニペット"
+          aria-haspopup="menu"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setSnippetMenu({ x: rect.left, y: rect.bottom });
+          }}
+        >
+          <Zap className="h-4 w-4" />
+        </Button>
+      )}
+      {snippetMenu && onManageSnippets && (
+        <ContextMenu
+          x={snippetMenu.x}
+          y={snippetMenu.y}
+          items={[
+            ...snippets.map((s) => ({
+              label: s.name,
+              disabled: activeId === null || !onRunSnippet,
+              onSelect: () => onRunSnippet?.(s),
+            })),
+            {
+              label: "スニペットを管理…",
+              separatorBefore: snippets.length > 0,
+              onSelect: onManageSnippets,
+            },
+          ]}
+          onClose={() => setSnippetMenu(null)}
+        />
       )}
       {recentMenu && onOpenRecent && (
         <ContextMenu

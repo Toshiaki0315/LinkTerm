@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   listProfiles: vi.fn(),
   getRecentConnections: vi.fn(),
   saveRecentConnections: vi.fn(),
+  getSnippets: vi.fn(),
+  saveSnippets: vi.fn(),
   getSettings: vi.fn(),
   getSessionState: vi.fn(),
   saveSessionState: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("./components/TerminalTab", () => ({
 }));
 
 import App from "./App";
+import { registerPaneInput } from "./lib/pane-input";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
 
 let openSettingsFromMenu: () => void;
@@ -84,6 +87,8 @@ beforeEach(() => {
   api.listProfiles.mockResolvedValue([]);
   api.getRecentConnections.mockResolvedValue([]);
   api.saveRecentConnections.mockResolvedValue(undefined);
+  api.getSnippets.mockResolvedValue([]);
+  api.saveSnippets.mockImplementation(async (s) => s);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
   api.getSessionState.mockResolvedValue({ tabs: [], active: null });
   api.saveSessionState.mockResolvedValue(undefined);
@@ -268,6 +273,55 @@ describe("App", () => {
 
     await user.keyboard("{Meta>}w{/Meta}");
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
+  describe("スニペット", () => {
+    const snippet = {
+      id: "s1",
+      name: "経路確認",
+      text: "ls\npwd",
+      lineDelayMs: 0,
+      sendEnter: true,
+    };
+
+    it("選ぶと、操作中のペインへ1行ずつ送る", async () => {
+      api.getSnippets.mockResolvedValue([snippet]);
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      const paneId = screen
+        .getByTestId(/^term-/)
+        .getAttribute("data-testid")!
+        .replace("term-", "");
+      const sent: string[] = [];
+      const off = registerPaneInput(paneId, (d) => sent.push(d));
+
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "経路確認" }),
+      );
+      await waitFor(() => expect(sent).toEqual(["ls\r", "pwd\r"]));
+      off();
+    });
+
+    it("管理ダイアログで追加すると保存する", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "スニペットを管理…" }),
+      );
+      await user.click(await screen.findByRole("button", { name: "追加" }));
+      await user.type(screen.getByLabelText("名前"), "再起動");
+      await user.type(screen.getByLabelText(/^内容/), "reboot");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.saveSnippets).toHaveBeenCalled());
+      expect(api.saveSnippets.mock.calls[0][0]).toMatchObject([
+        { name: "再起動", text: "reboot", sendEnter: true, lineDelayMs: 0 },
+      ]);
+    });
   });
 
   it("ダイアログ表示中は ⌘W / ⌘T でタブを操作しない", async () => {

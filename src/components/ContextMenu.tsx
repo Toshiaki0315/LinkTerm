@@ -90,8 +90,8 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       style={{ left, top, minWidth: MENU_WIDTH }}
       className="fixed z-50 rounded-md border border-neutral-700 bg-neutral-900 py-1 text-sm shadow-xl"
     >
-      {items.map((item) => (
-        <Fragment key={item.label}>
+      {items.map((item, index) => (
+        <Fragment key={`${index}:${item.label}`}>
           {item.separatorBefore && (
             <div
               role="separator"

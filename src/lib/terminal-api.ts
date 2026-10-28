@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Snippet } from "./snippets";
 import type { Settings } from "./settings";
 
 export type NewlineTx = "Cr" | "Lf" | "CrLf";
@@ -181,6 +182,13 @@ export const saveSettings = (settings: Settings) =>
 /** メニューバーの「設定…」（⌘,）が選ばれた。 */
 export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
   listen<null>("menu-open-settings", () => cb());
+
+/** 保存済みのスニペット。 */
+export const getSnippets = () => invoke<Snippet[]>("get_snippets");
+
+/** スニペットを保存する。検証後の内容が返る。 */
+export const saveSnippets = (snippets: Snippet[]) =>
+  invoke<Snippet[]>("save_snippets", { snippets });
 
 /** 最近使った接続先（新しい順）。 */
 export const getRecentConnections = () =>

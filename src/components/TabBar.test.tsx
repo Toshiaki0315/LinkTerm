@@ -372,4 +372,78 @@ describe("TabBar", () => {
       expect(clear.previousElementSibling).toHaveAttribute("role", "separator");
     });
   });
+
+  describe("スニペット", () => {
+    const snippets = [
+      {
+        id: "1",
+        name: "ping",
+        text: "ping x",
+        lineDelayMs: 0,
+        sendEnter: true,
+      },
+      {
+        id: "2",
+        name: "ping",
+        text: "ping y",
+        lineDelayMs: 0,
+        sendEnter: true,
+      },
+    ];
+    const renderBar = (props: Partial<Parameters<typeof TabBar>[0]> = {}) =>
+      render(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          snippets={snippets}
+          onRunSnippet={() => {}}
+          onManageSnippets={() => {}}
+          {...props}
+        />,
+      );
+
+    it("管理用の関数がなければボタンを出さない", () => {
+      renderBar({ onManageSnippets: undefined });
+      expect(screen.queryByRole("button", { name: "スニペット" })).toBeNull();
+    });
+
+    it("一覧から選ぶと通知する。同じ名前が複数あっても選べる", async () => {
+      const user = userEvent.setup();
+      const onRunSnippet = vi.fn();
+      renderBar({ onRunSnippet });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      const items = screen.getAllByRole("menuitem", { name: "ping" });
+      expect(items).toHaveLength(2);
+      await user.click(items[1]);
+      expect(onRunSnippet).toHaveBeenCalledWith(snippets[1]);
+    });
+
+    it("「スニペットを管理…」は区切り線の下に出て、選ぶと通知する", async () => {
+      const user = userEvent.setup();
+      const onManageSnippets = vi.fn();
+      renderBar({ onManageSnippets });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      const manage = screen.getByRole("menuitem", {
+        name: "スニペットを管理…",
+      });
+      expect(manage.previousElementSibling).toHaveAttribute(
+        "role",
+        "separator",
+      );
+      await user.click(manage);
+      expect(onManageSnippets).toHaveBeenCalled();
+    });
+
+    it("タブがないときは送れない（項目は無効）", async () => {
+      const user = userEvent.setup();
+      renderBar({ tabs: [], activeId: null });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      expect(
+        screen.getAllByRole("menuitem", { name: "ping" })[0],
+      ).toBeDisabled();
+    });
+  });
 });

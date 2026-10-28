@@ -6,6 +6,7 @@ import {
   toStartRequest,
   type ConnectionValues,
 } from "../lib/connection-schema";
+import { registerPaneInput } from "../lib/pane-input";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance, AutoReconnect } from "../lib/settings";
 import { copyText, pasteText } from "../lib/clipboard";
@@ -167,6 +168,9 @@ export function TerminalTab({
     },
     [write, localEcho],
   );
+  // スニペットなど、端末の外からの入力もキー入力と同じ経路で送る。
+  useEffect(() => registerPaneInput(tabId, onInput), [tabId, onInput]);
+
   const onResize = useCallback(
     (cols: number, rows: number) => {
       resize(cols, rows).catch((e: unknown) =>
