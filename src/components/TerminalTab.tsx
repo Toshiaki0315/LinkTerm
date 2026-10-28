@@ -8,6 +8,8 @@ import {
   type ConnectionValues,
 } from "../lib/connection-schema";
 import { LoginRunner, parseLoginScript } from "../lib/auto-login";
+import { OutputMatcher, type HighlightRule } from "../lib/highlight";
+import { NOTIFY_INTERVAL_MS, Throttle, notifyMatch } from "../lib/notify";
 import { registerPaneInput } from "../lib/pane-input";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance, AutoReconnect } from "../lib/settings";
@@ -45,6 +47,10 @@ interface Props {
   findSignal?: number;
   /** 復元したタブ: 自動では接続せず、「接続」ボタンで接続する。 */
   deferStart?: boolean;
+  /** キーワードのハイライト規則（色付けと、見つけたときの通知）。 */
+  highlightRules?: HighlightRule[];
+  /** 通知する規則に一致した（このペインが見えていないとき）。タブの注目表示に使う。 */
+  onAttention?: () => void;
   /** 画面を分割する（右クリックメニュー）。省略すると項目を出さない。 */
   onSplit?: (dir: "row" | "column") => void;
   /** このペインを閉じる（分割しているときだけ渡す）。 */
@@ -64,6 +70,8 @@ export function TerminalTab({
   autoReconnect = DISABLED_AUTO_RECONNECT,
   findSignal = 0,
   deferStart = false,
+  highlightRules,
+  onAttention,
   onSplit,
   onClosePane,
 }: Props) {
@@ -74,16 +82,56 @@ export function TerminalTab({
   const loginRef = useRef<LoginRunner | null>(null);
   const decoderRef = useRef<TextDecoder | null>(null);
 
-  const onData = useCallback((data: Uint8Array) => {
-    termRef.current?.write(data);
-    const runner = loginRef.current;
-    if (runner && !runner.done) {
-      // 出力が届いた時点で、セッションは確立している。
-      runner.begin();
-      decoderRef.current ??= new TextDecoder();
-      runner.feed(decoderRef.current.decode(data, { stream: true }));
+  /** 通知する規則の照合（規則が変わったら作り直す）。 */
+  const matcherRef = useRef<OutputMatcher | null>(null);
+  const throttleRef = useRef(new Throttle(NOTIFY_INTERVAL_MS));
+  /** 最新の値（出力のコールバックから読む）。 */
+  const liveRef = useRef({ active, title, onAttention });
+  useEffect(() => {
+    liveRef.current = { active, title, onAttention };
+  }, [active, title, onAttention]);
+  useEffect(() => {
+    const notifying = (highlightRules ?? []).some((r) => r.notify);
+    matcherRef.current = notifying
+      ? new OutputMatcher(highlightRules ?? [])
+      : null;
+  }, [highlightRules]);
+
+  /** 通知する規則に一致したとき。画面を見ていなければ、通知とタブの注目表示を出す。 */
+  const onMatches = useCallback((hits: HighlightRule[]) => {
+    const live = liveRef.current;
+    if (live.active && document.hasFocus()) return;
+    live.onAttention?.();
+    for (const rule of hits) {
+      if (!throttleRef.current.allow(rule.id)) continue;
+      notifyMatch(
+        "キーワードを検出しました",
+        `「${rule.pattern}」 — ${live.title}`,
+      ).catch((e: unknown) => console.error("通知に失敗しました:", e));
     }
   }, []);
+
+  const onData = useCallback(
+    (data: Uint8Array) => {
+      termRef.current?.write(data);
+      const runner = loginRef.current;
+      const loginActive = runner !== null && !runner.done;
+      const matcher = matcherRef.current;
+      if (!loginActive && !matcher) return;
+      decoderRef.current ??= new TextDecoder();
+      const text = decoderRef.current.decode(data, { stream: true });
+      if (runner && loginActive) {
+        // 出力が届いた時点で、セッションは確立している。
+        runner.begin();
+        runner.feed(text);
+      }
+      if (matcher) {
+        const hits = matcher.feed(text);
+        if (hits.length > 0) onMatches(hits);
+      }
+    },
+    [onMatches],
+  );
   const { status, sessionId, error, remoteEcho, start, write, resize } =
     useTerminalSession({ onData });
 
@@ -341,6 +389,7 @@ export function TerminalTab({
         ref={termRef}
         active={active}
         appearance={appearance}
+        highlightRules={highlightRules}
         onInput={onInput}
         onResize={onResize}
         onContextMenu={({ x, y }) =>

@@ -446,4 +446,53 @@ describe("TabBar", () => {
       ).toBeDisabled();
     });
   });
+
+  describe("キーワードの強調・通知", () => {
+    const renderBar = (props: Partial<Parameters<typeof TabBar>[0]> = {}) =>
+      render(
+        <TabBar
+          tabs={[tab("a"), tab("b")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          {...props}
+        />,
+      );
+
+    it("設定を開くボタンは、渡したときだけ出す", async () => {
+      const user = userEvent.setup();
+      const onManageHighlights = vi.fn();
+      const { rerender } = renderBar();
+      expect(
+        screen.queryByRole("button", { name: "キーワードの強調・通知" }),
+      ).toBeNull();
+      rerender(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          onManageHighlights={onManageHighlights}
+        />,
+      );
+      await user.click(
+        screen.getByRole("button", { name: "キーワードの強調・通知" }),
+      );
+      expect(onManageHighlights).toHaveBeenCalled();
+    });
+
+    it("見ていないタブにだけ、検出の印を出す", () => {
+      renderBar({ attention: new Set(["a", "b"]) });
+      expect(
+        screen.getAllByRole("img", { name: "キーワードを検出しました" }),
+      ).toHaveLength(1);
+      expect(
+        screen
+          .getByRole("tab", { name: /title-b/ })
+          .querySelector('[aria-label="キーワードを検出しました"]'),
+      ).not.toBeNull();
+    });
+  });
 });

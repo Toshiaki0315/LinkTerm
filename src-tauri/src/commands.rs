@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::fonts::{FontError, FontFamily};
+use crate::highlights::{HighlightError, HighlightRule, HighlightStore};
 use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Profile, ProfileError, ProfileStore};
 use crate::recent::{RecentConnection, RecentError, RecentStore};
@@ -80,6 +81,8 @@ pub enum CommandError {
     Snippet(#[from] SnippetError),
     #[error(transparent)]
     Sftp(#[from] crate::sftp::SftpError),
+    #[error(transparent)]
+    Highlight(#[from] HighlightError),
     #[error("認証情報の操作に失敗しました: {0}")]
     Credential(#[from] crate::session::CredentialError),
 }
@@ -188,6 +191,7 @@ pub struct AppState {
     session_state: SessionStateStore,
     recent: RecentStore,
     snippets: SnippetStore,
+    highlights: HighlightStore,
 }
 
 impl AppState {
@@ -209,6 +213,7 @@ impl AppState {
             session_state: SessionStateStore::new(dir.join("session_state.json")),
             recent: RecentStore::new(dir.join("recent.json")),
             snippets: SnippetStore::new(dir.join("snippets.json")),
+            highlights: HighlightStore::new(dir.join("highlights.json")),
         })
     }
 }
@@ -644,6 +649,21 @@ pub async fn list_fonts() -> CommandResult<Vec<FontFamily>> {
 #[tauri::command]
 pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionState> {
     Ok(state.session_state.load()?)
+}
+
+/// 保存済みのハイライト規則。
+#[tauri::command]
+pub fn get_highlight_rules(state: State<'_, AppState>) -> CommandResult<Vec<HighlightRule>> {
+    Ok(state.highlights.load()?)
+}
+
+/// ハイライト規則を検証して保存し、保存した内容を返す。
+#[tauri::command]
+pub fn save_highlight_rules(
+    state: State<'_, AppState>,
+    rules: Vec<HighlightRule>,
+) -> CommandResult<Vec<HighlightRule>> {
+    Ok(state.highlights.save(rules)?)
 }
 
 /// 保存済みのスニペット。

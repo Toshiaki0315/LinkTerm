@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { HighlightRule } from "./highlight";
 import type { Snippet } from "./snippets";
 import type { Settings } from "./settings";
 
@@ -182,6 +183,14 @@ export const saveSettings = (settings: Settings) =>
 /** メニューバーの「設定…」（⌘,）が選ばれた。 */
 export const onOpenSettings = (cb: () => void): Promise<UnlistenFn> =>
   listen<null>("menu-open-settings", () => cb());
+
+/** 保存済みのハイライト規則。 */
+export const getHighlightRules = () =>
+  invoke<HighlightRule[]>("get_highlight_rules");
+
+/** ハイライト規則を保存する。検証後の内容が返る。 */
+export const saveHighlightRules = (rules: HighlightRule[]) =>
+  invoke<HighlightRule[]>("save_highlight_rules", { rules });
 
 /** 保存済みのスニペット。 */
 export const getSnippets = () => invoke<Snippet[]>("get_snippets");

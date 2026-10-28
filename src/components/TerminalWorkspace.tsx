@@ -3,6 +3,7 @@ import type { SessionStatus } from "../hooks/useTerminalSession";
 import { computeRects, type Divider, type SplitDir } from "../lib/layout";
 import { activePaneIdOf, layoutOf, panesOf, type Tab } from "../lib/tabs";
 import type { Appearance, AutoReconnect } from "../lib/settings";
+import type { HighlightRule } from "../lib/highlight";
 import { themeFor } from "../lib/themes";
 import { cn } from "../lib/utils";
 import { TerminalTab } from "./TerminalTab";
@@ -17,6 +18,10 @@ interface Props {
   autoReconnect?: AutoReconnect;
   /** ペインごとの検索要求の回数。増えたペインが検索バーを開く。 */
   findSignals?: Record<string, number>;
+  /** キーワードのハイライト規則。 */
+  highlightRules?: HighlightRule[];
+  /** 通知する規則に一致したが、見えていないタブ（タブの注目表示用）。 */
+  onAttention?: (tabId: string) => void;
   onActivatePane?: (tabId: string, paneId: string) => void;
   onResizeSplit?: (tabId: string, splitId: string, ratio: number) => void;
   onSplit?: (tabId: string, dir: SplitDir) => void;
@@ -39,6 +44,8 @@ export function TerminalWorkspace({
   appearance,
   autoReconnect,
   findSignals,
+  highlightRules,
+  onAttention,
   onActivatePane,
   onResizeSplit,
   onSplit,
@@ -130,6 +137,8 @@ export function TerminalWorkspace({
                       appearance={appearance}
                       autoReconnect={autoReconnect}
                       findSignal={findSignals?.[pane.id] ?? 0}
+                      highlightRules={highlightRules}
+                      onAttention={onAttention && (() => onAttention(tab.id))}
                       onSplit={onSplit && ((dir) => onSplit(tab.id, dir))}
                       onClosePane={
                         multi && onClosePane

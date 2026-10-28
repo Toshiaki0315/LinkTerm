@@ -36,6 +36,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 tauri-plugin-clipboard-manager = "2.5.0"
 russh-sftp = "3.0.1"
 tauri-plugin-dialog = "2.8.4"
+tauri-plugin-notification = "2.8.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

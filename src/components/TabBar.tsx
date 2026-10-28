@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X, Zap } from "lucide-react";
+import { ChevronDown, Highlighter, Plus, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import type { Snippet } from "../lib/snippets";
@@ -33,6 +33,10 @@ interface Props {
   onRunSnippet?: (snippet: Snippet) => void;
   /** 「スニペットを管理…」。 */
   onManageSnippets?: () => void;
+  /** キーワードの強調・通知の設定を開く。渡さなければボタンを出さない。 */
+  onManageHighlights?: () => void;
+  /** 通知するキーワードが見つかった、見ていないタブ（注目の印を付ける）。 */
+  attention?: ReadonlySet<string>;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -116,6 +120,8 @@ export function TabBar({
   snippets = [],
   onRunSnippet,
   onManageSnippets,
+  onManageHighlights,
+  attention,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
@@ -245,6 +251,13 @@ export function TabBar({
                     aria-hidden
                   />
                   <span className="truncate">{tab.title}</span>
+                  {!active && attention?.has(tab.id) && (
+                    <span
+                      role="img"
+                      aria-label="キーワードを検出しました"
+                      className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
+                    />
+                  )}
                 </button>
               )}
               <span id={statusId} className="sr-only">
@@ -283,6 +296,17 @@ export function TabBar({
           }}
         >
           <ChevronDown className="h-4 w-4" />
+        </Button>
+      )}
+      {onManageHighlights && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="キーワードの強調・通知"
+          title="キーワードの強調・通知"
+          onClick={onManageHighlights}
+        >
+          <Highlighter className="h-4 w-4" />
         </Button>
       )}
       {onManageSnippets && (

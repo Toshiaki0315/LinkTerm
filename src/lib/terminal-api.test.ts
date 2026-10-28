@@ -28,6 +28,8 @@ import {
   saveSettings,
   deleteProfile,
   getRecentConnections,
+  getHighlightRules,
+  saveHighlightRules,
   getSnippets,
   saveSnippets,
   listProfiles,
@@ -197,6 +199,25 @@ describe("最近使った接続", () => {
     expect(invoke).toHaveBeenCalledWith("save_recent_connections", {
       entries: [entry],
     });
+  });
+});
+
+describe("ハイライト規則", () => {
+  it("取得と保存は、対応するコマンドを呼ぶ", async () => {
+    const r = {
+      id: "a",
+      pattern: "ERROR",
+      regex: false,
+      caseSensitive: false,
+      color: "red",
+      notify: true,
+    };
+    invoke.mockResolvedValueOnce([r]);
+    await expect(getHighlightRules()).resolves.toEqual([r]);
+    expect(invoke).toHaveBeenCalledWith("get_highlight_rules");
+    invoke.mockResolvedValueOnce([r]);
+    await expect(saveHighlightRules([r as never])).resolves.toEqual([r]);
+    expect(invoke).toHaveBeenCalledWith("save_highlight_rules", { rules: [r] });
   });
 });
 

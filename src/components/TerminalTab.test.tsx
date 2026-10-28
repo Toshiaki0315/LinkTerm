@@ -73,6 +73,11 @@ vi.mock("./TerminalView", async () => {
     ),
   };
 });
+const notify = vi.hoisted(() => ({ notifyMatch: vi.fn() }));
+vi.mock("../lib/notify", async (orig) => ({
+  ...(await orig<typeof import("../lib/notify")>()),
+  notifyMatch: notify.notifyMatch,
+}));
 vi.mock("./LogControl", () => ({ LogControl: () => null }));
 vi.mock("./SftpDialog", () => ({
   SftpDialog: ({ open, sessionId }: { open: boolean; sessionId: string }) =>
@@ -481,6 +486,100 @@ describe("TerminalTab", () => {
       expect(
         screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
       ).toBeNull();
+    });
+  });
+
+  describe("キーワードの通知", () => {
+    const rules = [
+      {
+        id: "r1",
+        pattern: "FAILED",
+        regex: false,
+        caseSensitive: false,
+        color: "red" as const,
+        notify: true,
+      },
+      {
+        id: "quiet",
+        pattern: "warn",
+        regex: false,
+        caseSensitive: false,
+        color: "yellow" as const,
+        notify: false,
+      },
+    ];
+    const output = (text: string) =>
+      act(() => session.onData(new TextEncoder().encode(text)));
+    const mount = (active: boolean, onAttention = vi.fn()) => {
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="alice@h"
+          values={telnet}
+          active={active}
+          highlightRules={rules}
+          onAttention={onAttention}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+      return onAttention;
+    };
+
+    beforeEach(() => {
+      notify.notifyMatch.mockResolvedValue(true);
+    });
+
+    it("見ていないタブで通知する語が出たら、通知とタブの注目表示を出す（画面の内容は載せない）", async () => {
+      const onAttention = mount(false);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("secret-token=abc FAILED\n");
+      expect(onAttention).toHaveBeenCalledTimes(1);
+      expect(notify.notifyMatch).toHaveBeenCalledWith(
+        "キーワードを検出しました",
+        "「FAILED」 — alice@h",
+      );
+      expect(JSON.stringify(notify.notifyMatch.mock.calls)).not.toContain(
+        "secret-token",
+      );
+    });
+
+    it("通知しない規則や、一致しない出力では何もしない", async () => {
+      const onAttention = mount(false);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("just a warn line\n");
+      expect(onAttention).not.toHaveBeenCalled();
+      expect(notify.notifyMatch).not.toHaveBeenCalled();
+    });
+
+    it("見ている（アクティブで、ウィンドウにも注目がある）ときは通知しない", async () => {
+      const spy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const onAttention = mount(true);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("FAILED\n");
+      expect(onAttention).not.toHaveBeenCalled();
+      expect(notify.notifyMatch).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it("アクティブでも、ウィンドウに注目がなければ通知する", async () => {
+      const spy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      const onAttention = mount(true);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("FAILED\n");
+      expect(onAttention).toHaveBeenCalled();
+      expect(notify.notifyMatch).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
+
+    it("同じ規則の通知は、続けて出さない", async () => {
+      mount(false);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("FAILED 1\n");
+      output("FAILED 2\n");
+      expect(notify.notifyMatch).toHaveBeenCalledTimes(1);
     });
   });
 

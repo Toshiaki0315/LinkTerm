@@ -1,6 +1,6 @@
 import { createRef } from "react";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const xterm = vi.hoisted(() => {
   const instances: Array<
@@ -14,7 +14,9 @@ const xterm = vi.hoisted(() => {
     data?: (d: string) => void;
     resize?: (s: { cols: number; rows: number }) => void;
   } = {};
-  return { instances, handlers };
+  /** 次に作る端末が持つ、画面バッファの偽物。 */
+  const next: { buffer?: unknown } = {};
+  return { instances, handlers, next };
 });
 
 vi.mock("@xterm/xterm", () => ({
@@ -41,6 +43,14 @@ vi.mock("@xterm/xterm", () => ({
       return { dispose: vi.fn() };
     });
     options: Record<string, unknown>;
+    /** 試験が差し込む、画面バッファの偽物（なければ、ハイライトは使われない）。 */
+    buffer: unknown = xterm.next.buffer;
+    registerMarker = vi.fn(() => ({
+      line: 0,
+      isDisposed: false,
+      dispose: vi.fn(),
+    }));
+    registerDecoration = vi.fn(() => ({ dispose: vi.fn() }));
     constructor(options: Record<string, unknown> = {}) {
       this.options = { ...options };
       xterm.instances.push(this as never);
@@ -127,7 +137,136 @@ describe("TerminalView", () => {
     );
     const bytes = new Uint8Array([0x68, 0xff]);
     ref.current!.write(bytes);
-    expect(xterm.instances[0].write).toHaveBeenCalledWith(bytes);
+    expect(xterm.instances[0].write).toHaveBeenCalledWith(
+      bytes,
+      expect.any(Function),
+    );
+  });
+
+  describe("キーワードのハイライト", () => {
+    const rules = [
+      {
+        id: "r",
+        pattern: "ERROR",
+        regex: false,
+        caseSensitive: false,
+        color: "red" as const,
+        notify: false,
+      },
+    ];
+    /** 1文字1セルの偽のバッファ。 */
+    const bufferOf = (lines: string[]) => ({
+      active: {
+        type: "normal",
+        baseY: 0,
+        cursorY: lines.length - 1,
+        length: lines.length,
+        getLine: (y: number) => ({
+          isWrapped: false,
+          getCell: (x: number) => ({
+            getChars: () => lines[y]?.[x] ?? "",
+            getWidth: () => 1,
+          }),
+        }),
+      },
+    });
+
+    afterEach(() => {
+      xterm.next.buffer = undefined;
+    });
+
+    it("規則を渡すと、すでにある行の一致に、列・幅・色を指定した装飾を付ける", () => {
+      xterm.next.buffer = bufferOf(["x ERROR y"]);
+      render(
+        <TerminalView
+          active
+          highlightRules={rules}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const term = xterm.instances[0] as unknown as {
+        registerDecoration: ReturnType<typeof vi.fn>;
+      };
+      expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+      expect(term.registerDecoration.mock.calls[0][0]).toMatchObject({
+        x: 2,
+        width: 5,
+        backgroundColor: "#ef4444",
+        foregroundColor: "#ffffff",
+      });
+    });
+
+    it("書き込みが画面に反映されたあとで、新しい行を調べる", () => {
+      const lines = ["ok"];
+      xterm.next.buffer = bufferOf(lines);
+      const ref = createRef<TerminalHandle>();
+      render(
+        <TerminalView
+          ref={ref}
+          active
+          highlightRules={rules}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const term = xterm.instances[0] as unknown as {
+        registerDecoration: ReturnType<typeof vi.fn>;
+        write: ReturnType<typeof vi.fn>;
+      };
+      expect(term.registerDecoration).not.toHaveBeenCalled();
+      ref.current!.write(new TextEncoder().encode("ERROR\n"));
+      // 画面への反映（コールバック）の前に調べても、まだ何も付かない。
+      lines[0] = "ERROR";
+      expect(term.registerDecoration).not.toHaveBeenCalled();
+      (term.write.mock.lastCall![1] as () => void)();
+      expect(term.registerDecoration).toHaveBeenCalledTimes(1);
+    });
+
+    it("規則を空にすると装飾を外す", () => {
+      xterm.next.buffer = bufferOf(["ERROR"]);
+      const { rerender } = render(
+        <TerminalView
+          active
+          highlightRules={rules}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      const term = xterm.instances[0] as unknown as {
+        registerDecoration: ReturnType<typeof vi.fn>;
+      };
+      const decoration = term.registerDecoration.mock.results[0].value as {
+        dispose: ReturnType<typeof vi.fn>;
+      };
+      rerender(
+        <TerminalView
+          active
+          highlightRules={[]}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(decoration.dispose).toHaveBeenCalled();
+    });
+
+    it("バッファを持たない端末でも、書き込みは動く", () => {
+      xterm.next.buffer = undefined;
+      const ref = createRef<TerminalHandle>();
+      render(
+        <TerminalView
+          ref={ref}
+          active
+          highlightRules={rules}
+          onInput={() => {}}
+          onResize={() => {}}
+        />,
+      );
+      expect(() => {
+        ref.current!.write(new Uint8Array([0x61]));
+        (xterm.instances[0].write.mock.lastCall![1] as () => void)();
+      }).not.toThrow();
+    });
   });
 
   it("ハンドルから現在のサイズを取得できる", () => {

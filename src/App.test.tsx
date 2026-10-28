@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   listProfiles: vi.fn(),
   getRecentConnections: vi.fn(),
   saveRecentConnections: vi.fn(),
+  getHighlightRules: vi.fn(),
+  saveHighlightRules: vi.fn(),
   getSnippets: vi.fn(),
   saveSnippets: vi.fn(),
   getSettings: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("./components/TerminalTab", () => ({
     findSignal,
     onEditAndReconnect,
     onSecretsConsumed,
+    onAttention,
   }: {
     tabId: string;
     appearance?: { fontSize: number; fontFamily: string };
@@ -44,6 +47,7 @@ vi.mock("./components/TerminalTab", () => ({
     deferStart?: boolean;
     onEditAndReconnect: (id: string) => void;
     onSecretsConsumed: (id: string) => void;
+    onAttention?: () => void;
   }) => (
     <div
       data-testid={`term-${tabId}`}
@@ -54,6 +58,7 @@ vi.mock("./components/TerminalTab", () => ({
     >
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
       <button onClick={() => onSecretsConsumed(tabId)}>consume</button>
+      <button onClick={() => onAttention?.()}>attention-{tabId}</button>
     </div>
   ),
 }));
@@ -87,6 +92,8 @@ beforeEach(() => {
   api.listProfiles.mockResolvedValue([]);
   api.getRecentConnections.mockResolvedValue([]);
   api.saveRecentConnections.mockResolvedValue(undefined);
+  api.getHighlightRules.mockResolvedValue([]);
+  api.saveHighlightRules.mockImplementation(async (r) => r);
   api.getSnippets.mockResolvedValue([]);
   api.saveSnippets.mockImplementation(async (s) => s);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
@@ -320,6 +327,57 @@ describe("App", () => {
       await waitFor(() => expect(api.saveSnippets).toHaveBeenCalled());
       expect(api.saveSnippets.mock.calls[0][0]).toMatchObject([
         { name: "再起動", text: "reboot", sendEnter: true, lineDelayMs: 0 },
+      ]);
+    });
+  });
+
+  describe("キーワードの注目表示", () => {
+    const openTab = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.keyboard("{Meta>}t{/Meta}");
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+    };
+
+    it("見ていないタブに印が付き、そのタブを開くと消える", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await openTab(user);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await openTab(user);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      // 2つ目がアクティブ。1つ目のペインで検出された。
+      const firstTabId = screen
+        .getAllByTestId(/^term-/)[0]
+        .getAttribute("data-testid");
+      expect(firstTabId).not.toBeNull();
+      await user.click(
+        screen.getAllByRole("button", { name: /^attention-/ })[0],
+      );
+      expect(
+        screen.getAllByRole("img", { name: "キーワードを検出しました" }),
+      ).toHaveLength(1);
+      await user.click(screen.getAllByRole("tab")[0]);
+      expect(
+        screen.queryByRole("img", { name: "キーワードを検出しました" }),
+      ).toBeNull();
+      // もう一度別のタブへ移っても、印は戻らない。
+      await user.click(screen.getAllByRole("tab")[1]);
+      expect(
+        screen.queryByRole("img", { name: "キーワードを検出しました" }),
+      ).toBeNull();
+    });
+
+    it("設定の画面で規則を追加すると保存し、端末へ渡る", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(
+        screen.getByRole("button", { name: "キーワードの強調・通知" }),
+      );
+      await user.click(await screen.findByRole("button", { name: "追加" }));
+      await user.type(screen.getByLabelText("見つけたい文字列"), "ERROR");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.saveHighlightRules).toHaveBeenCalled());
+      expect(api.saveHighlightRules.mock.calls[0][0]).toMatchObject([
+        { pattern: "ERROR", color: "red", notify: false },
       ]);
     });
   });
@@ -869,9 +927,14 @@ describe("App", () => {
       await user.type(screen.getByLabelText("パスワード"), "top-secret");
       await user.click(screen.getByRole("button", { name: "接続" }));
       await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
-      await waitFor(() => expect(api.saveSessionState).toHaveBeenCalled(), {
-        timeout: 3000,
-      });
+      // 最初の（空の）保存ではなく、タブを開いたあとの保存を待つ。
+      await waitFor(
+        () => {
+          const calls = api.saveSessionState.mock.calls;
+          expect(calls[calls.length - 1]?.[0].tabs).toHaveLength(1);
+        },
+        { timeout: 3000 },
+      );
       const calls = api.saveSessionState.mock.calls;
       const last = calls[calls.length - 1][0];
       expect(last.active).toBe(0);

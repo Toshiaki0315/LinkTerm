@@ -10,6 +10,7 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import { HighlightsDialog } from "./components/HighlightsDialog";
 import { SnippetsDialog } from "./components/SnippetsDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
 import { TabBar } from "./components/TabBar";
@@ -33,6 +34,7 @@ import {
   toStoredRecent,
   type RecentEntry,
 } from "./lib/recent";
+import type { HighlightRule } from "./lib/highlight";
 import { sendToPane } from "./lib/pane-input";
 import { shortcutFor } from "./lib/shortcuts";
 import { runSnippet, type Snippet } from "./lib/snippets";
@@ -53,7 +55,9 @@ import {
   pendingHostKeyRequests,
   respondHostKey,
   getRecentConnections,
+  getHighlightRules,
   getSnippets,
+  saveHighlightRules,
   saveSnippets,
   saveProfile,
   saveRecentConnections,
@@ -130,6 +134,34 @@ function App() {
     }, 200);
     return () => clearTimeout(timer);
   }, [recentDirty, recentPayload]);
+
+  const [highlightRules, setHighlightRules] = useState<HighlightRule[]>([]);
+  const [highlightsOpen, setHighlightsOpen] = useState(false);
+  /** 通知するキーワードが見つかった、見ていないタブ。 */
+  const [attention, setAttention] = useState<ReadonlySet<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    getHighlightRules()
+      .then((list) => {
+        if (!cancelled) setHighlightRules(list);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled)
+          setNotice(`ハイライト規則を読み込めません: ${describe(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSaveHighlights = useCallback(async (next: HighlightRule[]) => {
+    setHighlightRules(await saveHighlightRules(next));
+  }, []);
+
+  const onAttention = useCallback((tabId: string) => {
+    setAttention((s) => (s.has(tabId) ? s : new Set(s).add(tabId)));
+  }, []);
 
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -396,7 +428,33 @@ function App() {
   );
 
   const modalOpen =
-    dialogOpen || settingsOpen || snippetsOpen || hostKeyQueue.length > 0;
+    dialogOpen ||
+    settingsOpen ||
+    snippetsOpen ||
+    highlightsOpen ||
+    hostKeyQueue.length > 0;
+
+  // 見たタブの印は消す（切り替えたとき・ウィンドウに戻ったとき）。
+  const [seenActiveId, setSeenActiveId] = useState<string | null>(null);
+  if (state.activeId !== seenActiveId) {
+    setSeenActiveId(state.activeId);
+    if (state.activeId && attention.has(state.activeId)) {
+      const next = new Set(attention);
+      next.delete(state.activeId);
+      setAttention(next);
+    }
+  }
+  useEffect(() => {
+    const onFocus = () =>
+      setAttention((s) => {
+        if (!state.activeId || !s.has(state.activeId)) return s;
+        const next = new Set(s);
+        next.delete(state.activeId);
+        return next;
+      });
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [state.activeId]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // ダイアログ表示中は入力を妨げない。
@@ -599,6 +657,8 @@ function App() {
         snippets={snippets}
         onRunSnippet={onRunSnippet}
         onManageSnippets={() => setSnippetsOpen(true)}
+        onManageHighlights={() => setHighlightsOpen(true)}
+        attention={attention}
       />
       {notice && (
         <div
@@ -624,6 +684,8 @@ function App() {
         appearance={settings}
         autoReconnect={settings.autoReconnect}
         findSignals={findSignals}
+        highlightRules={highlightRules}
+        onAttention={onAttention}
         onActivatePane={(tabId, paneId) =>
           dispatch({ type: "activatePane", tabId, paneId })
         }
@@ -650,6 +712,12 @@ function App() {
         settings={settings}
         profiles={profiles}
         onSave={onSaveSettings}
+      />
+      <HighlightsDialog
+        open={highlightsOpen}
+        onOpenChange={setHighlightsOpen}
+        rules={highlightRules}
+        onSave={onSaveHighlights}
       />
       <SnippetsDialog
         open={snippetsOpen}

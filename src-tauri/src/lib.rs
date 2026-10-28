@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod atomic_file;
 pub mod commands;
 pub mod fonts;
+pub mod highlights;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
@@ -24,6 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state = commands::AppState::new(app.handle())?;
             app.manage(state);
@@ -60,6 +62,8 @@ pub fn run() {
             sftp_commands::sftp_mkdir,
             sftp_commands::sftp_remove,
             sftp_commands::sftp_cancel,
+            commands::get_highlight_rules,
+            commands::save_highlight_rules,
             commands::get_snippets,
             commands::save_snippets,
             commands::get_recent_connections,
