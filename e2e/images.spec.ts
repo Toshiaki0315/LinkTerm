@@ -15,7 +15,7 @@ test.describe("画像表示", () => {
     await openApp(page);
     await openLocalTab(page);
     await expect(images(page)).toHaveCount(0);
-    const size = Buffer.from(PNG, "base64").length;
+    const size = atob(PNG).length;
     await output(
       page,
       `\x1b]1337;File=inline=1;size=${size};width=4;height=2:${PNG}\x07\r\n`,
