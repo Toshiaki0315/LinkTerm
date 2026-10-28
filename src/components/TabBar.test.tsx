@@ -495,4 +495,53 @@ describe("TabBar", () => {
       ).not.toBeNull();
     });
   });
+
+  describe("同時入力", () => {
+    const renderBar = (
+      mode: "off" | "tab" | "all",
+      onBroadcastChange = vi.fn(),
+    ) => {
+      render(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          broadcast={mode}
+          onBroadcastChange={onBroadcastChange}
+        />,
+      );
+      return onBroadcastChange;
+    };
+
+    it("渡さなければボタンを出さない", () => {
+      render(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: "同時入力" })).toBeNull();
+    });
+
+    it("範囲を選べ、いまの範囲にチェックが付く", async () => {
+      const user = userEvent.setup();
+      const onChange = renderBar("tab");
+      await user.click(screen.getByRole("button", { name: "同時入力" }));
+      expect(
+        screen.getByRole("menuitemradio", { name: /このタブの全ペイン/ }),
+      ).toHaveAttribute("aria-checked", "true");
+      expect(
+        screen.getByRole("menuitemradio", { name: "オフ" }),
+      ).toHaveAttribute("aria-checked", "false");
+      await user.click(
+        screen.getByRole("menuitemradio", { name: /すべてのタブの全ペイン/ }),
+      );
+      expect(onChange).toHaveBeenCalledWith("all");
+    });
+  });
 });

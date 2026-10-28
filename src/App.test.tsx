@@ -40,6 +40,7 @@ vi.mock("./components/TerminalTab", () => ({
     onEditAndReconnect,
     onSecretsConsumed,
     onAttention,
+    onBroadcast,
   }: {
     tabId: string;
     appearance?: { fontSize: number; fontFamily: string };
@@ -48,6 +49,7 @@ vi.mock("./components/TerminalTab", () => ({
     onEditAndReconnect: (id: string) => void;
     onSecretsConsumed: (id: string) => void;
     onAttention?: () => void;
+    onBroadcast?: (data: string) => void;
   }) => (
     <div
       data-testid={`term-${tabId}`}
@@ -59,6 +61,7 @@ vi.mock("./components/TerminalTab", () => ({
       <button onClick={() => onEditAndReconnect(tabId)}>edit-reconnect</button>
       <button onClick={() => onSecretsConsumed(tabId)}>consume</button>
       <button onClick={() => onAttention?.()}>attention-{tabId}</button>
+      <button onClick={() => onBroadcast?.("typed")}>type-{tabId}</button>
     </div>
   ),
 }));
@@ -328,6 +331,72 @@ describe("App", () => {
       expect(api.saveSnippets.mock.calls[0][0]).toMatchObject([
         { name: "再起動", text: "reboot", sendEnter: true, lineDelayMs: 0 },
       ]);
+    });
+  });
+
+  describe("同時入力", () => {
+    const openTab = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.keyboard("{Meta>}t{/Meta}");
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+    };
+
+    it("オンにすると警告を出し、入力をほかのタブにも送る。オフなら送らない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await openTab(user);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      await openTab(user);
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+      const ids = screen
+        .getAllByTestId(/^term-/)
+        .map((e) => e.getAttribute("data-testid")!.replace("term-", ""));
+      const received: Record<string, string[]> = { [ids[0]]: [], [ids[1]]: [] };
+      const offs = ids.map((id) =>
+        registerPaneInput(id, (d) => received[id].push(d)),
+      );
+
+      // オフ: 送らない
+      await user.click(screen.getByRole("button", { name: `type-${ids[0]}` }));
+      expect(received[ids[1]]).toEqual([]);
+
+      // すべてのタブへ
+      await user.click(screen.getByRole("button", { name: "同時入力" }));
+      await user.click(
+        await screen.findByRole("menuitemradio", {
+          name: /すべてのタブの全ペイン/,
+        }),
+      );
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "同時入力中: 入力は2個のペインへ送られます",
+      );
+      await user.click(screen.getByRole("button", { name: `type-${ids[0]}` }));
+      expect(received[ids[1]]).toEqual(["typed"]);
+      // 入力したペイン自身には、同時入力で重ねて送らない。
+      expect(received[ids[0]]).toEqual([]);
+
+      // 「このタブ」だけなら、別のタブへは届かない。
+      await user.click(screen.getByRole("button", { name: "同時入力" }));
+      await user.click(
+        await screen.findByRole("menuitemradio", {
+          name: /このタブの全ペイン/,
+        }),
+      );
+      await user.click(screen.getByRole("button", { name: `type-${ids[0]}` }));
+      expect(received[ids[1]]).toEqual(["typed"]);
+
+      // 解除
+      await user.click(screen.getByRole("button", { name: "解除" }));
+      expect(screen.queryByText(/同時入力中/)).toBeNull();
+      offs.forEach((off) => off());
+    });
+
+    it("⌘⇧I で、オンとオフを切り替える", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}{Shift>}i{/Shift}{/Meta}");
+      expect(screen.getByRole("status")).toHaveTextContent("同時入力中");
+      await user.keyboard("{Meta>}{Shift>}i{/Shift}{/Meta}");
+      expect(screen.queryByText(/同時入力中/)).toBeNull();
     });
   });
 

@@ -648,6 +648,48 @@ describe("TerminalTab", () => {
     });
   });
 
+  describe("同時入力", () => {
+    it("キー入力はこのペインに送り、同時入力の通知も出す", () => {
+      const onBroadcast = vi.fn();
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="t"
+          values={telnet}
+          active
+          onBroadcast={onBroadcast}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+      act(() => viewProps.onInput("ls\r"));
+      expect(session.write).toHaveBeenCalledWith("ls\r");
+      expect(onBroadcast).toHaveBeenCalledWith("ls\r");
+    });
+
+    it("外部（ほかのペインの同時入力・スニペット）からの入力は、同時入力へ回さない（ループ防止）", () => {
+      const onBroadcast = vi.fn();
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="t"
+          values={telnet}
+          active
+          onBroadcast={onBroadcast}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+      sendToPane("t1", "from-other\r");
+      expect(session.write).toHaveBeenCalledWith("from-other\r");
+      expect(onBroadcast).not.toHaveBeenCalled();
+    });
+  });
+
   describe("外部からの入力（スニペット）", () => {
     it("ペインの入力口として登録され、キー入力と同じ経路で送る。アンマウントで解除する", () => {
       const { view } = setup(telnet);

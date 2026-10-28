@@ -47,6 +47,8 @@ interface Props {
   findSignal?: number;
   /** 復元したタブ: 自動では接続せず、「接続」ボタンで接続する。 */
   deferStart?: boolean;
+  /** キー入力・貼り付けを、ほかのペインにも送る（同時入力）。省略すると送らない。 */
+  onBroadcast?: (data: string) => void;
   /** キーワードのハイライト規則（色付けと、見つけたときの通知）。 */
   highlightRules?: HighlightRule[];
   /** 通知する規則に一致した（このペインが見えていないとき）。タブの注目表示に使う。 */
@@ -72,6 +74,7 @@ export function TerminalTab({
   deferStart = false,
   highlightRules,
   onAttention,
+  onBroadcast,
   onSplit,
   onClosePane,
 }: Props) {
@@ -267,7 +270,8 @@ export function TerminalTab({
     onStatusChange(tabId, status);
   }, [tabId, status, onStatusChange]);
 
-  const onInput = useCallback(
+  /** このペインへ送る（ローカルエコーを含む）。同時入力は含まない。 */
+  const sendDirect = useCallback(
     (data: string) => {
       if (localEcho) {
         termRef.current?.write(new TextEncoder().encode(echoFor(data)));
@@ -278,8 +282,16 @@ export function TerminalTab({
     },
     [write, localEcho],
   );
-  // スニペットなど、端末の外からの入力もキー入力と同じ経路で送る。
-  useEffect(() => registerPaneInput(tabId, onInput), [tabId, onInput]);
+  /** キー入力・貼り付け。同時入力がオンなら、ほかのペインにも送る。 */
+  const onInput = useCallback(
+    (data: string) => {
+      sendDirect(data);
+      onBroadcast?.(data);
+    },
+    [sendDirect, onBroadcast],
+  );
+  // スニペットや同時入力など、端末の外からの入力は、同時入力へ再び回さずに送る（ループ防止）。
+  useEffect(() => registerPaneInput(tabId, sendDirect), [tabId, sendDirect]);
 
   const onResize = useCallback(
     (cols: number, rows: number) => {

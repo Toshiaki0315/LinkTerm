@@ -1,6 +1,7 @@
-import { ChevronDown, Highlighter, Plus, X, Zap } from "lucide-react";
+import { ChevronDown, Highlighter, Plus, Radio, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
+import { BROADCAST_LABELS, type BroadcastMode } from "../lib/broadcast";
 import type { Snippet } from "../lib/snippets";
 import type { Tab } from "../lib/tabs";
 import { recentLabel, type RecentEntry } from "../lib/recent";
@@ -35,6 +36,9 @@ interface Props {
   onManageSnippets?: () => void;
   /** キーワードの強調・通知の設定を開く。渡さなければボタンを出さない。 */
   onManageHighlights?: () => void;
+  /** 同時入力の範囲と、その変更。`onBroadcastChange` を渡さなければボタンを出さない。 */
+  broadcast?: BroadcastMode;
+  onBroadcastChange?: (mode: BroadcastMode) => void;
   /** 通知するキーワードが見つかった、見ていないタブ（注目の印を付ける）。 */
   attention?: ReadonlySet<string>;
 }
@@ -121,6 +125,8 @@ export function TabBar({
   onRunSnippet,
   onManageSnippets,
   onManageHighlights,
+  broadcast = "off",
+  onBroadcastChange,
   attention,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -131,6 +137,10 @@ export function TabBar({
     null,
   );
   const [snippetMenu, setSnippetMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [broadcastMenu, setBroadcastMenu] = useState<{
     x: number;
     y: number;
   } | null>(null);
@@ -297,6 +307,36 @@ export function TabBar({
         >
           <ChevronDown className="h-4 w-4" />
         </Button>
+      )}
+      {onBroadcastChange && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="同時入力"
+          title="同時入力"
+          aria-haspopup="menu"
+          className={cn(
+            broadcast !== "off" && "bg-amber-500/20 text-amber-300",
+          )}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setBroadcastMenu({ x: rect.left, y: rect.bottom });
+          }}
+        >
+          <Radio className="h-4 w-4" />
+        </Button>
+      )}
+      {broadcastMenu && onBroadcastChange && (
+        <ContextMenu
+          x={broadcastMenu.x}
+          y={broadcastMenu.y}
+          items={(["off", "tab", "all"] as const).map((mode) => ({
+            label: BROADCAST_LABELS[mode],
+            checked: broadcast === mode,
+            onSelect: () => onBroadcastChange(mode),
+          }))}
+          onClose={() => setBroadcastMenu(null)}
+        />
       )}
       {onManageHighlights && (
         <Button

@@ -18,6 +18,8 @@ interface Props {
   autoReconnect?: AutoReconnect;
   /** ペインごとの検索要求の回数。増えたペインが検索バーを開く。 */
   findSignals?: Record<string, number>;
+  /** キー入力・貼り付けの同時入力（ペインの ID と入力）。 */
+  onBroadcast?: (paneId: string, data: string) => void;
   /** キーワードのハイライト規則。 */
   highlightRules?: HighlightRule[];
   /** 通知する規則に一致したが、見えていないタブ（タブの注目表示用）。 */
@@ -46,6 +48,7 @@ export function TerminalWorkspace({
   findSignals,
   highlightRules,
   onAttention,
+  onBroadcast,
   onActivatePane,
   onResizeSplit,
   onSplit,
@@ -138,6 +141,9 @@ export function TerminalWorkspace({
                       autoReconnect={autoReconnect}
                       findSignal={findSignals?.[pane.id] ?? 0}
                       highlightRules={highlightRules}
+                      onBroadcast={
+                        onBroadcast && ((data) => onBroadcast(pane.id, data))
+                      }
                       onAttention={onAttention && (() => onAttention(tab.id))}
                       onSplit={onSplit && ((dir) => onSplit(tab.id, dir))}
                       onClosePane={

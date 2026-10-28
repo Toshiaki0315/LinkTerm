@@ -7,7 +7,7 @@ export interface ContextMenuItem {
   disabled?: boolean;
   /** 色見本（CSS の色）。付けると色つきの選択肢として表示する。 */
   swatch?: string;
-  /** 選択済みの選択肢か（`swatch` と併用）。 */
+  /** 選択済みの選択肢か。指定すると（色見本がなくても）ラジオ項目として扱う。 */
   checked?: boolean;
   /** 付けると、この項目の上に区切り線を引く。 */
   separatorBefore?: boolean;
@@ -100,9 +100,15 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
             />
           )}
           <button
-            role={item.swatch !== undefined ? "menuitemradio" : "menuitem"}
+            role={
+              item.swatch !== undefined || item.checked !== undefined
+                ? "menuitemradio"
+                : "menuitem"
+            }
             aria-checked={
-              item.swatch !== undefined ? Boolean(item.checked) : undefined
+              item.swatch !== undefined || item.checked !== undefined
+                ? Boolean(item.checked)
+                : undefined
             }
             disabled={item.disabled}
             className={cn(
@@ -114,13 +120,15 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
               onClose();
             }}
           >
-            {item.swatch !== undefined ? (
+            {item.swatch !== undefined || item.checked !== undefined ? (
               <span className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className="h-3 w-3 rounded-full border border-neutral-600"
-                  style={{ backgroundColor: item.swatch }}
-                />
+                {item.swatch !== undefined && (
+                  <span
+                    aria-hidden
+                    className="h-3 w-3 rounded-full border border-neutral-600"
+                    style={{ backgroundColor: item.swatch }}
+                  />
+                )}
                 {item.label}
                 {item.checked && <span aria-hidden>✓</span>}
               </span>

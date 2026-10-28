@@ -108,4 +108,12 @@ describe("shortcutFor", () => {
       type: "next",
     });
   });
+
+  it("⌘⇧I は同時入力の切り替え（⇧なしや Ctrl 付きは無視）", () => {
+    expect(shortcutFor(key("I", { metaKey: true, shiftKey: true }))).toEqual({
+      type: "broadcast",
+    });
+    expect(shortcutFor(key("i", { metaKey: true }))).toBeNull();
+    expect(shortcutFor(key("I", { ctrlKey: true, shiftKey: true }))).toBeNull();
+  });
 });

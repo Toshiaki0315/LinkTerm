@@ -9,6 +9,8 @@ export type ShortcutAction =
   | { type: "split"; dir: "row" | "column" }
   /** 分割したペインの間を移動する（⌘] / ⌘[）。 */
   | { type: "nextPane" }
+  /** 同時入力のオン・オフ（⌘⇧I）。 */
+  | { type: "broadcast" }
   | { type: "previousPane" };
 
 export interface KeyEventLike {
@@ -32,6 +34,7 @@ export function shortcutFor(event: KeyEventLike): ShortcutAction | null {
     if (key === "]" || key === "}") return { type: "next" };
     if (key === "[" || key === "{") return { type: "previous" };
     if (key === "d") return { type: "split", dir: "column" };
+    if (key === "i") return { type: "broadcast" };
     return null;
   }
   if (key === "t") return { type: "new" };

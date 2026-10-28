@@ -34,6 +34,11 @@ import {
   toStoredRecent,
   type RecentEntry,
 } from "./lib/recent";
+import {
+  broadcastPaneCount,
+  broadcastTargets,
+  type BroadcastMode,
+} from "./lib/broadcast";
 import type { HighlightRule } from "./lib/highlight";
 import { sendToPane } from "./lib/pane-input";
 import { shortcutFor } from "./lib/shortcuts";
@@ -134,6 +139,9 @@ function App() {
     }, 200);
     return () => clearTimeout(timer);
   }, [recentDirty, recentPayload]);
+
+  /** 同時入力の範囲。 */
+  const [broadcast, setBroadcast] = useState<BroadcastMode>("off");
 
   const [highlightRules, setHighlightRules] = useState<HighlightRule[]>([]);
   const [highlightsOpen, setHighlightsOpen] = useState(false);
@@ -407,6 +415,16 @@ function App() {
     [state.tabs],
   );
 
+  /** キー入力・貼り付けを、同時入力の送り先のペインへも送る。 */
+  const onBroadcast = useCallback(
+    (sourcePaneId: string, data: string) => {
+      for (const id of broadcastTargets(state.tabs, sourcePaneId, broadcast)) {
+        sendToPane(id, data);
+      }
+    },
+    [state.tabs, broadcast],
+  );
+
   /** スニペットを、操作中のペインへ送る。 */
   const onRunSnippet = useCallback(
     (snippet: Snippet) => {
@@ -484,6 +502,9 @@ function App() {
         }
         case "split":
           if (activeTab) splitTab(activeTab.id, action.dir);
+          break;
+        case "broadcast":
+          setBroadcast((m) => (m === "off" ? "tab" : "off"));
           break;
         case "nextPane":
         case "previousPane":
@@ -658,8 +679,25 @@ function App() {
         onRunSnippet={onRunSnippet}
         onManageSnippets={() => setSnippetsOpen(true)}
         onManageHighlights={() => setHighlightsOpen(true)}
+        broadcast={broadcast}
+        onBroadcastChange={setBroadcast}
         attention={attention}
       />
+      {broadcast !== "off" && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 bg-amber-900/70 px-3 py-1 text-sm text-amber-100"
+        >
+          <span>
+            同時入力中: 入力は
+            {broadcastPaneCount(state.tabs, state.activeId, broadcast)}
+            個のペインへ送られます（パスワードも送られます）
+          </span>
+          <button className="underline" onClick={() => setBroadcast("off")}>
+            解除
+          </button>
+        </div>
+      )}
       {notice && (
         <div
           role="alert"
@@ -686,6 +724,7 @@ function App() {
         findSignals={findSignals}
         highlightRules={highlightRules}
         onAttention={onAttention}
+        onBroadcast={onBroadcast}
         onActivatePane={(tabId, paneId) =>
           dispatch({ type: "activatePane", tabId, paneId })
         }
