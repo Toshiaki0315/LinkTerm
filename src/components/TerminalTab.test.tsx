@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionValues } from "../lib/connection-schema";
@@ -700,6 +701,39 @@ describe("TerminalTab", () => {
     it("スクリプトがなければ、出力に反応しない", async () => {
       setup(telnet);
       await waitFor(() => expect(session.start).toHaveBeenCalled());
+      output("login: ");
+      expect(session.write).not.toHaveBeenCalled();
+    });
+
+    it("StrictMode（開発時の二重実行）でも、手順は止まらずに進む", async () => {
+      const props = {
+        findSignal: 0,
+        tabId: "t1",
+        title: "title",
+        values: withScript("login: => admin"),
+        active: true,
+        onStatusChange: vi.fn(),
+        onSecretsConsumed: vi.fn(),
+        onEditAndReconnect: vi.fn(),
+      };
+      render(
+        <StrictMode>
+          <TerminalTab {...props} />
+        </StrictMode>,
+      );
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      // 接続は1回だけ。
+      expect(session.start).toHaveBeenCalledTimes(1);
+      output("login: ");
+      expect(session.write).toHaveBeenLastCalledWith("admin\r");
+    });
+
+    it("タブを閉じたら（本当にアンマウントされたら）手順を止める", async () => {
+      const { view } = setup(withScript("login: => admin"));
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      view.unmount();
+      // 停止は、すぐ再マウントされないと分かってから（次の microtask）行う。
+      await Promise.resolve();
       output("login: ");
       expect(session.write).not.toHaveBeenCalled();
     });

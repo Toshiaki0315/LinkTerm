@@ -302,12 +302,18 @@ export function TerminalTab({
     if (status === "closed" || status === "error") loginRef.current?.stop();
   }, [status]);
 
-  useEffect(
-    () => () => {
-      loginRef.current?.stop();
-    },
-    [],
-  );
+  // タブを閉じたら自動ログインを止める。StrictMode（開発時）は、マウント直後に
+  // 疑似アンマウント→再マウントを行うので、すぐ再マウントされたときは止めない。
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      queueMicrotask(() => {
+        if (!mountedRef.current) loginRef.current?.stop();
+      });
+    };
+  }, []);
 
   useEffect(() => {
     // StrictMode の二重実行で接続が重複しないようにする。

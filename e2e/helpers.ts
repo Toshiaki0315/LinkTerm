@@ -9,11 +9,17 @@ export interface Init {
 }
 
 /** 画面を開く。`init` で、保存済みの設定などを最初から入れておける。 */
-export async function openApp(page: Page, init: Init = {}): Promise<void> {
+export async function openApp(
+  page: Page,
+  init: Init = {},
+  options: { strict?: boolean } = {},
+): Promise<void> {
   await page.addInitScript((i) => {
     (window as unknown as { __e2eInit: unknown }).__e2eInit = i;
   }, init);
-  await page.goto("/e2e/index.html");
+  await page.goto(
+    options.strict ? "/e2e/index.html?strict" : "/e2e/index.html",
+  );
 }
 
 /** 再読み込み（アプリの再起動）。保存した内容は残る。 */
