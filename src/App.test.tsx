@@ -34,6 +34,23 @@ const api = vi.hoisted(() => ({
   deleteProfile: vi.fn(),
 }));
 vi.mock("./lib/terminal-api", () => api);
+const drop = vi.hoisted(() => ({
+  emit: (_paths: string[], _pos: { x: number; y: number }) => {},
+  unlisten: vi.fn(),
+}));
+vi.mock("./lib/file-drop", async () => {
+  const actual =
+    await vi.importActual<typeof import("./lib/file-drop")>("./lib/file-drop");
+  return {
+    ...actual,
+    onFilesDroppedAt: vi.fn(
+      async (cb: (paths: string[], pos: { x: number; y: number }) => void) => {
+        drop.emit = cb;
+        return drop.unlisten;
+      },
+    ),
+  };
+});
 vi.mock("./components/TerminalTab", () => ({
   TerminalTab: ({
     tabId,
@@ -77,6 +94,8 @@ vi.mock("./components/TerminalTab", () => ({
 
 import App from "./App";
 import { registerPaneInput } from "./lib/pane-input";
+import { registerPaneActions } from "./lib/pane-actions";
+import { claimFileDrops } from "./lib/file-drop";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
 import type { SessionState } from "./lib/terminal-api";
 
@@ -1524,6 +1543,81 @@ describe("App", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(
         /最近使った接続を読み込めません/,
       );
+    });
+  });
+
+  describe("Finder からのファイル・フォルダーのドロップ", () => {
+    async function openTab(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      return screen
+        .getByTestId(/^term-/)
+        .getAttribute("data-testid")!
+        .slice(5);
+    }
+
+    it("操作中のペインへ、パスを退避して貼り付ける（実行はしない）", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      const paneId = await openTab(user);
+      const paste = vi.fn();
+      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      act(() =>
+        drop.emit(["/Users/me/My File.txt", "/Users/me/資料"], {
+          x: 5000,
+          y: 5000,
+        }),
+      );
+      expect(paste).toHaveBeenCalledWith(
+        "/Users/me/My\\ File.txt /Users/me/資料 ",
+      );
+    });
+
+    it("ダイアログ（SFTP の転送など）が出ている間は、端末へ貼り付けない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      const paneId = await openTab(user);
+      const paste = vi.fn();
+      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await screen.findByRole("dialog");
+      act(() => drop.emit(["/a"], { x: 1, y: 1 }));
+      expect(paste).not.toHaveBeenCalled();
+    });
+
+    it("ほかの画面がドロップを取り込み中は、端末へ貼り付けない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      const paneId = await openTab(user);
+      const paste = vi.fn();
+      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      const release = claimFileDrops();
+      act(() => drop.emit(["/a"], { x: 1, y: 1 }));
+      expect(paste).not.toHaveBeenCalled();
+      release();
+      act(() => drop.emit(["/a"], { x: 1, y: 1 }));
+      expect(paste).toHaveBeenCalledWith("/a ");
+    });
+
+    it("制御文字を含むパスは貼り付けず、お知らせを出す", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      const paneId = await openTab(user);
+      const paste = vi.fn();
+      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      act(() => drop.emit(["/tmp/a\nrm -rf ~", "/ok"], { x: 1, y: 1 }));
+      expect(paste).toHaveBeenCalledWith("/ok ");
+      expect(await screen.findByText(/使えない文字/)).toBeInTheDocument();
+    });
+
+    it("タブがないときは何もしない。アンマウントで購読を解除する", async () => {
+      const { unmount } = render(<App />);
+      await waitFor(() => expect(drop.emit).not.toBeUndefined());
+      act(() => drop.emit(["/a"], { x: 1, y: 1 }));
+      unmount();
+      await waitFor(() => expect(drop.unlisten).toHaveBeenCalled());
     });
   });
 });

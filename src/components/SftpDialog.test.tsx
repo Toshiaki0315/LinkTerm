@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
 vi.mock("../lib/sftp-api", () => api);
 
 import { SftpDialog } from "./SftpDialog";
+import { filesDropClaimed } from "../lib/file-drop";
 
 const entry = (over: Partial<RemoteEntry>): RemoteEntry => ({
   name: "f",
@@ -298,6 +299,22 @@ describe("SftpDialog", () => {
     expect(box).toHaveTextContent("空のフォルダー");
     await user.click(within(box).getByRole("button", { name: "削除する" }));
     expect(api.sftpRemove).toHaveBeenCalledWith("s1", "/home/u/docs", true);
+  });
+
+  it("開いている間は、ファイルのドロップを取り込む（端末へ貼り付けない）。閉じると戻る", async () => {
+    const view = render(
+      <SftpDialog open onOpenChange={() => {}} sessionId="s1" title="t" />,
+    );
+    await waitFor(() => expect(filesDropClaimed()).toBe(true));
+    view.rerender(
+      <SftpDialog
+        open={false}
+        onOpenChange={() => {}}
+        sessionId="s1"
+        title="t"
+      />,
+    );
+    await waitFor(() => expect(filesDropClaimed()).toBe(false));
   });
 
   it("閉じているときは何も読み込まない", () => {

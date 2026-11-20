@@ -44,7 +44,9 @@ import {
 } from "./lib/broadcast";
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
-import { runPaneAction } from "./lib/pane-actions";
+import { pasteToPane, runPaneAction } from "./lib/pane-actions";
+import { dropText, quotePath } from "./lib/shell-quote";
+import { filesDropClaimed, onFilesDroppedAt, paneIdAt } from "./lib/file-drop";
 import { sendToPane } from "./lib/pane-input";
 import {
   overridesOf,
@@ -422,6 +424,45 @@ function App() {
       .then((un) => (disposed ? un() : (unlisten = un)))
       .catch((e: unknown) =>
         console.error("設定メニューの購読に失敗しました:", e),
+      );
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Finder からドロップしたファイル・フォルダーのパスを、ターミナルと同じく、
+  // ドロップした位置のペイン（外なら操作中のペイン）へ貼り付ける。
+  const tabsStateRef = useRef(state);
+  useEffect(() => {
+    tabsStateRef.current = state;
+  });
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    onFilesDroppedAt((paths, position) => {
+      // SFTP の転送や、ほかのダイアログが開いている間は、そちらに任せる。
+      if (filesDropClaimed() || document.querySelector('[role="dialog"]'))
+        return;
+      const tabs = tabsStateRef.current;
+      const tab = tabs.tabs.find((t) => t.id === tabs.activeId);
+      const target =
+        paneIdAt(position, window.devicePixelRatio || 1) ??
+        (tab ? activePaneIdOf(tab) : null);
+      if (!target) return;
+      const text = dropText(paths);
+      if (paths.some((p) => quotePath(p) === null)) {
+        setNotice(
+          text === ""
+            ? "使えない文字（改行など）を含むパスは、貼り付けられません"
+            : "使えない文字（改行など）を含むパスは、貼り付けませんでした",
+        );
+      }
+      if (text !== "") pasteToPane(target, text);
+    })
+      .then((un) => (disposed ? un() : (unlisten = un)))
+      .catch((e: unknown) =>
+        console.error("ファイルのドロップの購読に失敗しました:", e),
       );
     return () => {
       disposed = true;

@@ -28,6 +28,7 @@ import {
   parentPath,
   progressPercent,
 } from "../lib/sftp";
+import { claimFileDrops } from "../lib/file-drop";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -186,7 +187,10 @@ export function SftpDialog({ open, onOpenChange, sessionId, title }: Props) {
       ),
     );
     keep(onFilesDropped((paths) => void uploadAll(paths)));
+    // 開いている間のドロップは、端末へ貼り付けず、アップロードに使う。
+    const release = claimFileDrops();
     return () => {
+      release();
       disposed = true;
       unlisten.forEach((un) => un());
     };

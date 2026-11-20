@@ -4,6 +4,8 @@
 export interface PaneActions {
   /** 画面の内容をテキストファイルとして保存する。 */
   exportText: () => void;
+  /** 文字列を貼り付ける（キー入力と同じ経路。ブラケットペーストに対応）。 */
+  paste: (text: string) => void;
 }
 
 const actions = new Map<string, PaneActions>();
@@ -20,12 +22,17 @@ export function registerPaneActions(
 }
 
 /** ペインの操作を呼ぶ。ペインがなければ `false`。 */
-export function runPaneAction(
-  paneId: string,
-  name: keyof PaneActions,
-): boolean {
+export function runPaneAction(paneId: string, name: "exportText"): boolean {
   const target = actions.get(paneId);
   if (!target) return false;
   target[name]();
+  return true;
+}
+
+/** ペインへ文字列を貼り付ける。ペインがなければ `false`。 */
+export function pasteToPane(paneId: string, text: string): boolean {
+  const target = actions.get(paneId);
+  if (!target) return false;
+  target.paste(text);
   return true;
 }

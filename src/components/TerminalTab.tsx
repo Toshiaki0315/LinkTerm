@@ -356,7 +356,10 @@ export function TerminalTab({
   });
   useEffect(
     () =>
-      registerPaneActions(tabId, { exportText: () => saveScreenRef.current() }),
+      registerPaneActions(tabId, {
+        exportText: () => saveScreenRef.current(),
+        paste: (text) => termRef.current?.paste(text),
+      }),
     [tabId],
   );
 
