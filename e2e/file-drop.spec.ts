@@ -14,10 +14,8 @@ const drop = (page: Page, paths: string[], x = 50, y = 50) =>
     ({ paths, x, y }) =>
       window.__e2e.emit("tauri://drag-drop", {
         paths,
-        position: {
-          x: x * window.devicePixelRatio,
-          y: y * window.devicePixelRatio,
-        },
+        // macOS では、論理座標（CSS ピクセル）がそのまま届く。
+        position: { x, y },
       }),
     { paths, x, y },
   );
@@ -123,5 +121,24 @@ test.describe("Finder からのドラッグ＆ドロップ（ターミナルと�
     await drop(page, ["/a"]);
     await page.waitForTimeout(200);
     expect(errors).toEqual([]);
+  });
+});
+
+// Retina（拡大率 2）でも、落とした位置のペインに入ること。
+test.describe("Retina ディスプレイ", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("分割画面で右のペインに落とすと、右のペインへ入る", async ({ page }) => {
+    await openApp(page);
+    await openLocalTab(page);
+    await page.keyboard.press("Meta+d");
+    await expect(panes(page)).toHaveCount(2);
+    expect(await page.evaluate(() => window.devicePixelRatio)).toBe(2);
+    // 操作中のペインを左にしておく（右へ入るのが、操作中だからではないことを確かめる）。
+    await page.keyboard.press("Meta+[");
+    const right = (await panes(page).last().boundingBox())!;
+    await drop(page, ["/right"], right.x + 20, right.y + 20);
+    await expect.poll(() => written(page, 1)).toBe("/right ");
+    expect(await written(page, 0)).toBe("");
   });
 });

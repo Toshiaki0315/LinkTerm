@@ -154,14 +154,9 @@ test.describe("自動ログイン", () => {
     page,
   }) => {
     await openApp(page);
-    await page.addInitScript(() => {
-      // 本物のサーバーはパスワードをエコーしない。
-      const t = setInterval(() => {
-        if (window.__e2e) {
-          window.__e2e.echo = false;
-          clearInterval(t);
-        }
-      }, 1);
+    // 本物のサーバーはパスワードをエコーしない。
+    await page.evaluate(() => {
+      window.__e2e.echo = false;
     });
     await openTelnet(page);
     await page.evaluate(() =>

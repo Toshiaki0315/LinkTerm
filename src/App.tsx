@@ -446,9 +446,7 @@ function App() {
         return;
       const tabs = tabsStateRef.current;
       const tab = tabs.tabs.find((t) => t.id === tabs.activeId);
-      const target =
-        paneIdAt(position, window.devicePixelRatio || 1) ??
-        (tab ? activePaneIdOf(tab) : null);
+      const target = paneIdAt(position) ?? (tab ? activePaneIdOf(tab) : null);
       if (!target) return;
       const text = dropText(paths);
       if (paths.some((p) => quotePath(p) === null)) {

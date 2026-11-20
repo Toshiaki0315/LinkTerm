@@ -26,19 +26,19 @@ describe("claimFileDrops", () => {
 });
 
 describe("paneIdAt", () => {
-  it("座標の下にあるペインの ID を返す。物理ピクセルは devicePixelRatio で割る", () => {
+  it("座標の下にあるペインの ID を返す。macOS の座標はウィンドウ内の論理座標（CSS ピクセル）で、拡大率では割らない", () => {
     document.body.innerHTML = `<div data-pane-id="p1"><span id="inner"></span></div>`;
     const inner = document.getElementById("inner")!;
     const seen: Array<[number, number]> = [];
     const find = (x: number, y: number) => (seen.push([x, y]), inner);
-    expect(paneIdAt({ x: 200, y: 100 }, 2, find)).toBe("p1");
-    expect(seen).toEqual([[100, 50]]);
+    expect(paneIdAt({ x: 200, y: 100 }, find)).toBe("p1");
+    expect(seen).toEqual([[200, 100]]);
   });
 
   it("ペインの外なら null", () => {
     document.body.innerHTML = `<div id="outside"></div>`;
     const el = document.getElementById("outside");
-    expect(paneIdAt({ x: 1, y: 1 }, 1, () => el)).toBeNull();
-    expect(paneIdAt({ x: 1, y: 1 }, 1, () => null)).toBeNull();
+    expect(paneIdAt({ x: 1, y: 1 }, () => el)).toBeNull();
+    expect(paneIdAt({ x: 1, y: 1 }, () => null)).toBeNull();
   });
 });

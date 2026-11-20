@@ -20,17 +20,19 @@ export function claimFileDrops(): () => void {
 
 export const filesDropClaimed = (): boolean => claims > 0;
 
-/** ドロップした座標（ウィンドウ内、物理ピクセル）の下にあるペインの ID。ペインの外なら `null`。 */
+/**
+ * ドロップした座標の下にあるペインの ID。ペインの外なら `null`。
+ *
+ * Tauri は座標を「物理ピクセル」として渡すが、macOS（wry）では、実際にはビューの
+ * 論理座標（左上が原点、CSS ピクセルと同じ）がそのまま入っている。拡大率（Retina の 2 倍）で
+ * 割ると、右半分に落としても左半分に当たってしまうので、割らない。
+ */
 export function paneIdAt(
   position: { x: number; y: number },
-  devicePixelRatio: number,
   elementAt: (x: number, y: number) => Element | null = (x, y) =>
     document.elementFromPoint(x, y),
 ): string | null {
-  const el = elementAt(
-    position.x / devicePixelRatio,
-    position.y / devicePixelRatio,
-  );
+  const el = elementAt(position.x, position.y);
   return el?.closest("[data-pane-id]")?.getAttribute("data-pane-id") ?? null;
 }
 
