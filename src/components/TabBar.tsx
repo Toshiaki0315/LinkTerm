@@ -1,7 +1,16 @@
-import { ChevronDown, Highlighter, Plus, Radio, X, Zap } from "lucide-react";
+import {
+  ChevronDown,
+  Ellipsis,
+  Highlighter,
+  Plus,
+  Radio,
+  X,
+  Zap,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import { BROADCAST_LABELS, type BroadcastMode } from "../lib/broadcast";
+import type { PaneMenu } from "../lib/pane-menu";
 import type { Snippet } from "../lib/snippets";
 import type { Tab } from "../lib/tabs";
 import { recentLabel, type RecentEntry } from "../lib/recent";
@@ -41,6 +50,8 @@ interface Props {
   onBroadcastChange?: (mode: BroadcastMode) => void;
   /** 通知するキーワードが見つかった、見ていないタブ（注目の印を付ける）。 */
   attention?: ReadonlySet<string>;
+  /** 操作中のペインの操作メニュー（右端の「⋯」）。なければ、ボタンを出さない。 */
+  paneMenu?: PaneMenu;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -128,6 +139,7 @@ export function TabBar({
   broadcast = "off",
   onBroadcastChange,
   attention,
+  paneMenu,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
@@ -141,6 +153,10 @@ export function TabBar({
     y: number;
   } | null>(null);
   const [broadcastMenu, setBroadcastMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [paneMenuPos, setPaneMenuPos] = useState<{
     x: number;
     y: number;
   } | null>(null);
@@ -381,6 +397,39 @@ export function TabBar({
             },
           ]}
           onClose={() => setSnippetMenu(null)}
+        />
+      )}
+      {paneMenu && paneMenu.items.length > 0 && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative"
+          aria-label={
+            paneMenu.recording ? "ペインの操作（ログ記録中）" : "ペインの操作"
+          }
+          title="操作中のペインの操作"
+          aria-haspopup="menu"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setPaneMenuPos({ x: rect.right, y: rect.bottom });
+          }}
+        >
+          <Ellipsis className="h-4 w-4" />
+          {paneMenu.recording && (
+            <span
+              aria-hidden
+              data-testid="recording-dot"
+              className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500"
+            />
+          )}
+        </Button>
+      )}
+      {paneMenuPos && paneMenu && (
+        <ContextMenu
+          x={paneMenuPos.x}
+          y={paneMenuPos.y}
+          items={paneMenu.items}
+          onClose={() => setPaneMenuPos(null)}
         />
       )}
       {recentMenu && onOpenRecent && (

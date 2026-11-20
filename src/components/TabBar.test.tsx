@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { connectionSchema } from "../lib/connection-schema";
 import type { Tab } from "../lib/tabs";
+import type { PaneMenu } from "../lib/pane-menu";
 import { TabBar } from "./TabBar";
 
 const tab = (id: string, status: Tab["status"] = "connected"): Tab => ({
@@ -542,6 +543,70 @@ describe("TabBar", () => {
         screen.getByRole("menuitemradio", { name: /すべてのタブの全ペイン/ }),
       );
       expect(onChange).toHaveBeenCalledWith("all");
+    });
+  });
+
+  describe("ペインの操作（「⋯」）", () => {
+    const renderBar = (paneMenu?: PaneMenu) =>
+      render(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          onManageSnippets={() => {}}
+          paneMenu={paneMenu}
+        />,
+      );
+
+    it("メニューがなければ（操作中のペインがない・項目がない）、ボタンを出さない", () => {
+      const { unmount } = renderBar(undefined);
+      expect(screen.queryByRole("button", { name: /ペインの操作/ })).toBeNull();
+      unmount();
+      renderBar({ items: [], recording: false });
+      expect(screen.queryByRole("button", { name: /ペインの操作/ })).toBeNull();
+    });
+
+    it("タブバーの右端（スニペットのボタンの右）にあり、押すと操作中のペインの項目が開く", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      renderBar({
+        items: [
+          { label: "検索…（⌘F）", onSelect },
+          { label: "タイムスタンプ表示", checked: true, onSelect: () => {} },
+        ],
+        recording: false,
+      });
+      const buttons = screen.getAllByRole("button");
+      expect(buttons[buttons.length - 1]).toHaveAccessibleName("ペインの操作");
+      expect(buttons[buttons.length - 2]).toHaveAccessibleName("スニペット");
+      await user.click(screen.getByRole("button", { name: "ペインの操作" }));
+      expect(
+        screen.getByRole("menuitemradio", { name: /タイムスタンプ表示/ }),
+      ).toHaveAttribute("aria-checked", "true");
+      await user.click(screen.getByRole("menuitem", { name: "検索…（⌘F）" }));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("ログを記録中は、ボタンに印を付け、名前でも分かるようにする", () => {
+      renderBar({
+        items: [{ label: "ログ記録を停止", onSelect: () => {} }],
+        recording: true,
+      });
+      expect(
+        screen.getByRole("button", { name: "ペインの操作（ログ記録中）" }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("recording-dot")).toBeInTheDocument();
+    });
+
+    it("記録中でなければ、印は出さない", () => {
+      renderBar({
+        items: [{ label: "検索…（⌘F）", onSelect: () => {} }],
+        recording: false,
+      });
+      expect(screen.queryByTestId("recording-dot")).toBeNull();
     });
   });
 });

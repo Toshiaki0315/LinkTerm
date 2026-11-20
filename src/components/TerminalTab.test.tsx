@@ -86,18 +86,69 @@ vi.mock("../lib/notify", async (orig) => ({
   ...(await orig<typeof import("../lib/notify")>()),
   notifyMatch: notify.notifyMatch,
 }));
-vi.mock("./LogControl", () => ({ LogControl: () => null }));
+const logHook = vi.hoisted(() => ({
+  state: {
+    logging: false,
+    dialogPath: null as string | null,
+    error: null as string | null,
+  },
+  openDialog: vi.fn(),
+  closeDialog: vi.fn(),
+  clearError: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn(),
+  args: [] as Array<{ sessionId: string | null; title: string }>,
+}));
+vi.mock("../hooks/useLogControl", () => ({
+  useLogControl: (a: { sessionId: string | null; title: string }) => {
+    logHook.args.push(a);
+    return {
+      ...logHook.state,
+      openDialog: logHook.openDialog,
+      closeDialog: logHook.closeDialog,
+      clearError: logHook.clearError,
+      start: logHook.start,
+      stop: logHook.stop,
+    };
+  },
+}));
+const serialHook = vi.hoisted(() => ({
+  state: {
+    signals: { dtr: true, rts: true },
+    hex: false,
+    breaking: false,
+    error: null as string | null,
+    disabled: false,
+  },
+  toggleSignal: vi.fn(),
+  doBreak: vi.fn(),
+  toggleHex: vi.fn(),
+  clearError: vi.fn(),
+  args: [] as Array<string | null>,
+}));
+vi.mock("../hooks/useSerialControl", () => ({
+  useSerialControl: (id: string | null) => {
+    serialHook.args.push(id);
+    return {
+      ...serialHook.state,
+      toggleSignal: serialHook.toggleSignal,
+      doBreak: serialHook.doBreak,
+      toggleHex: serialHook.toggleHex,
+      clearError: serialHook.clearError,
+    };
+  },
+}));
+vi.mock("./LogDialog", () => ({
+  LogDialog: ({ open, defaultPath }: { open: boolean; defaultPath: string }) =>
+    open ? <div data-testid="log-dialog">{defaultPath}</div> : null,
+}));
 vi.mock("./SftpDialog", () => ({
   SftpDialog: ({ open, sessionId }: { open: boolean; sessionId: string }) =>
     open ? <div data-testid="sftp-dialog">{sessionId}</div> : null,
 }));
-vi.mock("./SerialControls", () => ({
-  SerialControls: ({ sessionId }: { sessionId: string | null }) => (
-    <div data-testid="serial-controls" data-session={sessionId ?? ""} />
-  ),
-}));
 
 import { runPaneAction } from "../lib/pane-actions";
+import { getPaneMenu } from "../lib/pane-menu";
 import { sendToPane } from "../lib/pane-input";
 import { TerminalTab } from "./TerminalTab";
 
@@ -148,8 +199,26 @@ function setup(values: ConnectionValues) {
   return { ...props, view };
 }
 
+/** このペイン（tabId "t1"）が公開した、「⋯」のメニュー項目。 */
+const menuItem = (label: string) => {
+  const item = getPaneMenu("t1")?.items.find((i) => i.label === label);
+  if (!item) throw new Error(`メニュー項目が見つかりません: ${label}`);
+  return item;
+};
+const menuLabels = () => (getPaneMenu("t1")?.items ?? []).map((i) => i.label);
+
 beforeEach(() => {
   vi.clearAllMocks();
+  logHook.state = { logging: false, dialogPath: null, error: null };
+  logHook.args = [];
+  serialHook.state = {
+    signals: { dtr: true, rts: true },
+    hex: false,
+    breaking: false,
+    error: null,
+    disabled: false,
+  };
+  serialHook.args = [];
   session.state = {
     status: "connecting",
     sessionId: null,
@@ -328,7 +397,7 @@ describe("TerminalTab", () => {
       expect(echoed()).toBe("");
     });
 
-    it("実行中に切り替えられる（自動→オン）", async () => {
+    it("実行中に、メニューから切り替えられる（自動→オン）", async () => {
       session.state = {
         status: "connected",
         sessionId: "s1",
@@ -336,18 +405,18 @@ describe("TerminalTab", () => {
         remoteEcho: true,
       };
       setup(telnetWith("auto"));
-      expect(
-        screen.getByRole("button", { name: "ローカルエコーの切り替え" }),
-      ).toHaveTextContent("自動（オフ）");
-      await userEvent.click(
-        screen.getByRole("button", { name: "ローカルエコーの切り替え" }),
-      );
+      expect(menuItem("ローカルエコー: 自動（現在 オフ）").checked).toBe(true);
+      termWrite.mockClear();
+      typed("y");
+      expect(echoed()).toBe("");
+      act(() => menuItem("ローカルエコー: オン").onSelect());
       termWrite.mockClear();
       typed("z");
       expect(echoed()).toBe("z");
-      expect(
-        screen.getByRole("button", { name: "ローカルエコーの切り替え" }),
-      ).toHaveTextContent("エコー: オン");
+      await waitFor(() =>
+        expect(menuItem("ローカルエコー: オン").checked).toBe(true),
+      );
+      expect(menuItem("ローカルエコー: 自動（現在 オン）").checked).toBe(false);
     });
 
     it("ローカルシェル・SSH にはエコーの切り替えを出さず、表示もしない", () => {
@@ -358,16 +427,16 @@ describe("TerminalTab", () => {
         remoteEcho: false,
       };
       setup({ type: "local", encoding: "UTF-8" } as ConnectionValues);
-      expect(
-        screen.queryByRole("button", { name: "ローカルエコーの切り替え" }),
-      ).not.toBeInTheDocument();
+      expect(menuLabels().some((l) => l.startsWith("ローカルエコー"))).toBe(
+        false,
+      );
       termWrite.mockClear();
       typed("a");
       expect(echoed()).toBe("");
     });
   });
 
-  describe("シリアルの操作パネル", () => {
+  describe("シリアルの操作（メニュー）", () => {
     const serialValues = {
       type: "serial",
       encoding: "UTF-8",
@@ -379,36 +448,58 @@ describe("TerminalTab", () => {
       stopBits: "One",
       flowControl: "None",
     } as ConnectionValues;
-
-    it("シリアルの接続中に表示し、セッションIDを渡す", () => {
+    const connected = () => {
       session.state = {
         status: "connected",
         sessionId: "s9",
         error: null,
         remoteEcho: null,
+      };
+    };
+
+    it("シリアルの接続中は、DTR・RTS・ブレーク・HEX 表示の項目を出し、セッション ID を渡す", () => {
+      connected();
+      setup(serialValues);
+      for (const l of ["DTR", "RTS", "ブレーク送信", "HEX表示"])
+        expect(menuLabels()).toContain(l);
+      expect(serialHook.args[serialHook.args.length - 1]).toBe("s9");
+      expect(menuItem("DTR").disabled).toBe(false);
+    });
+
+    it("選ぶと、シリアルの操作を呼ぶ（状態はフックの値を反映する）", () => {
+      connected();
+      serialHook.state = {
+        ...serialHook.state,
+        signals: { dtr: false, rts: true },
+        hex: true,
       };
       setup(serialValues);
-      expect(screen.getByTestId("serial-controls")).toHaveAttribute(
-        "data-session",
-        "s9",
-      );
+      expect(menuItem("DTR").checked).toBe(false);
+      expect(menuItem("RTS").checked).toBe(true);
+      expect(menuItem("HEX表示").checked).toBe(true);
+      menuItem("DTR").onSelect();
+      menuItem("RTS").onSelect();
+      menuItem("ブレーク送信").onSelect();
+      menuItem("HEX表示").onSelect();
+      expect(serialHook.toggleSignal.mock.calls.map((c) => c[0])).toEqual([
+        "dtr",
+        "rts",
+      ]);
+      expect(serialHook.doBreak).toHaveBeenCalled();
+      expect(serialHook.toggleHex).toHaveBeenCalled();
     });
 
-    it("Telnet・ローカルシェルには表示しない", () => {
-      session.state = {
-        status: "connected",
-        sessionId: "s9",
-        error: null,
-        remoteEcho: null,
-      };
+    it("Telnet・ローカルシェルには出さない（セッション ID も渡さない）", () => {
+      connected();
       const { view } = setup(telnet);
-      expect(screen.queryByTestId("serial-controls")).not.toBeInTheDocument();
+      expect(menuLabels()).not.toContain("DTR");
+      expect(serialHook.args.every((id) => id === null)).toBe(true);
       view.unmount();
       setup({ type: "local", encoding: "UTF-8" } as ConnectionValues);
-      expect(screen.queryByTestId("serial-controls")).not.toBeInTheDocument();
+      expect(menuLabels()).not.toContain("DTR");
     });
 
-    it("接続が確立するまではセッションIDを渡さない（操作不可）", () => {
+    it("接続が確立するまでは、セッション ID を渡さず、操作できない", () => {
       session.state = {
         status: "connecting",
         sessionId: null,
@@ -416,18 +507,132 @@ describe("TerminalTab", () => {
         remoteEcho: null,
       };
       setup(serialValues);
-      expect(screen.getByTestId("serial-controls")).toHaveAttribute(
-        "data-session",
-        "",
+      expect(serialHook.args[serialHook.args.length - 1]).toBeNull();
+      expect(menuItem("DTR").disabled).toBe(true);
+      expect(menuItem("HEX表示").disabled).toBe(true);
+    });
+
+    it("操作の失敗は、ペインの上に表示し、閉じられる", async () => {
+      connected();
+      serialHook.state = {
+        ...serialHook.state,
+        error: "DTR を設定できません: 使えない操作です",
+      };
+      setup(serialValues);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "使えない操作です",
       );
+      await userEvent.click(screen.getByRole("button", { name: "閉じる" }));
+      expect(serialHook.clearError).toHaveBeenCalled();
+      expect(logHook.clearError).toHaveBeenCalled();
+    });
+  });
+
+  describe("ログ記録（メニュー）", () => {
+    const connected = () => {
+      session.state = {
+        status: "connected",
+        sessionId: "s1",
+        error: null,
+        remoteEcho: null,
+      };
+    };
+
+    it("「ログ記録を開始…」で、ログの設定ダイアログを開く。接続前は押せない", () => {
+      setup(telnet);
+      expect(menuItem("ログ記録を開始…").disabled).toBe(true);
+      expect(logHook.args[logHook.args.length - 1]).toEqual({
+        sessionId: null,
+        title: "title",
+      });
+    });
+
+    it("接続後に開始を選ぶと、ダイアログを開く処理を呼ぶ", () => {
+      connected();
+      setup(telnet);
+      expect(logHook.args[logHook.args.length - 1]).toEqual({
+        sessionId: "s1",
+        title: "title",
+      });
+      menuItem("ログ記録を開始…").onSelect();
+      expect(logHook.openDialog).toHaveBeenCalled();
+    });
+
+    it("記録中は「ログ記録を停止」になり、メニューに記録中の印を付ける", () => {
+      connected();
+      logHook.state = { ...logHook.state, logging: true };
+      setup(telnet);
+      expect(menuLabels()).toContain("ログ記録を停止");
+      expect(menuLabels()).not.toContain("ログ記録を開始…");
+      expect(getPaneMenu("t1")?.recording).toBe(true);
+      menuItem("ログ記録を停止").onSelect();
+      expect(logHook.stop).toHaveBeenCalled();
+    });
+
+    it("ダイアログの経路があれば、ダイアログを表示する", () => {
+      connected();
+      logHook.state = { ...logHook.state, dialogPath: "/logs/a.log" };
+      setup(telnet);
+      expect(screen.getByTestId("log-dialog")).toHaveTextContent("/logs/a.log");
+    });
+
+    it("書き込みエラーは、ペインの上に表示する", async () => {
+      connected();
+      logHook.state = { ...logHook.state, error: "disk full" };
+      setup(telnet);
+      expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+    });
+  });
+
+  describe("ペインのメニュー（タブバーの「⋯」）", () => {
+    it("公開し、閉じる（アンマウント）と取り下げる", () => {
+      const { view } = setup(telnet);
+      expect(getPaneMenu("t1")).toBeDefined();
+      view.unmount();
+      expect(getPaneMenu("t1")).toBeUndefined();
+    });
+
+    it("ローカルシェルは 検索・ログだけ。時刻表示は、切り替えを渡したときだけ", () => {
+      setup({ type: "local", encoding: "UTF-8" } as ConnectionValues);
+      expect(menuLabels()).toEqual(["検索…（⌘F）", "ログ記録を開始…"]);
+    });
+
+    it("見た目が変わらない再描画では、公開し直さない（再描画の連鎖を避ける）", () => {
+      const first = setup(telnet);
+      const menu = getPaneMenu("t1");
+      first.view.rerender(<TerminalTab {...first} />);
+      expect(getPaneMenu("t1")).toBe(menu);
+    });
+
+    it("選んだときは、最新の処理が呼ばれる（古い処理ではない）", async () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { view, ...props } = setup(telnet);
+      view.rerender(
+        <TerminalTab
+          {...props}
+          showTimestamps={false}
+          onToggleTimestamps={first}
+        />,
+      );
+      view.rerender(
+        <TerminalTab
+          {...props}
+          showTimestamps={false}
+          onToggleTimestamps={second}
+        />,
+      );
+      menuItem("タイムスタンプ表示").onSelect();
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalled();
     });
   });
 
   describe("検索", () => {
-    it("最初は検索バーを出さない。ツールバーの「検索」でも開ける", async () => {
+    it("最初は検索バーを出さない。メニューの「検索」でも開ける", () => {
       setup(telnet);
       expect(screen.queryByRole("search")).not.toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: "検索（⌘F）" }));
+      act(() => menuItem("検索…（⌘F）").onSelect());
       expect(screen.getByRole("search")).toBeInTheDocument();
     });
 
@@ -449,7 +654,7 @@ describe("TerminalTab", () => {
       termSearch.find.mockReturnValue(true);
       const user = userEvent.setup();
       setup(telnet);
-      await user.click(screen.getByRole("button", { name: "検索（⌘F）" }));
+      act(() => menuItem("検索…（⌘F）").onSelect());
       await user.type(screen.getByRole("textbox", { name: "検索" }), "ab");
       expect(termSearch.find).toHaveBeenLastCalledWith(
         "ab",
@@ -474,28 +679,23 @@ describe("TerminalTab", () => {
       };
     };
 
-    it("接続済みの SSH だけ、ボタンから SFTP の画面を開ける", async () => {
+    it("接続済みの SSH だけ、メニューから SFTP の画面を開ける", () => {
       connected();
-      const user = userEvent.setup();
       setup({ ...sshPassword, password: "x" } as ConnectionValues);
       expect(screen.queryByTestId("sftp-dialog")).toBeNull();
-      await user.click(
-        screen.getByRole("button", { name: "ファイル転送（SFTP）" }),
-      );
+      expect(menuItem("ファイル転送（SFTP）…").disabled).toBe(false);
+      act(() => menuItem("ファイル転送（SFTP）…").onSelect());
       expect(screen.getByTestId("sftp-dialog")).toHaveTextContent("sess-1");
     });
 
-    it("SSH 以外・未接続では出さない", () => {
+    it("SSH 以外では項目を出さない。未接続では押せない", () => {
       connected();
-      setup(telnet);
-      expect(
-        screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
-      ).toBeNull();
+      const { view } = setup(telnet);
+      expect(menuLabels()).not.toContain("ファイル転送（SFTP）…");
+      view.unmount();
       session.state = { ...session.state, status: "connecting" };
       setup(sshPassword);
-      expect(
-        screen.queryByRole("button", { name: "ファイル転送（SFTP）" }),
-      ).toBeNull();
+      expect(menuItem("ファイル転送（SFTP）…").disabled).toBe(true);
     });
   });
 
@@ -763,26 +963,20 @@ describe("TerminalTab", () => {
         />,
       );
 
-    it("渡さなければボタンを出さない", () => {
+    it("渡さなければ、メニューに項目を出さない", () => {
       mount(false);
-      expect(
-        screen.queryByRole("button", { name: "タイムスタンプ表示" }),
-      ).toBeNull();
+      expect(menuLabels()).not.toContain("タイムスタンプ表示");
     });
 
-    it("ボタンで切り替える。いまの状態を aria-pressed で示す", async () => {
+    it("メニューで切り替える。いまの状態を checked で示す", () => {
       const onToggle = vi.fn();
-      const user = userEvent.setup();
       const view = mount(true, onToggle);
-      const button = screen.getByRole("button", { name: "タイムスタンプ表示" });
-      expect(button).toHaveAttribute("aria-pressed", "true");
-      await user.click(button);
+      expect(menuItem("タイムスタンプ表示").checked).toBe(true);
+      menuItem("タイムスタンプ表示").onSelect();
       expect(onToggle).toHaveBeenCalledTimes(1);
       view.unmount();
       mount(false, onToggle);
-      expect(
-        screen.getByRole("button", { name: "タイムスタンプ表示" }),
-      ).toHaveAttribute("aria-pressed", "false");
+      expect(menuItem("タイムスタンプ表示").checked).toBe(false);
     });
   });
 

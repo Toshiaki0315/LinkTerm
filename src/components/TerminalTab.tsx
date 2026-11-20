@@ -1,6 +1,7 @@
-import { Clock, FolderOpen, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAutoReconnect } from "../hooks/useAutoReconnect";
+import { useLogControl } from "../hooks/useLogControl";
+import { useSerialControl } from "../hooks/useSerialControl";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import {
   isSecretMissing,
@@ -13,15 +14,15 @@ import { NOTIFY_INTERVAL_MS, Throttle, notifyMatch } from "../lib/notify";
 import { exportText } from "../lib/export-text";
 import { registerPaneActions } from "../lib/pane-actions";
 import { registerPaneInput } from "../lib/pane-input";
+import { buildPaneMenuItems } from "../lib/pane-menu-items";
+import { menuSignature, publishPaneMenu } from "../lib/pane-menu";
 import { echoFor, isLocalEchoOn, type EchoMode } from "../lib/local-echo";
 import type { Appearance, AutoReconnect } from "../lib/settings";
 import { copyText, pasteText } from "../lib/clipboard";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { EchoControl } from "./EchoControl";
 import { SearchBar } from "./SearchBar";
 import { SftpDialog } from "./SftpDialog";
-import { LogControl } from "./LogControl";
-import { SerialControls } from "./SerialControls";
+import { LogDialog } from "./LogDialog";
 import { Button } from "./ui/button";
 import { TerminalView, type TerminalHandle } from "./TerminalView";
 import type { SessionStatus } from "../hooks/useTerminalSession";
@@ -408,62 +409,65 @@ export function TerminalTab({
   const maxLabel =
     autoReconnect.maxAttempts === 0 ? "∞" : String(autoReconnect.maxAttempts);
 
+  // タブバーの「⋯」に出す、このペインの操作。接続済みのセッションがあるときだけ、ログ・シリアルを使える。
+  const liveSessionId = status === "connected" ? sessionId : null;
+  const log = useLogControl({ sessionId: liveSessionId, title });
+  const serial = useSerialControl(
+    values.type === "serial" ? liveSessionId : null,
+  );
+  const menuState = {
+    type: values.type,
+    connected: liveSessionId !== null,
+    hasSession: liveSessionId !== null,
+    showTimestamps,
+    onToggleTimestamps,
+    onSearch: () => setSearchOpen(true),
+    onSftp: () => setSftpOpen(true),
+    logging: log.logging,
+    onLogStart: () => void log.openDialog(),
+    onLogStop: () => void log.stop(),
+    echo: supportsEcho
+      ? { mode: echoMode, effective: localEcho, onChange: setEchoMode }
+      : undefined,
+    serial:
+      values.type === "serial"
+        ? {
+            signals: serial.signals,
+            hex: serial.hex,
+            breaking: serial.breaking,
+            onToggleSignal: (s: "dtr" | "rts") => void serial.toggleSignal(s),
+            onBreak: () => void serial.doBreak(),
+            onToggleHex: () => void serial.toggleHex(),
+          }
+        : undefined,
+  };
+  const paneMenu = {
+    items: buildPaneMenuItems(menuState),
+    recording: log.logging,
+  };
+  // 選んだときの処理は、いつも最新のものを呼ぶ。公開は、見た目が変わったときだけ
+  // （毎回公開すると、購読している画面の再描画から、ここの再描画が続いてしまう）。
+  const paneMenuRef = useRef(paneMenu);
+  useEffect(() => {
+    paneMenuRef.current = paneMenu;
+  });
+  const paneMenuKey = menuSignature(paneMenu);
+  useEffect(
+    () =>
+      publishPaneMenu(tabId, {
+        recording: paneMenuRef.current.recording,
+        items: paneMenuRef.current.items.map((item, index) => ({
+          ...item,
+          onSelect: () => paneMenuRef.current.items[index]?.onSelect(),
+        })),
+      }),
+    // 見た目（paneMenuKey）が変わったときだけ公開し直す。
+    [tabId, paneMenuKey],
+  );
+  const controlError = log.error ?? serial.error;
+
   return (
     <div className="relative h-full w-full">
-      <div className="absolute right-3 top-2 z-10 flex items-center gap-2">
-        {values.type === "serial" && (
-          <SerialControls
-            key={sessionId ?? "none"}
-            sessionId={status === "connected" ? sessionId : null}
-          />
-        )}
-        {onToggleTimestamps && (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="タイムスタンプ表示"
-            aria-pressed={showTimestamps}
-            title="各行に時刻を表示（右端）"
-            className={
-              showTimestamps ? "bg-sky-500/20 text-sky-300" : undefined
-            }
-            onClick={onToggleTimestamps}
-          >
-            <Clock className="h-4 w-4" />
-          </Button>
-        )}
-        {values.type === "ssh" && status === "connected" && sessionId && (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="ファイル転送（SFTP）"
-            title="ファイル転送（SFTP）"
-            onClick={() => setSftpOpen(true)}
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="検索（⌘F）"
-          title="検索（⌘F）"
-          onClick={() => setSearchOpen(true)}
-        >
-          <Search className="h-4 w-4" />
-        </Button>
-        {supportsEcho && (
-          <EchoControl
-            mode={echoMode}
-            effective={localEcho}
-            onChange={setEchoMode}
-          />
-        )}
-        <LogControl
-          sessionId={status === "connected" ? sessionId : null}
-          title={title}
-        />
-      </div>
       {values.type === "ssh" && sessionId && (
         <SftpDialog
           open={sftpOpen && status === "connected"}
@@ -471,6 +475,31 @@ export function TerminalTab({
           sessionId={sessionId}
           title={title}
         />
+      )}
+      {log.dialogPath !== null && (
+        <LogDialog
+          open
+          onOpenChange={(open) => !open && log.closeDialog()}
+          defaultPath={log.dialogPath}
+          onSubmit={log.start}
+        />
+      )}
+      {controlError && (
+        <div
+          role="alert"
+          className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-red-900/90 px-3 py-1 text-xs"
+        >
+          <span className="break-all">{controlError}</span>
+          <button
+            className="shrink-0 underline"
+            onClick={() => {
+              log.clearError();
+              serial.clearError();
+            }}
+          >
+            閉じる
+          </button>
+        </div>
       )}
       {saveNotice && (
         <div

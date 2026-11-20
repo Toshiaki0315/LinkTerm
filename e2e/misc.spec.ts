@@ -5,6 +5,8 @@ import {
   openLocalTab,
   openSettings,
   output,
+  paneMenuState,
+  pickPaneMenu,
   screenText,
   written,
 } from "./helpers";
@@ -192,17 +194,26 @@ test.describe("通知", () => {
 });
 
 test.describe("ローカルエコー", () => {
-  test("切り替えボタンで 自動 → オン → オフ", async ({ page }) => {
+  test("メニューで 自動 / オン / オフ を選べる（選択中に印）", async ({
+    page,
+  }) => {
     await openApp(page);
     await openTelnetTab(page);
-    const toggle = page.getByRole("button", {
-      name: "ローカルエコーの切り替え",
+    const state = (name: string | RegExp) => paneMenuState(page, name);
+    expect(await state(/ローカルエコー: 自動/)).toMatchObject({
+      checked: true,
     });
-    await expect(toggle).toContainText("自動");
-    await toggle.click();
-    await expect(toggle).toContainText("オン");
-    await toggle.click();
-    await expect(toggle).toContainText("オフ");
+    await pickPaneMenu(page, "ローカルエコー: オン");
+    expect(await state("ローカルエコー: オン")).toMatchObject({
+      checked: true,
+    });
+    expect(await state(/ローカルエコー: 自動/)).toMatchObject({
+      checked: false,
+    });
+    await pickPaneMenu(page, "ローカルエコー: オフ");
+    expect(await state("ローカルエコー: オフ")).toMatchObject({
+      checked: true,
+    });
   });
 
   test("「オン」では入力した文字が画面に出る。「オフ」では出ない（エコーしない接続先）", async ({
@@ -213,15 +224,11 @@ test.describe("ローカルエコー", () => {
       window.__e2e.echo = false;
     });
     await openTelnetTab(page);
-    const toggle = page.getByRole("button", {
-      name: "ローカルエコーの切り替え",
-    });
-    await page.locator(".xterm").first().click();
-    await toggle.click(); // オン
+    await pickPaneMenu(page, "ローカルエコー: オン");
     await page.locator(".xterm").first().click();
     await page.keyboard.type("abc");
     await expect(screenText(page)).toContainText("abc");
-    await toggle.click(); // オフ
+    await pickPaneMenu(page, "ローカルエコー: オフ");
     await page.locator(".xterm").first().click();
     await page.keyboard.type("xyz");
     await page.waitForTimeout(200);
@@ -290,15 +297,19 @@ test.describe("シリアル", () => {
     await page.getByLabel("シリアルポート").selectOption("__manual__");
     await page.getByLabel("ポート名（手入力）").fill("/dev/cu.test");
     await page.getByRole("button", { name: "接続", exact: true }).click();
-    const dtr = page.getByRole("button", { name: "DTR" });
-    await expect(dtr).toBeEnabled();
-    // ポートを開いた直後は両方オン。押すとオフになる。
-    await expect(dtr).toHaveAttribute("aria-pressed", "true");
-    await dtr.click();
-    await expect(dtr).toHaveAttribute("aria-pressed", "false");
-    await page.getByRole("button", { name: "RTS" }).click();
-    await page.getByRole("button", { name: "ブレーク送信" }).click();
-    await page.getByRole("button", { name: "HEX表示" }).click();
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    await expect
+      .poll(async () => (await paneMenuState(page, "DTR")).disabled)
+      .toBe(false);
+    // ポートを開いた直後は両方オン。選ぶとオフになる。
+    expect(await paneMenuState(page, "DTR")).toMatchObject({ checked: true });
+    await pickPaneMenu(page, "DTR");
+    await expect
+      .poll(async () => (await paneMenuState(page, "DTR")).checked)
+      .toBe(false);
+    await pickPaneMenu(page, "RTS");
+    await pickPaneMenu(page, "ブレーク送信");
+    await pickPaneMenu(page, "HEX表示");
     expect(await calls(page, "serial_set_control")).toEqual([
       expect.objectContaining({ signal: "dtr", on: false }),
       expect.objectContaining({ signal: "rts", on: false }),
@@ -307,7 +318,10 @@ test.describe("シリアル", () => {
     expect(await calls(page, "set_display_mode")).toEqual([
       expect.objectContaining({ mode: "hex" }),
     ]);
-    await page.getByRole("button", { name: "HEX表示" }).click();
+    await expect
+      .poll(async () => (await paneMenuState(page, "HEX表示")).checked)
+      .toBe(true);
+    await pickPaneMenu(page, "HEX表示");
     const modes = await calls(page, "set_display_mode");
     expect(modes[modes.length - 1]).toEqual(
       expect.objectContaining({ mode: "text" }),
@@ -478,9 +492,11 @@ test.describe("そのほか", () => {
       .getByRole("combobox", { name: "コマンドを検索" })
       .fill("タイムスタンプ表示をオンにする");
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByRole("button", { name: "タイムスタンプ表示" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(
+        async () => (await paneMenuState(page, "タイムスタンプ表示")).checked,
+      )
+      .toBe(true);
   });
 
   test("複数タブで出力が混ざらない", async ({ page }) => {

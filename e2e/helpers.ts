@@ -152,3 +152,51 @@ export async function openSshTab(page: Page): Promise<void> {
   await page.getByRole("button", { name: "接続", exact: true }).click();
   await expect(page.locator(".xterm").first()).toBeVisible();
 }
+
+/** タブバー右端の「⋯」を開く（操作中のペインの操作メニュー）。 */
+export async function openPaneMenu(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /^ペインの操作/ }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+}
+
+/** 「⋯」を開いて、項目を選ぶ。 */
+export async function pickPaneMenu(
+  page: Page,
+  name: string | RegExp,
+): Promise<void> {
+  await openPaneMenu(page);
+  await page
+    .getByRole("menu")
+    .getByRole("menuitem", { name })
+    .or(page.getByRole("menu").getByRole("menuitemradio", { name }))
+    .click();
+}
+
+/** 「⋯」を開いて、並んでいる項目の名前を返し、閉じる。 */
+export async function paneMenuLabels(page: Page): Promise<string[]> {
+  await openPaneMenu(page);
+  const labels = await page
+    .getByRole("menu")
+    .locator("button")
+    .allTextContents();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  return labels.map((l) => l.replace("✓", "").trim());
+}
+
+/** 「⋯」を開いて、項目の状態（選択中か・押せるか）を返し、閉じる。 */
+export async function paneMenuState(
+  page: Page,
+  name: string | RegExp,
+): Promise<{ checked: boolean | null; disabled: boolean }> {
+  await openPaneMenu(page);
+  const item = page
+    .getByRole("menu")
+    .getByRole("menuitem", { name })
+    .or(page.getByRole("menu").getByRole("menuitemradio", { name }));
+  const checked = await item.getAttribute("aria-checked");
+  const disabled = await item.isDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  return { checked: checked === null ? null : checked === "true", disabled };
+}

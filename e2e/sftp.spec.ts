@@ -1,20 +1,27 @@
 import { test, expect, type Page } from "@playwright/test";
-import { calls, openApp, openLocalTab, openSshTab, panes } from "./helpers";
+import {
+  calls,
+  openApp,
+  openLocalTab,
+  openSshTab,
+  paneMenuLabels,
+  paneMenuState,
+  panes,
+  pickPaneMenu,
+} from "./helpers";
 
 async function openSftp(page: Page) {
   await openApp(page);
   await openSshTab(page);
-  await page.getByRole("button", { name: "ファイル転送（SFTP）" }).click();
+  await pickPaneMenu(page, /ファイル転送（SFTP）/);
   await expect(page.getByRole("dialog")).toContainText("a.txt");
 }
 
 test.describe("SFTP", () => {
-  test("SSH ペインにだけ SFTP ボタンがある", async ({ page }) => {
+  test("SSH ペインにだけ SFTP の項目がある", async ({ page }) => {
     await openApp(page);
     await openLocalTab(page);
-    await expect(
-      page.getByRole("button", { name: "ファイル転送（SFTP）" }),
-    ).toHaveCount(0);
+    expect(await paneMenuLabels(page)).not.toContain("ファイル転送（SFTP）…");
   });
 
   test("ホームフォルダーの一覧が出る。フォルダーを開く・上へ・パス入力で移動できる", async ({
@@ -131,8 +138,13 @@ test.describe("SFTP", () => {
     await page.getByLabel("パスワード", { exact: true }).fill("pw");
     await page.getByRole("button", { name: "接続", exact: true }).click();
     await expect(panes(page)).toHaveCount(2);
-    await expect(
-      page.getByRole("button", { name: "ファイル転送（SFTP）" }),
-    ).toHaveCount(2);
+    // 操作中（新しい）ペインで使える。もう一方のペインへ移っても使える。
+    expect(await paneMenuState(page, /ファイル転送（SFTP）/)).toMatchObject({
+      disabled: false,
+    });
+    await page.keyboard.press("Meta+[");
+    expect(await paneMenuState(page, /ファイル転送（SFTP）/)).toMatchObject({
+      disabled: false,
+    });
   });
 });

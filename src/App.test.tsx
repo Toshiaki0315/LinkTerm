@@ -95,6 +95,7 @@ vi.mock("./components/TerminalTab", () => ({
 import App from "./App";
 import { registerPaneInput } from "./lib/pane-input";
 import { registerPaneActions } from "./lib/pane-actions";
+import { publishPaneMenu } from "./lib/pane-menu";
 import { claimFileDrops } from "./lib/file-drop";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
 import type { SessionState } from "./lib/terminal-api";
@@ -1543,6 +1544,57 @@ describe("App", () => {
       expect(await screen.findByRole("alert")).toHaveTextContent(
         /最近使った接続を読み込めません/,
       );
+    });
+  });
+
+  describe("操作中のペインのメニュー（タブバーの「⋯」）", () => {
+    it("タブがないときは出さない。操作中のペインが公開した項目を、タブバーの「⋯」に出す", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      expect(screen.queryByRole("button", { name: /ペインの操作/ })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      const paneId = screen
+        .getByTestId(/^term-/)
+        .getAttribute("data-testid")!
+        .slice(5);
+      const onSelect = vi.fn();
+      let off = () => {};
+      act(() => {
+        off = publishPaneMenu(paneId, {
+          items: [{ label: "検索…（⌘F）", onSelect }],
+          recording: false,
+        });
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "ペインの操作" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "検索…（⌘F）" }));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      act(() => off());
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: /ペインの操作/ }),
+        ).toBeNull(),
+      );
+    });
+
+    it("操作中のペイン以外が公開したメニューは出さない", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "新しい接続" }));
+      await user.click(await screen.findByRole("button", { name: "接続" }));
+      await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+      let off = () => {};
+      act(() => {
+        off = publishPaneMenu("someone-else", {
+          items: [{ label: "x", onSelect: () => {} }],
+          recording: false,
+        });
+      });
+      expect(screen.queryByRole("button", { name: /ペインの操作/ })).toBeNull();
+      act(() => off());
     });
   });
 

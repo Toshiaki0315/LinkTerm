@@ -6,6 +6,7 @@ import {
   openSshTab,
   output,
   panes,
+  pickPaneMenu,
   written,
 } from "./helpers";
 
@@ -82,7 +83,7 @@ test.describe("Finder からのドラッグ＆ドロップ（ターミナルと�
   }) => {
     await openApp(page);
     await openSshTab(page);
-    await page.getByRole("button", { name: "ファイル転送（SFTP）" }).click();
+    await pickPaneMenu(page, /ファイル転送（SFTP）/);
     await expect(page.getByRole("dialog")).toContainText("a.txt");
     await drop(page, ["/Users/me/dropped.txt"]);
     await expect
@@ -94,7 +95,7 @@ test.describe("Finder からのドラッグ＆ドロップ（ターミナルと�
   test("SFTP の画面を閉じると、また端末へ入力される", async ({ page }) => {
     await openApp(page);
     await openSshTab(page);
-    await page.getByRole("button", { name: "ファイル転送（SFTP）" }).click();
+    await pickPaneMenu(page, /ファイル転送（SFTP）/);
     await expect(page.getByRole("dialog")).toContainText("a.txt");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);

@@ -45,6 +45,7 @@ import {
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
 import { pasteToPane, runPaneAction } from "./lib/pane-actions";
+import { usePaneMenu } from "./lib/pane-menu";
 import { dropText, quotePath } from "./lib/shell-quote";
 import { filesDropClaimed, onFilesDroppedAt, paneIdAt } from "./lib/file-drop";
 import { sendToPane } from "./lib/pane-input";
@@ -509,6 +510,8 @@ function App() {
   }, []);
 
   const activeTab = state.tabs.find((t) => t.id === state.activeId);
+  // タブバーの「⋯」に出す、操作中のペインの操作メニュー。
+  const paneMenu = usePaneMenu(activeTab ? activePaneIdOf(activeTab) : null);
 
   /** 操作対象のペインと同じ接続で、画面を分割する。パスワードが要る場合は入力用のダイアログを開く。 */
   const splitTab = useCallback(
@@ -939,6 +942,7 @@ function App() {
         onManageSnippets={() => setSnippetsOpen(true)}
         onManageHighlights={() => setHighlightsOpen(true)}
         broadcast={broadcast}
+        paneMenu={paneMenu}
         onBroadcastChange={setBroadcast}
         attention={attention}
       />

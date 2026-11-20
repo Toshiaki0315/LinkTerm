@@ -5,6 +5,7 @@ import {
   openLocalTab,
   openedUrls,
   output,
+  pickPaneMenu,
   screenText,
 } from "./helpers";
 
@@ -112,7 +113,7 @@ test.describe("タイムスタンプ", () => {
     await openApp(page);
     await openLocalTab(page);
     await output(page, "before\r\n");
-    await page.getByRole("button", { name: "タイムスタンプ表示" }).click();
+    await pickPaneMenu(page, "タイムスタンプ表示");
     await output(page, "after one\r\nafter two\r\n");
     const stamps = page.locator(".xterm-decoration", {
       hasText: /\d\d:\d\d:\d\d/,
@@ -121,7 +122,7 @@ test.describe("タイムスタンプ", () => {
     for (const t of await stamps.allTextContents()) {
       expect(t).toMatch(/^\d\d:\d\d:\d\d$/);
     }
-    await page.getByRole("button", { name: "タイムスタンプ表示" }).click();
+    await pickPaneMenu(page, "タイムスタンプ表示");
     await expect(stamps).toHaveCount(0);
   });
 
@@ -129,7 +130,7 @@ test.describe("タイムスタンプ", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page);
     await openLocalTab(page);
-    await page.getByRole("button", { name: "タイムスタンプ表示" }).click();
+    await pickPaneMenu(page, "タイムスタンプ表示");
     await output(page, "plain text\r\n");
     await expect(
       page.locator(".xterm-decoration", { hasText: /\d\d:\d\d:\d\d/ }),
@@ -145,7 +146,7 @@ test.describe("タイムスタンプ", () => {
   test("右端近くまで文字がある行には時刻を出さない", async ({ page }) => {
     await openApp(page);
     await openLocalTab(page);
-    await page.getByRole("button", { name: "タイムスタンプ表示" }).click();
+    await pickPaneMenu(page, "タイムスタンプ表示");
     const cols = await page.evaluate(() => {
       const w = document
         .querySelector(".xterm-screen")!

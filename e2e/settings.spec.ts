@@ -4,6 +4,7 @@ import {
   openLocalTab,
   openSettings,
   openSshTab,
+  paneMenuLabels,
   output,
   restart,
   written,
@@ -205,9 +206,9 @@ test.describe("タブの色・履歴・複製", () => {
   }) => {
     await openApp(page);
     await openLocalTab(page);
-    await expect(
-      page.getByRole("button", { name: "ローカルエコーの切り替え" }),
-    ).toHaveCount(0);
+    expect(
+      (await paneMenuLabels(page)).some((l) => l.startsWith("ローカルエコー")),
+    ).toBe(false);
   });
 });
 
