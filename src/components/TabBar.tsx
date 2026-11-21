@@ -16,6 +16,7 @@ import type { Snippet } from "../lib/snippets";
 import type { Tab } from "../lib/tabs";
 import { recentLabel, type RecentEntry } from "../lib/recent";
 import { TAB_COLORS, tabColorHex, type TabColorId } from "../lib/tab-colors";
+import { PLAIN_TEXT_PROPS } from "../lib/text-input";
 import { cn } from "../lib/utils";
 import { ContextMenu } from "./ContextMenu";
 import { Button } from "./ui/button";
@@ -94,6 +95,7 @@ function TitleEditor({
     <input
       ref={inputRef}
       aria-label="タブ名"
+      {...PLAIN_TEXT_PROPS}
       className="h-5 w-40 rounded border border-sky-600 bg-neutral-950 px-1 text-sm"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}

@@ -239,3 +239,31 @@ test.describe("履歴にパスワードを保存しない（SSH のパスワー�
     expect(stored).not.toContain('"password":');
   });
 });
+
+test.describe("入力欄の自動補正", () => {
+  test("ホスト名・ユーザー名は、小文字で入れたとおりに保たれ、先頭を大文字にされない", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "新しい接続" }).click();
+    await page.getByLabel("接続種別").selectOption("ssh");
+    for (const label of ["ホスト", "ユーザー名"]) {
+      const box = page.getByLabel(label);
+      await expect(box).toHaveAttribute("autocapitalize", "off");
+      await expect(box).toHaveAttribute("autocorrect", "off");
+      await expect(box).toHaveAttribute("spellcheck", "false");
+    }
+    await page.getByLabel("ホスト").fill("myserver.example.com");
+    await page.getByLabel("ユーザー名").fill("alice");
+    await page.getByLabel("パスワード", { exact: true }).fill("pw");
+    await page.getByRole("button", { name: "接続", exact: true }).click();
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    const req = JSON.stringify(
+      (await page.evaluate(() => window.__e2e.calls)).find(
+        (c) => c.cmd === "start_ssh",
+      )?.args,
+    );
+    expect(req).toContain('"host":"myserver.example.com"');
+    expect(req).toContain('"username":"alice"');
+  });
+});

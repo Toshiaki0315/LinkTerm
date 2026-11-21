@@ -33,6 +33,35 @@ describe("ConnectionDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("SSH: ホスト名・ユーザー名などは、小文字で入れたとおりに保たれ、自動で大文字にされない", async () => {
+    const { user, onSubmit } = setup();
+    await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+    for (const label of ["ホスト", "ユーザー名", "踏み台（ProxyJump）"]) {
+      const box = screen.getByLabelText(label);
+      expect(box, label).toHaveAttribute("autocapitalize", "off");
+      expect(box, label).toHaveAttribute("autocorrect", "off");
+      expect(box, label).toHaveAttribute("spellcheck", "false");
+    }
+    await user.type(screen.getByLabelText("ホスト"), "myserver.example.com");
+    await user.type(screen.getByLabelText("ユーザー名"), "alice");
+    await user.type(screen.getByLabelText("パスワード", { exact: true }), "pw");
+    await user.click(screen.getByRole("button", { name: "接続" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      host: "myserver.example.com",
+      username: "alice",
+    });
+  });
+
+  it("自動ログインのスクリプトの欄も、自動で大文字にしない・綴りを直さない", async () => {
+    const { user } = setup();
+    await user.selectOptions(screen.getByLabelText("接続種別"), "telnet");
+    const box = screen.getByLabelText("自動ログイン（任意）");
+    expect(box).toHaveAttribute("autocapitalize", "off");
+    expect(box).toHaveAttribute("autocorrect", "off");
+    expect(box).toHaveAttribute("spellcheck", "false");
+  });
+
   it("SSH: 必須項目が空ならエラーを表示して送信しない", async () => {
     const { user, onSubmit } = setup();
     await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");

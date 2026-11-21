@@ -189,4 +189,13 @@ describe("MacrosDialog", () => {
     setup([mc()]);
     expect(screen.queryByRole("button", { name: /を実行/ })).toBeNull();
   });
+
+  it("スクリプトの欄は、自動で大文字にしない・綴りを直さない（コードを書き換えられないため）", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "追加" }));
+    const box = screen.getByLabelText("スクリプト");
+    expect(box).toHaveAttribute("autocapitalize", "off");
+    expect(box).toHaveAttribute("autocorrect", "off");
+    expect(box).toHaveAttribute("spellcheck", "false");
+  });
 });

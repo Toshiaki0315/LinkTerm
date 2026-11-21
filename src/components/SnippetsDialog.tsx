@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PLAIN_TEXT_PROPS } from "../lib/text-input";
 import {
   MAX_LINE_DELAY_MS,
   MAX_NAME_CHARS,
@@ -120,6 +121,7 @@ export function SnippetsDialog({
               <textarea
                 id="snippet-text"
                 rows={6}
+                {...PLAIN_TEXT_PROPS}
                 value={draft.text}
                 onChange={(e) => setDraft({ ...draft, text: e.target.value })}
                 className="w-full rounded-md border border-neutral-600 bg-neutral-900 px-3 py-2 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"

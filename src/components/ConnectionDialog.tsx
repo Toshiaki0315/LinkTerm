@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PLAIN_TEXT_PROPS } from "../lib/text-input";
 import { Trash2 } from "lucide-react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { scriptUsesPassword } from "../lib/auto-login";
@@ -678,7 +679,7 @@ export function ConnectionDialog({
                   <textarea
                     id={id}
                     rows={3}
-                    spellCheck={false}
+                    {...PLAIN_TEXT_PROPS}
                     placeholder={"login: => admin\nPassword: => {password}"}
                     className="w-full rounded-md border border-neutral-600 bg-neutral-900 px-3 py-2 font-mono text-sm placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
                     {...register("loginScript")}

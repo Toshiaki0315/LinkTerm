@@ -99,4 +99,13 @@ describe("SnippetsDialog", () => {
     );
     expect(screen.getByLabelText("名前")).toHaveValue("a");
   });
+
+  it("内容の欄は、自動で大文字にしない・綴りを直さない（コマンドを書き換えられないため）", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "追加" }));
+    const box = screen.getByLabelText(/^内容/);
+    expect(box).toHaveAttribute("autocapitalize", "off");
+    expect(box).toHaveAttribute("autocorrect", "off");
+    expect(box).toHaveAttribute("spellcheck", "false");
+  });
 });

@@ -764,4 +764,23 @@ describe("TabBar", () => {
       expect(screen.queryByTestId("recording-dot")).toBeNull();
     });
   });
+
+  it("タブ名の編集欄は、自動で大文字にしない・綴りを直さない", async () => {
+    const user = userEvent.setup();
+    render(
+      <TabBar
+        tabs={[tab("a")]}
+        activeId="a"
+        onActivate={() => {}}
+        onClose={() => {}}
+        onNew={() => {}}
+        onRename={() => {}}
+      />,
+    );
+    await user.dblClick(screen.getByRole("tab", { name: /title-a/ }));
+    const box = screen.getByRole("textbox", { name: "タブ名" });
+    expect(box).toHaveAttribute("autocapitalize", "off");
+    expect(box).toHaveAttribute("autocorrect", "off");
+    expect(box).toHaveAttribute("spellcheck", "false");
+  });
 });
