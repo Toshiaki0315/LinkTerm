@@ -173,6 +173,69 @@ test.describe("マクロの実行", () => {
     await expect.poll(() => written(page)).toBe("sum=7\rHELLO\rloop\rloop\r");
   });
 
+  test("配列（intdim / strdim）と strsplit / strjoin", async ({ page }) => {
+    const script = [
+      "intdim n 3",
+      "for i 0 2",
+      "  n[i] = (i + 1) * 10",
+      "next",
+      "sprintf '%d,%d,%d' n[0] n[1] n[2]",
+      "sendln inputstr",
+      "strdim p 4",
+      "strsplit p 'a-b-c' '-'",
+      "sendln result + 48",
+      "strjoin p '+' 3",
+      "sendln inputstr",
+      "p[1] = 'X'",
+      "sendln p[1]",
+    ].join("\n");
+    await openApp(page, { macros: [macro("m1", "配列", script)] });
+    await openLocalTab(page);
+    await runFromMenu(page, "配列");
+    await expect.poll(() => written(page)).toBe("10,20,30\r3\ra+b+c\rX\r");
+  });
+
+  test("配列の添字が範囲外なら、行番号つきのエラー", async ({ page }) => {
+    await openApp(page, {
+      macros: [macro("m1", "範囲外", "intdim a 2\nsendln 'ok'\na[5] = 1")],
+    });
+    await openLocalTab(page);
+    await runFromMenu(page, "範囲外");
+    await expect(page.getByRole("alert")).toContainText("3行目");
+    await expect(page.getByRole("alert")).toContainText("範囲外");
+  });
+
+  test("listbox: 一覧から選んだ番号が result に入る。キャンセルは -1", async ({
+    page,
+  }) => {
+    const script = [
+      "strdim m 3",
+      "m[0] = '東京'",
+      "m[1] = '大阪'",
+      "m[2] = '福岡'",
+      "listbox '接続先' '一覧' m 1",
+      "if result >= 0 then",
+      "  sendln m[result]",
+      "else",
+      "  sendln 'cancel'",
+      "endif",
+      "listbox '接続先' '一覧' m",
+      "if result < 0 then sendln 'cancel'",
+    ].join("\n");
+    await openApp(page, { macros: [macro("m1", "選ぶ", script)] });
+    await openLocalTab(page);
+    await runFromMenu(page, "選ぶ");
+    let dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("接続先");
+    // 最初に指定した（1 番目の）項目が選ばれている。
+    await expect(dialog.getByRole("radio", { name: "大阪" })).toBeChecked();
+    await dialog.getByRole("radio", { name: "福岡" }).check();
+    await dialog.getByRole("button", { name: "OK" }).click();
+    dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect.poll(() => written(page)).toBe("福岡\rcancel\r");
+  });
+
   test("goto / call / return（サブルーチン）", async ({ page }) => {
     await openApp(page, {
       macros: [

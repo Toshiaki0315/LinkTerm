@@ -8,9 +8,17 @@ export type MacroDialogRequest =
   | { kind: "message"; message: string; title: string }
   | { kind: "yesno"; message: string; title: string }
   | { kind: "input"; message: string; title: string; initial: string }
-  | { kind: "password"; message: string; title: string };
+  | { kind: "password"; message: string; title: string }
+  | {
+      kind: "list";
+      message: string;
+      title: string;
+      items: string[];
+      /** 最初に選んでおく項目（0 から）。 */
+      selected: number;
+    };
 
-export type MacroDialogAnswer = undefined | boolean | string | null;
+export type MacroDialogAnswer = undefined | boolean | string | number | null;
 
 export interface PendingMacroDialog {
   id: number;
@@ -32,7 +40,9 @@ type AnswerOf<R extends MacroDialogRequest> = R extends { kind: "message" }
   ? undefined
   : R extends { kind: "yesno" }
     ? boolean
-    : string | null;
+    : R extends { kind: "list" }
+      ? number | null
+      : string | null;
 
 /** ダイアログを出し、答えを待つ。 */
 export function showMacroDialog<R extends MacroDialogRequest>(

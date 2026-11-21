@@ -63,6 +63,44 @@ describe("parseProgram: 文の種類", () => {
   });
 });
 
+describe("parseProgram: 配列", () => {
+  it("配列要素への代入（= と複合代入）", () => {
+    const p = ok("a[0] = 1\na[i + 1] += 2");
+    expect(p.stmts[0]).toMatchObject({ k: "assign", name: "a", op: "=" });
+    expect(p.stmts[0].k === "assign" && p.stmts[0].index).toBeDefined();
+    expect(p.stmts[1]).toMatchObject({ k: "assign", name: "a", op: "+=" });
+  });
+
+  it("intdim / strdim / strsplit / strjoin / listbox を書ける（配列名の引数）", () => {
+    const p = ok(
+      "intdim a 10\nstrdim s 5\nstrsplit s 'a,b' ','\nstrjoin s '-'\nlistbox 'm' 't' s",
+    );
+    expect(p.stmts.map((s) => (s.k === "cmd" ? s.name : s.k))).toEqual([
+      "intdim",
+      "strdim",
+      "strsplit",
+      "strjoin",
+      "listbox",
+    ]);
+    const dim = p.stmts[0];
+    expect(dim.k === "cmd" && dim.args[0]).toEqual({ k: "name", name: "a" });
+  });
+
+  it("出力先の変数に、配列の要素を書ける", () => {
+    const p = ok("strcopy 'abc' 1 2 a[3]");
+    const s = p.stmts[0];
+    expect(s.k === "cmd" && s.args[3]).toMatchObject({ k: "name", name: "a" });
+    expect(
+      s.k === "cmd" && (s.args[3] as { index?: unknown }).index,
+    ).toBeDefined();
+  });
+
+  it("添字の括弧が閉じていない・配列名の引数に式を書くとエラー", () => {
+    expect(errors("a[1 = 2")[0].message).toContain("]");
+    expect(errors("intdim 5 3")[0].message).toContain("配列");
+  });
+});
+
 describe("parseProgram: 制御構造", () => {
   it("if / elseif / else / endif の飛び先が決まる", () => {
     const p = ok(

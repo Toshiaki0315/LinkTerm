@@ -743,6 +743,24 @@ describe("TerminalTab", () => {
       await waitFor(() => expect(written()).toBe("s3cret\r"));
     });
 
+    it("listbox: 一覧のダイアログを出し、選んだ番号を result に入れる", async () => {
+      connect();
+      setup(telnet);
+      run(
+        "strdim m 2\nm[0]='a'\nm[1]='b'\nlistbox '選ぶ' '一覧' m\nsendln result + 48",
+      );
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeDefined());
+      expect(getCurrentMacroDialog()?.request).toMatchObject({
+        kind: "list",
+        message: "選ぶ",
+        title: "一覧",
+        items: ["a", "b"],
+        selected: 0,
+      });
+      act(() => answerMacroDialog(getCurrentMacroDialog()!.id, 1));
+      await waitFor(() => expect(written()).toBe("1\r"));
+    });
+
     it("ダイアログの待ちの途中で止めると、ダイアログも閉じる", async () => {
       connect();
       setup(telnet);

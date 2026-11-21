@@ -428,6 +428,14 @@ export function TerminalTab({
           showMacroDialog(owner, { kind: "input", message, title, initial }),
         passwordbox: (message, title) =>
           showMacroDialog(owner, { kind: "password", message, title }),
+        listbox: (message, title, items, selected) =>
+          showMacroDialog(owner, {
+            kind: "list",
+            message,
+            title,
+            items,
+            selected,
+          }),
         disconnect: () => macroLive.current.close(),
         isConnected: () => macroLive.current.status === "connected",
         now: () => new Date(),

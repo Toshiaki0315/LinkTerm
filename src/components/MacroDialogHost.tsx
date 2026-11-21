@@ -59,6 +59,58 @@ function PromptBody({
   );
 }
 
+/** 一覧から選ぶダイアログの中身。要求ごとに作り直す。 */
+function ListBody({
+  pending,
+  items,
+  initial,
+}: {
+  pending: PendingMacroDialog;
+  items: string[];
+  initial: number;
+}) {
+  const [selected, setSelected] = useState(
+    initial >= 0 && initial < items.length ? initial : 0,
+  );
+  return (
+    <form
+      className="mt-4 grid gap-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        answerMacroDialog(pending.id, selected);
+      }}
+    >
+      <fieldset className="grid max-h-64 gap-1 overflow-y-auto">
+        <legend className="sr-only">選択肢</legend>
+        {items.map((item, i) => (
+          <label
+            key={i}
+            className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-neutral-800"
+          >
+            <input
+              type="radio"
+              name="macro-list"
+              checked={selected === i}
+              onChange={() => setSelected(i)}
+            />
+            {item}
+          </label>
+        ))}
+      </fieldset>
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => answerMacroDialog(pending.id, null)}
+        >
+          キャンセル
+        </Button>
+        <Button type="submit">OK</Button>
+      </div>
+    </form>
+  );
+}
+
 /**
  * マクロが出すダイアログ（確認・入力・パスワード）を、1つずつ表示する。
  * 閉じる操作（Esc・外側のクリック）は、「いいえ」「キャンセル」として扱う。
@@ -106,6 +158,18 @@ export function MacroDialogHost() {
                 </Button>
               )}
             </div>
+          </>
+        )}
+        {request.kind === "list" && (
+          <>
+            <DialogDescription className="mt-2 whitespace-pre-wrap">
+              {request.message}
+            </DialogDescription>
+            <ListBody
+              pending={pending}
+              items={request.items}
+              initial={request.selected}
+            />
           </>
         )}
         {(request.kind === "input" || request.kind === "password") && (

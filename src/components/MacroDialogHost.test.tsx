@@ -150,4 +150,74 @@ describe("MacroDialogHost", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(getCurrentMacroDialog()).toBeUndefined();
   });
+
+  it("一覧: 選択肢を並べ、最初に指定した項目を選んだ状態にする。選んで OK で番号を返す", async () => {
+    const user = userEvent.setup();
+    render(<MacroDialogHost />);
+    let a!: Promise<number | null>;
+    act(() => {
+      a = showMacroDialog("t", {
+        kind: "list",
+        message: "接続先を選んでください",
+        title: "一覧",
+        items: ["東京", "大阪", "福岡"],
+        selected: 1,
+      });
+    });
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("接続先を選んでください");
+    const options = screen.getAllByRole("radio");
+    expect(
+      options.map((o) => (o as HTMLInputElement).labels?.[0]?.textContent),
+    ).toEqual(["東京", "大阪", "福岡"]);
+    expect(options[1]).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "福岡" }));
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    await expect(a).resolves.toBe(2);
+  });
+
+  it("一覧: キャンセル・Esc は null", async () => {
+    const user = userEvent.setup();
+    render(<MacroDialogHost />);
+    let a!: Promise<number | null>;
+    act(() => {
+      a = showMacroDialog("t", {
+        kind: "list",
+        message: "m",
+        title: "t",
+        items: ["a", "b"],
+        selected: 0,
+      });
+    });
+    await user.click(await screen.findByRole("button", { name: "キャンセル" }));
+    await expect(a).resolves.toBeNull();
+    let b!: Promise<number | null>;
+    act(() => {
+      b = showMacroDialog("t", {
+        kind: "list",
+        message: "m",
+        title: "t",
+        items: ["a"],
+        selected: 0,
+      });
+    });
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+    await expect(b).resolves.toBeNull();
+  });
+
+  it("一覧: 範囲外の初期の選択は、先頭にする。項目が空でも OK できる（0 番目）", async () => {
+    render(<MacroDialogHost />);
+    act(() => {
+      void showMacroDialog("t", {
+        kind: "list",
+        message: "m",
+        title: "t",
+        items: ["a", "b"],
+        selected: 9,
+      });
+    });
+    const options = await screen.findAllByRole("radio");
+    expect(options[0]).toBeChecked();
+  });
 });

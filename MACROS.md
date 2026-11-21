@@ -28,23 +28,24 @@ sendln 'show version'
 
 ## 使える命令
 
-| 種類         | 命令                                                                                                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 流れ         | `if`/`elseif`/`else`/`endif`（1行の `if … then 命令` も）、`while`/`endwhile`、`until`/`enduntil`、`do [while\|until]`/`loop [while\|until]`、`for`/`next`、`break`、`continue`、`goto`、`call`/`return`、`end`、`exit`         |
-| 代入         | `a = 式`、`+=` `-=` `*=` `/=` `%=`、`inc`、`dec`                                                                                                                                                                                |
-| 送信         | `send`、`sendln`（整数は文字コードとして送る）、`sendbreak`（シリアルのみ）                                                                                                                                                     |
-| 受信         | `wait`、`waitln`、`waitregex`、`recvln`、`flushrecv`（画面制御用の文字は取り除いて照合します）                                                                                                                                  |
-| 時間         | `pause`（秒）、`mpause`（ミリ秒）                                                                                                                                                                                               |
-| ダイアログ   | `messagebox`、`yesnobox`、`inputbox`、`passwordbox`                                                                                                                                                                             |
-| 文字列・数値 | `strlen`、`strcompare`、`strconcat`、`strcopy`、`strinsert`、`strremove`、`strreplace`、`strscan`、`strmatch`、`strtrim`、`strspecial`、`str2int`、`int2str`、`tolower`、`toupper`、`code2str`、`str2code`、`sprintf`、`random` |
-| 日時         | `getdate`、`gettime`（`%Y %y %m %d %H %M %S` の書式）                                                                                                                                                                           |
-| 接続・表示   | `testlink`、`disconnect`、`closett`、`dispstr`（画面にだけ出す）                                                                                                                                                                |
-| 読み飛ばし   | `bringupbox`、`showtt`、`setdlgpos`、`setsync`、`setexitcode`                                                                                                                                                                   |
+| 種類         | 命令                                                                                                                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 流れ         | `if`/`elseif`/`else`/`endif`（1行の `if … then 命令` も）、`while`/`endwhile`、`until`/`enduntil`、`do [while\|until]`/`loop [while\|until]`、`for`/`next`、`break`、`continue`、`goto`、`call`/`return`、`end`、`exit`                                                  |
+| 代入         | `a = 式`、`+=` `-=` `*=` `/=` `%=`、`inc`、`dec`                                                                                                                                                                                                                         |
+| 送信         | `send`、`sendln`（整数は文字コードとして送る）、`sendbreak`（シリアルのみ）                                                                                                                                                                                              |
+| 受信         | `wait`、`waitln`、`waitregex`、`recvln`、`flushrecv`（画面制御用の文字は取り除いて照合します）                                                                                                                                                                           |
+| 時間         | `pause`（秒）、`mpause`（ミリ秒）                                                                                                                                                                                                                                        |
+| ダイアログ   | `messagebox`、`yesnobox`、`inputbox`、`passwordbox`                                                                                                                                                                                                                      |
+| 配列・一覧   | `intdim`、`strdim`（要素数 1〜10000。添字は 0 から。`a[i] = …`、`a[i] += …`、命令の出力先にも使える）、`strsplit`（区切りで分けて配列へ。個数は `result`）、`strjoin`（配列をつないで `inputstr` へ）、`listbox`（一覧から選ぶ。選んだ番号は `result`、キャンセルは -1） |
+| 文字列・数値 | `strlen`、`strcompare`、`strconcat`、`strcopy`、`strinsert`、`strremove`、`strreplace`、`strscan`、`strmatch`、`strtrim`、`strspecial`、`str2int`、`int2str`、`tolower`、`toupper`、`code2str`、`str2code`、`sprintf`、`random`                                          |
+| 日時         | `getdate`、`gettime`（`%Y %y %m %d %H %M %S` の書式）                                                                                                                                                                                                                    |
+| 接続・表示   | `testlink`、`disconnect`、`closett`、`dispstr`（画面にだけ出す）                                                                                                                                                                                                         |
+| 読み飛ばし   | `bringupbox`、`showtt`、`setdlgpos`、`setsync`、`setexitcode`                                                                                                                                                                                                            |
 
 ## 使えないもの（Tera Term との違い）
 
 - **安全のため使えない**: ファイル操作（`fileopen` など）、外部コマンド（`exec`）、`include`、環境変数、`connect`（接続の新規作成）、ログの操作（`logopen` など。ログは画面の「ログ記録」を使う）、クリップボード、パスワードの保存。使うと、行番号つきで「このアプリでは使えません」と表示します。
-- **未対応**: 配列（`intdim`/`strdim`）、`listbox`、`sendfile`、`waitevent`、`strjoin`/`strsplit`、`rotateleft` など。使うと「未対応の命令」と表示します。
+- **未対応**: `waitrecv`、`sendfile`、`waitevent`、`rotateleft`、2 次元以上の配列など。使うと「未対応の命令」と表示します。
 - **細かい違い**: `waitln` は、1行の中で照合します（行をまたいだ文字列には一致しません）。`strlen` は文字数（UTF-16）で、バイト数ではありません。正規表現は JavaScript のもの（Tera Term は Oniguruma）。受信の保持量は 64KB まで。実行する命令は 200 万回まで。
 
 ## 安全面

@@ -11,6 +11,13 @@ interface Fake {
   inputs: Array<string | null>;
   passwords: Array<string | null>;
   inputPrompts: Array<{ message: string; title: string; def: string }>;
+  lists: Array<{
+    message: string;
+    title: string;
+    items: string[];
+    selected: number;
+  }>;
+  picks: Array<number | null>;
   breaks: number;
   disconnected: number;
   connected: boolean;
@@ -25,6 +32,8 @@ function fake(over: Partial<TtlHost> = {}): Fake {
     inputs: [],
     passwords: [],
     inputPrompts: [],
+    lists: [],
+    picks: [],
     breaks: 0,
     disconnected: 0,
     connected: true,
@@ -42,6 +51,10 @@ function fake(over: Partial<TtlHost> = {}): Fake {
       return f.inputs.shift() ?? null;
     },
     passwordbox: async () => f.passwords.shift() ?? null,
+    listbox: async (message, title, items, selected) => {
+      f.lists.push({ message, title, items, selected });
+      return f.picks.shift() ?? null;
+    },
     disconnect: () => void (f.disconnected += 1),
     isConnected: () => f.connected,
     now: () => new Date(2024, 0, 2, 3, 4, 5),
@@ -276,6 +289,100 @@ describe("TtlRunner: 文字列と数値の命令", () => {
     const { result } = await run("strlen 5");
     expect(result).toMatchObject({ status: "error", line: 1 });
     expect((result as { message: string }).message).toContain("strlen");
+  });
+});
+
+describe("TtlRunner: 配列", () => {
+  const out = async (src: string) => (await run(src)).f.sent.join("");
+
+  it("intdim / strdim で作った配列に、代入して読む（添字は 0 から）。初期値は 0 と空文字列", async () => {
+    expect(await out("intdim a 3\na[1] = 7\nsend a[0] a[1] a[2]")).toBe(
+      "\u0000\u0007\u0000",
+    );
+    expect(
+      await out("strdim s 2\ns[0] = 'ab'\ns[1] = s[0] + 'c'\nsend s[0] s[1]"),
+    ).toBe("abcabc".slice(0, 2) + "abc");
+  });
+
+  it("複合代入・添字に式・inc / dec", async () => {
+    expect(
+      await out(
+        "intdim a 3\ni = 1\na[i + 1] = 5\na[2] += 2\ninc a[2]\nsend a[2]",
+      ),
+    ).toBe("\u0008");
+  });
+
+  it("命令の出力先に、配列の要素を使える", async () => {
+    expect(await out("strdim s 2\nstrcopy 'abcdef' 2 3 s[1]\nsend s[1]")).toBe(
+      "bcd",
+    );
+    expect(await out("intdim n 2\nstr2int n[1] '42'\nsend n[1]")).toBe("*");
+  });
+
+  it("範囲外・添字の型違い・配列でない変数・作る数の上限はエラー（行番号つき）", async () => {
+    for (const src of [
+      "intdim a 2\na[2] = 1",
+      "intdim a 2\nsend a[-1]",
+      "intdim a 2\nsend a['x']",
+      "x = 1\nsend x[0]",
+      "intdim a 0",
+      "intdim a 100000",
+      "intdim a 2\nintdim a 2",
+      "intdim a 2\nsend a",
+    ]) {
+      const { result } = await run(src);
+      expect(result, src).toMatchObject({ status: "error" });
+    }
+  });
+
+  it("strdim の配列は文字列、intdim は整数だけ入る", async () => {
+    expect((await run("intdim a 1\na[0] = 'x'")).result.status).toBe("error");
+    expect((await run("strdim a 1\na[0] = 1")).result.status).toBe("error");
+  });
+
+  it("strsplit: 区切りで分けて配列に入れ、個数を result に入れる。多すぎる分は最後にまとめる", async () => {
+    expect(
+      await out(
+        "strdim p 4\nstrsplit p 'a,b,c' ','\nsend result p[0] p[1] p[2] p[3]",
+      ),
+    ).toBe("\u0003abc");
+    expect(
+      await out("strdim p 2\nstrsplit p 'a,b,c' ','\nsend p[0] '|' p[1]"),
+    ).toBe("a|b,c");
+    expect(
+      await out("strdim p 4\nstrsplit p 'a,b,c' ',' 2\nsend result p[1]"),
+    ).toBe("\u0002b,c");
+  });
+
+  it("strjoin: 配列を区切りでつないで inputstr に入れる（個数は result）", async () => {
+    expect(
+      await out(
+        "strdim p 3\np[0]='x'\np[1]='y'\np[2]='z'\nstrjoin p '-'\nsend inputstr result",
+      ),
+    ).toBe("x-y-z\u0003");
+    expect(
+      await out(
+        "strdim p 3\np[0]='x'\np[1]='y'\nstrjoin p '-' 2\nsend inputstr",
+      ),
+    ).toBe("x-y");
+  });
+
+  it("listbox: 選んだ番号（0 から）を result に入れる。キャンセルは -1", async () => {
+    const f = fake();
+    f.picks = [1, null];
+    await run(
+      "strdim m 3\nm[0]='a'\nm[1]='b'\nm[2]='c'\nlistbox '選んで' '一覧' m\nsend result + 48\nlistbox 'x' 'y' m 2\nsend result + 50",
+      f,
+    );
+    expect(f.lists[0]).toEqual({
+      message: "選んで",
+      title: "一覧",
+      items: ["a", "b", "c"],
+      selected: 0,
+    });
+    expect(f.lists[1].selected).toBe(2);
+    // 1 → '1'、-1 + 50 → '1'
+    expect(f.sent.join("")).toBe("11");
   });
 });
 

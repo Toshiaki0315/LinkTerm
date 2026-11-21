@@ -129,4 +129,30 @@ describe("macro-dialog", () => {
   it("存在しない ID への答えは無視する", () => {
     expect(() => answerMacroDialog(999_999, true)).not.toThrow();
   });
+
+  it("一覧から選ぶ要求: 選んだ番号を返す。取り消しは null", async () => {
+    const pick = showMacroDialog("a", {
+      kind: "list",
+      message: "選んで",
+      title: "t",
+      items: ["x", "y"],
+      selected: 1,
+    });
+    expect(getCurrentMacroDialog()?.request).toMatchObject({
+      kind: "list",
+      items: ["x", "y"],
+      selected: 1,
+    });
+    answerMacroDialog(getCurrentMacroDialog()!.id, 0);
+    await expect(pick).resolves.toBe(0);
+    const cancelled = showMacroDialog("a", {
+      kind: "list",
+      message: "m",
+      title: "t",
+      items: ["x"],
+      selected: 0,
+    });
+    cancelMacroDialogs("a");
+    await expect(cancelled).resolves.toBeNull();
+  });
 });

@@ -2,7 +2,7 @@
  * 命令の引数の形。1文字が1つの引数。
  * - `e`: 式（必須） / `E`: 式（省略可）
  * - `v`: 変数名（必須。結果を入れる先） / `V`: 変数名（省略可）
- * - `l`: ラベル名
+ * - `l`: ラベル名 / `a`: 配列名
  * - `+`: 式を1つ以上 / `*`: 式を0個以上（最後に置く）
  */
 export const COMMANDS: Record<string, string> = {
@@ -46,6 +46,12 @@ export const COMMANDS: Record<string, string> = {
   inc: "v",
   dec: "v",
   random: "ve",
+  // 配列・一覧
+  intdim: "ae",
+  strdim: "ae",
+  strsplit: "aeeE",
+  strjoin: "aeE",
+  listbox: "eeaE",
   getdate: "vE",
   gettime: "vE",
   // 流れの制御

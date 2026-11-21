@@ -74,6 +74,15 @@ describe("tokenizeLine", () => {
     ]);
   });
 
+  it("配列の添字の [ ] を字句にする", () => {
+    expect(tokenizeLine("a[1]")).toEqual([
+      { t: "id", v: "a", lower: "a" },
+      { t: "op", v: "[" },
+      { t: "num", v: 1 },
+      { t: "op", v: "]" },
+    ]);
+  });
+
   it("閉じていない文字列・未対応の文字は、エラー（位置の情報つき）", () => {
     expect(() => tokenizeLine("send 'abc")).toThrow("閉じていません");
     expect(() => tokenizeLine("a = @")).toThrow("使えない文字");

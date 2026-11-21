@@ -7,12 +7,15 @@ export type Expr =
   | { k: "num"; v: number }
   | { k: "str"; v: string }
   | { k: "var"; name: string }
+  | { k: "index"; name: string; index: Expr }
   | { k: "un"; op: string; e: Expr }
   | { k: "bin"; op: string; l: Expr; r: Expr };
 
 /** 変数の読み出し。値のない変数は例外にする。 */
 export interface Env {
   get(name: string): Value;
+  /** 配列の要素（添字は 0 から）。範囲外・配列がなければ例外にする。 */
+  getIndex(name: string, index: number): Value;
 }
 
 /**
@@ -93,6 +96,17 @@ export function parseExpr(
     }
     if (tok.t === "id") {
       pos += 1;
+      const open = tokens[pos];
+      if (open && open.t === "op" && open.v === "[") {
+        pos += 1;
+        const index = expression(0);
+        const close = tokens[pos];
+        if (!close || close.t !== "op" || close.v !== "]") {
+          throw new TtlError("添字の ] が閉じていません");
+        }
+        pos += 1;
+        return { k: "index", name: tok.lower, index };
+      }
       return { k: "var", name: tok.lower };
     }
     throw new TtlError("式が必要です");
@@ -135,6 +149,13 @@ export function evalExpr(expr: Expr, env: Env): Value {
       return expr.v;
     case "var":
       return env.get(expr.name);
+    case "index": {
+      const i = evalExpr(expr.index, env);
+      if (typeof i !== "number") {
+        throw new TtlError(`配列 ${expr.name} の添字は整数が必要です`);
+      }
+      return env.getIndex(expr.name, i);
+    }
     case "un": {
       const v = evalExpr(expr.e, env);
       if (typeof v !== "number") {

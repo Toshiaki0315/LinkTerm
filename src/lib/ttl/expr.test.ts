@@ -4,10 +4,21 @@ import { evalExpr, parseExpr, type Value } from "./expr";
 import { tokenizeLine } from "./lexer";
 
 const vars: Record<string, Value> = { a: 7, b: 2, s: "abc", t: "abd" };
+const arrays: Record<string, Value[]> = {
+  arr: [10, 20, 30],
+  names: ["a", "b"],
+};
 const env = {
   get: (name: string) => {
     if (!(name in vars)) throw new TtlError(`変数 ${name} に値がありません`);
     return vars[name];
+  },
+  getIndex: (name: string, index: number) => {
+    const list = arrays[name];
+    if (!list) throw new TtlError(`配列 ${name} がありません`);
+    if (index < 0 || index >= list.length)
+      throw new TtlError(`配列 ${name} の添字が範囲外です: ${index}`);
+    return list[index];
   },
 };
 const ev = (src: string): Value => {
@@ -101,6 +112,27 @@ describe("式の評価", () => {
 
   it("変数名の大文字小文字は区別しない", () => {
     expect(ev("A + B")).toBe(9);
+  });
+});
+
+describe("配列の要素", () => {
+  it("a[i] を読む。添字は式でもよい", () => {
+    expect(ev("arr[0]")).toBe(10);
+    expect(ev("arr[1 + 1]")).toBe(30);
+    expect(ev("arr[b - 1] + arr[2]")).toBe(50);
+    expect(ev("names[1] + 'x'")).toBe("bx");
+    expect(ev("ARR[0]")).toBe(10);
+  });
+
+  it("添字が整数でない・範囲外・配列がないとエラー", () => {
+    expect(() => ev("arr['a']")).toThrow("整数");
+    expect(() => ev("arr[3]")).toThrow("範囲外");
+    expect(() => ev("arr[-1]")).toThrow("範囲外");
+    expect(() => ev("nope[0]")).toThrow("nope");
+  });
+
+  it("括弧が閉じていないとエラー", () => {
+    expect(() => parseExpr(tokenizeLine("arr[1"), 0)).toThrow("]");
   });
 });
 

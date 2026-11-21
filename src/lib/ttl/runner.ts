@@ -20,6 +20,13 @@ export interface TtlHost {
     initial: string,
   ): Promise<string | null>;
   passwordbox(message: string, title: string): Promise<string | null>;
+  /** 一覧から選ぶ。選んだ番号（0 から）。キャンセルなら `null`。 */
+  listbox(
+    message: string,
+    title: string,
+    items: string[],
+    selected: number,
+  ): Promise<number | null>;
   disconnect(): void;
   isConnected(): boolean;
   now(): Date;
@@ -45,6 +52,8 @@ const MAX_BUFFER = 65_536;
 /** この数の命令ごとに、ほかの処理（画面・停止の操作）に実行を明け渡す。 */
 const YIELD_EVERY = 2_000;
 const MAX_REGEX_CHARS = 500;
+/** 配列の要素数の上限。 */
+const MAX_ARRAY_SIZE = 10_000;
 
 class StopSignal extends Error {}
 
@@ -58,6 +67,11 @@ const NO_OP_COMMANDS = new Set([
 
 export class TtlRunner {
   private readonly vars = new Map<string, Value>();
+  /** 配列（intdim / strdim で作る）。添字は 0 から。 */
+  private readonly arrays = new Map<
+    string,
+    { type: "int" | "str"; data: Value[] }
+  >();
   private buf = "";
   private started = false;
   private stopped = false;
@@ -105,11 +119,55 @@ export class TtlRunner {
 
   private readonly env: Env = {
     get: (name) => {
+      if (this.arrays.has(name)) {
+        throw new TtlError(
+          `配列 ${name} には添字が必要です（${name}[0] のように書きます）`,
+        );
+      }
       const v = this.vars.get(name);
       if (v === undefined) throw new TtlError(`変数 ${name} に値がありません`);
       return v;
     },
+    getIndex: (name, index) => this.element(name, index).data[index],
   };
+
+  /** 配列と、範囲を確かめた添字。 */
+  private element(
+    name: string,
+    index: number,
+  ): { type: "int" | "str"; data: Value[] } {
+    const arr = this.arrays.get(name);
+    if (!arr)
+      throw new TtlError(
+        `配列 ${name} がありません（intdim / strdim で作ります）`,
+      );
+    if (!Number.isInteger(index) || index < 0 || index >= arr.data.length) {
+      throw new TtlError(
+        `配列 ${name} の添字が範囲外です: ${index}（0〜${arr.data.length - 1}）`,
+      );
+    }
+    return arr;
+  }
+
+  private setElement(name: string, index: number, value: Value): void {
+    const arr = this.element(name, index);
+    if (typeof value !== (arr.type === "int" ? "number" : "string")) {
+      throw new TtlError(
+        `配列 ${name} には${arr.type === "int" ? "整数" : "文字列"}だけ入れられます`,
+      );
+    }
+    arr.data[index] = value;
+  }
+
+  /** 変数に代入する（配列の名前そのものには代入できない）。 */
+  private setVar(name: string, value: Value): void {
+    if (this.arrays.has(name)) {
+      throw new TtlError(
+        `配列 ${name} には代入できません（${name}[0] のように書きます）`,
+      );
+    }
+    this.vars.set(name, value);
+  }
 
   async run(options: RunOptions = {}): Promise<RunResult> {
     if (this.started) throw new Error("マクロは1回しか実行できません");
@@ -280,15 +338,36 @@ export class TtlRunner {
     op: string,
     stmt: Extract<Stmt, { k: "assign" }>,
   ): void {
-    if (op === "=") {
-      this.vars.set(name, evalExpr(stmt.expr, this.env));
+    if (stmt.index) {
+      const index = this.int(evalExpr(stmt.index, this.env), "添字");
+      const value =
+        op === "="
+          ? evalExpr(stmt.expr, this.env)
+          : evalExpr(
+              {
+                k: "bin",
+                op: op.slice(0, -1),
+                l: { k: "index", name, index: stmt.index },
+                r: stmt.expr,
+              },
+              this.env,
+            );
+      this.setElement(name, index, value);
       return;
     }
-    const binary = op.slice(0, -1);
-    this.vars.set(
+    if (op === "=") {
+      this.setVar(name, evalExpr(stmt.expr, this.env));
+      return;
+    }
+    this.setVar(
       name,
       evalExpr(
-        { k: "bin", op: binary, l: { k: "var", name }, r: stmt.expr },
+        {
+          k: "bin",
+          op: op.slice(0, -1),
+          l: { k: "var", name },
+          r: stmt.expr,
+        },
         this.env,
       ),
     );
@@ -305,9 +384,16 @@ export class TtlRunner {
 
   // ---- コマンド ----
 
-  private values(args: Arg[]): Array<Value | { name: string }> {
+  private values(args: Arg[]): Array<Value | { name: string; index?: number }> {
     return args.map((a) =>
-      a.k === "name" ? { name: a.name } : evalExpr(a, this.env),
+      a.k === "name"
+        ? {
+            name: a.name,
+            index: a.index
+              ? this.int(evalExpr(a.index, this.env), "添字")
+              : undefined,
+          }
+        : evalExpr(a, this.env),
     );
   }
 
@@ -347,22 +433,43 @@ export class TtlRunner {
         throw new TtlError(`${name}: 引数 ${i + 1} は整数が必要です`);
       return x;
     };
-    const target = (i: number): string => (v[i] as { name: string }).name;
+    /** 出力先。配列の要素なら、名前と添字を1つの鍵にまとめる。 */
+    const target = (i: number): string => {
+      const t = v[i] as { name: string; index?: number };
+      return t.index === undefined ? t.name : `${t.name}\u0000${t.index}`;
+    };
+    const split = (key: string): [string, number | undefined] => {
+      const at = key.indexOf("\u0000");
+      return at < 0
+        ? [key, undefined]
+        : [key.slice(0, at), Number(key.slice(at + 1))];
+    };
+    const store = (key: string, value: Value) => {
+      const [n, idx] = split(key);
+      if (idx === undefined) this.setVar(n, value);
+      else this.setElement(n, idx, value);
+    };
+    const load = (key: string): Value | undefined => {
+      const [n, idx] = split(key);
+      if (idx === undefined) return this.vars.get(n);
+      return this.element(n, idx).data[idx];
+    };
+    const nameOf = (i: number): string => (v[i] as { name: string }).name;
     const setResult = (n: number) => void this.vars.set("result", n);
     const strVar = (i: number): string => {
-      const cur = this.vars.get(target(i));
+      const cur = load(target(i));
       if (typeof cur !== "string") {
         throw new TtlError(
-          `${name}: 変数 ${target(i)} は文字列である必要があります`,
+          `${name}: 変数 ${nameOf(i)} は文字列である必要があります`,
         );
       }
       return cur;
     };
     const intVar = (i: number): number => {
-      const cur = this.vars.get(target(i));
+      const cur = load(target(i));
       if (typeof cur !== "number") {
         throw new TtlError(
-          `${name}: 変数 ${target(i)} は整数である必要があります`,
+          `${name}: 変数 ${nameOf(i)} は整数である必要があります`,
         );
       }
       return cur;
@@ -466,22 +573,22 @@ export class TtlRunner {
         return;
       case "inc":
       case "dec":
-        this.vars.set(target(0), (intVar(0) + (name === "inc" ? 1 : -1)) | 0);
+        store(target(0), (intVar(0) + (name === "inc" ? 1 : -1)) | 0);
         return;
       case "random": {
         const max = num(1);
         if (max < 1) throw new TtlError("random: 上限は 1 以上が必要です");
-        this.vars.set(target(0), this.host.random(max));
+        store(target(0), this.host.random(max));
         return;
       }
       case "getdate":
-        this.vars.set(
+        store(
           target(0),
           formatStrftime(v.length > 1 ? str(1) : "%Y-%m-%d", this.host.now()),
         );
         return;
       case "gettime":
-        this.vars.set(
+        store(
           target(0),
           formatStrftime(v.length > 1 ? str(1) : "%H:%M:%S", this.host.now()),
         );
@@ -496,7 +603,7 @@ export class TtlRunner {
         return;
       }
       case "strconcat":
-        this.vars.set(target(0), strVar(0) + str(1));
+        store(target(0), strVar(0) + str(1));
         return;
       case "strcopy": {
         const s = str(0);
@@ -504,7 +611,7 @@ export class TtlRunner {
         const len = num(2);
         if (index < 1 || len < 0)
           throw new TtlError("strcopy: 位置は 1 以上、長さは 0 以上が必要です");
-        this.vars.set(target(3), s.slice(index - 1, index - 1 + len));
+        store(target(3), s.slice(index - 1, index - 1 + len));
         return;
       }
       case "strinsert": {
@@ -512,7 +619,7 @@ export class TtlRunner {
         const index = num(1);
         if (index < 1) throw new TtlError("strinsert: 位置は 1 以上が必要です");
         const at = Math.min(index - 1, cur.length);
-        this.vars.set(target(0), cur.slice(0, at) + str(2) + cur.slice(at));
+        store(target(0), cur.slice(0, at) + str(2) + cur.slice(at));
         return;
       }
       case "strremove": {
@@ -523,10 +630,7 @@ export class TtlRunner {
           throw new TtlError(
             "strremove: 位置は 1 以上、長さは 0 以上が必要です",
           );
-        this.vars.set(
-          target(0),
-          cur.slice(0, index - 1) + cur.slice(index - 1 + len),
-        );
+        store(target(0), cur.slice(0, index - 1) + cur.slice(index - 1 + len));
         return;
       }
       case "strreplace": {
@@ -545,7 +649,7 @@ export class TtlRunner {
             (_, d: string) => groups[Number(d)] ?? "",
           );
         });
-        this.vars.set(target(0), head + replaced);
+        store(target(0), head + replaced);
         return;
       }
       case "strscan":
@@ -564,17 +668,17 @@ export class TtlRunner {
         while (a < b && chars.includes(s[a])) a += 1;
         while (b > a && chars.includes(s[b - 1])) b -= 1;
         s = s.slice(a, b);
-        this.vars.set(target(0), s);
+        store(target(0), s);
         return;
       }
       case "strspecial":
-        this.vars.set(target(0), strspecial(strVar(0)));
+        store(target(0), strspecial(strVar(0)));
         return;
       case "str2int": {
         const s = str(1).trim();
         const n = /^-?\d+$/.test(s) ? Number(s) : NaN;
         if (Number.isInteger(n) && n >= -2147483648 && n <= 2147483647) {
-          this.vars.set(target(0), n);
+          store(target(0), n);
           setResult(1);
         } else {
           setResult(0);
@@ -582,31 +686,103 @@ export class TtlRunner {
         return;
       }
       case "int2str":
-        this.vars.set(target(0), String(num(1)));
+        store(target(0), String(num(1)));
         return;
       case "tolower":
-        this.vars.set(target(0), str(1).toLowerCase());
+        store(target(0), str(1).toLowerCase());
         return;
       case "toupper":
-        this.vars.set(target(0), str(1).toUpperCase());
+        store(target(0), str(1).toUpperCase());
         return;
       case "code2str":
-        this.vars.set(target(0), this.charOf(name, num(1)));
+        store(target(0), this.charOf(name, num(1)));
         return;
       case "str2code": {
         const s = str(1);
-        this.vars.set(
-          target(0),
-          s.length === 0 ? 0 : (s.codePointAt(0) as number),
-        );
+        store(target(0), s.length === 0 ? 0 : (s.codePointAt(0) as number));
         return;
       }
       case "sprintf":
         this.vars.set("inputstr", sprintf(str(0), v.slice(1) as Value[], name));
         return;
+      case "intdim":
+      case "strdim": {
+        const arrName = nameOf(0);
+        const size = num(1);
+        if (!(size >= 1 && size <= MAX_ARRAY_SIZE)) {
+          throw new TtlError(
+            `${name}: 要素数は 1〜${MAX_ARRAY_SIZE} にしてください`,
+          );
+        }
+        if (this.arrays.has(arrName) || this.vars.has(arrName)) {
+          throw new TtlError(`${name}: ${arrName} は、すでに使われています`);
+        }
+        const isInt = name === "intdim";
+        this.arrays.set(arrName, {
+          type: isInt ? "int" : "str",
+          data: Array.from({ length: size }, () => (isInt ? 0 : "")),
+        });
+        return;
+      }
+      case "strsplit": {
+        const arr = this.strArray(name, nameOf(0));
+        const text = str(1);
+        const delimiter = str(2);
+        if (delimiter === "")
+          throw new TtlError("strsplit: 区切りは1文字以上にしてください");
+        const max = Math.max(
+          1,
+          Math.min(v.length > 3 ? num(3) : arr.data.length, arr.data.length),
+        );
+        const parts: string[] = [];
+        let rest = text;
+        while (parts.length < max - 1) {
+          const at = rest.indexOf(delimiter);
+          if (at < 0) break;
+          parts.push(rest.slice(0, at));
+          rest = rest.slice(at + delimiter.length);
+        }
+        parts.push(rest);
+        for (let i = 0; i < arr.data.length; i++) arr.data[i] = parts[i] ?? "";
+        setResult(parts.length);
+        return;
+      }
+      case "strjoin": {
+        const arr = this.strArray(name, nameOf(0));
+        const count = Math.max(
+          0,
+          Math.min(v.length > 2 ? num(2) : arr.data.length, arr.data.length),
+        );
+        this.vars.set("inputstr", arr.data.slice(0, count).join(str(1)));
+        setResult(count);
+        return;
+      }
+      case "listbox": {
+        const arr = this.strArray(name, nameOf(2));
+        const selected = v.length > 3 ? num(3) : 0;
+        const picked = await this.guard(
+          this.host.listbox(str(0), str(1), arr.data as string[], selected),
+        );
+        setResult(picked === null ? -1 : picked);
+        return;
+      }
       default:
         throw new TtlError(`未対応の命令です: ${name}`);
     }
+  }
+
+  /** 文字列の配列（strdim で作ったもの）。 */
+  private strArray(
+    command: string,
+    name: string,
+  ): { type: "int" | "str"; data: Value[] } {
+    const arr = this.arrays.get(name);
+    if (!arr || arr.type !== "str") {
+      throw new TtlError(
+        `${command}: ${name} は strdim で作った配列にしてください`,
+      );
+    }
+    return arr;
   }
 
   private charOf(name: string, code: number): string {

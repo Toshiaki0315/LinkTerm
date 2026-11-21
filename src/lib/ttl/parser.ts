@@ -5,7 +5,7 @@ import { tokenizeLine, type Token } from "./lexer";
 
 export const MAX_SOURCE_CHARS = 100_000;
 
-export type Arg = Expr | { k: "name"; name: string };
+export type Arg = Expr | { k: "name"; name: string; index?: Expr };
 
 interface Base {
   /** 元のスクリプトの行番号（1 から）。 */
@@ -16,7 +16,7 @@ export type LoopTest = { kind: "while" | "until"; cond: Expr } | null;
 
 export type Stmt = Base &
   (
-    | { k: "assign"; name: string; op: string; expr: Expr }
+    | { k: "assign"; name: string; index?: Expr; op: string; expr: Expr }
     | { k: "cmd"; name: string; args: Arg[] }
     | { k: "label"; name: string }
     | { k: "if"; cond: Expr; elseTo: number; endTo: number }
@@ -67,9 +67,7 @@ function readArgs(
 ): Arg[] {
   const args: Arg[] = [];
   let pos = from;
-  const required = [...spec].filter(
-    (c) => c === "e" || c === "v" || c === "l" || c === "+",
-  ).length;
+  const required = [...spec].filter((c) => "evla+".includes(c)).length;
   const variadic = spec.endsWith("+") || spec.endsWith("*");
   const fixed = variadic ? spec.length - 1 : spec.length;
   const countError = () =>
@@ -91,6 +89,23 @@ function readArgs(
       const tok = tokens[pos];
       if (tok.t !== "id")
         throw new TtlError(`${name} の引数には変数名を書いてください`);
+      pos += 1;
+      const open = tokens[pos];
+      if (open && open.t === "op" && open.v === "[") {
+        const r = readExpr(tokens, pos + 1);
+        const close = tokens[r.pos];
+        if (!close || close.t !== "op" || close.v !== "]") {
+          throw new TtlError("添字の ] が閉じていません");
+        }
+        args.push({ k: "name", name: tok.lower, index: r.expr });
+        pos = r.pos + 1;
+      } else {
+        args.push({ k: "name", name: tok.lower });
+      }
+    } else if (kind === "a") {
+      const tok = tokens[pos];
+      if (tok.t !== "id")
+        throw new TtlError(`${name} の引数には配列名を書いてください`);
       args.push({ k: "name", name: tok.lower });
       pos += 1;
     } else if (kind === "l") {
@@ -145,6 +160,28 @@ function parseSimple(tokens: Token[], line: number): Stmt {
   const first = tokens[0];
   if (first.t !== "id") throw new TtlError("命令または変数が必要です");
   const second = tokens[1];
+  if (second && second.t === "op" && second.v === "[") {
+    const r = readExpr(tokens, 2);
+    const close = tokens[r.pos];
+    if (!close || close.t !== "op" || close.v !== "]") {
+      throw new TtlError("添字の ] が閉じていません");
+    }
+    const assign = tokens[r.pos + 1];
+    if (!assign || assign.t !== "op" || !ASSIGN_OPS.has(assign.v)) {
+      throw new TtlError("配列の要素には、代入（=）が必要です");
+    }
+    const rhs = readExpr(tokens, r.pos + 2);
+    if (rhs.pos < tokens.length)
+      throw new TtlError("式のあとに余分なものがあります");
+    return {
+      k: "assign",
+      name: first.lower,
+      index: r.expr,
+      op: assign.v,
+      expr: rhs.expr,
+      line,
+    };
+  }
   if (second && second.t === "op" && ASSIGN_OPS.has(second.v)) {
     const { expr, pos } = readExpr(tokens, 2);
     if (pos < tokens.length)

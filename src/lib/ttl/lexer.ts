@@ -38,6 +38,8 @@ const OPERATORS = [
   "=",
   "(",
   ")",
+  "[",
+  "]",
 ];
 
 const isDigit = (c: string) => c >= "0" && c <= "9";
