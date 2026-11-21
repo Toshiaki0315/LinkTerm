@@ -22,6 +22,8 @@ const api = vi.hoisted(() => ({
   saveHighlightRules: vi.fn(),
   getSnippets: vi.fn(),
   saveSnippets: vi.fn(),
+  getMacros: vi.fn(),
+  saveMacros: vi.fn(),
   getSettings: vi.fn(),
   getSessionState: vi.fn(),
   saveSessionState: vi.fn(),
@@ -131,6 +133,8 @@ beforeEach(() => {
   api.saveHighlightRules.mockImplementation(async (r) => r);
   api.getSnippets.mockResolvedValue([]);
   api.saveSnippets.mockImplementation(async (s) => s);
+  api.getMacros.mockResolvedValue([]);
+  api.saveMacros.mockImplementation(async (m) => m);
   api.getSettings.mockResolvedValue(DEFAULT_SETTINGS);
   api.getSessionState.mockResolvedValue({ tabs: [], active: null });
   api.saveSessionState.mockResolvedValue(undefined);
@@ -364,6 +368,52 @@ describe("App", () => {
       expect(api.saveSnippets.mock.calls[0][0]).toMatchObject([
         { name: "再起動", text: "reboot", sendEnter: true, lineDelayMs: 0 },
       ]);
+    });
+  });
+
+  describe("マクロ", () => {
+    it("⚡のメニューから管理を開き、追加すると保存する。保存済みは一覧に出る", async () => {
+      const user = userEvent.setup();
+      api.getMacros.mockResolvedValue([
+        { id: "m0", name: "既存", text: "send 'a'" },
+      ]);
+      render(<App />);
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      await user.click(
+        await screen.findByRole("menuitem", { name: "マクロを管理…" }),
+      );
+      expect(await screen.findByText("既存")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "追加" }));
+      await user.type(screen.getByLabelText("名前"), "ログイン");
+      await user.type(screen.getByLabelText("スクリプト"), "sendln 'admin'");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(api.saveMacros).toHaveBeenCalled());
+      expect(api.saveMacros.mock.calls[0][0]).toMatchObject([
+        { id: "m0", name: "既存" },
+        { name: "ログイン", text: "sendln 'admin'" },
+      ]);
+    });
+
+    it("コマンドパレットの「マクロを管理…」でも開く", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+      await user.type(
+        await screen.findByRole("combobox", { name: "コマンドを検索" }),
+        "マクロを管理",
+      );
+      await user.keyboard("{Enter}");
+      expect(
+        await screen.findByRole("heading", { name: "マクロ" }),
+      ).toBeInTheDocument();
+    });
+
+    it("読み込みに失敗したら、お知らせを出す", async () => {
+      api.getMacros.mockRejectedValue(new Error("壊れています"));
+      render(<App />);
+      expect(
+        await screen.findByText(/マクロを読み込めません: 壊れています/),
+      ).toBeInTheDocument();
     });
   });
 

@@ -5,6 +5,7 @@ pub mod export;
 pub mod fonts;
 pub mod highlights;
 pub mod keybindings;
+pub mod macros;
 pub mod manager;
 pub mod menu;
 pub mod profiles;
@@ -74,6 +75,9 @@ pub fn run() {
             commands::save_highlight_rules,
             commands::get_snippets,
             commands::save_snippets,
+            commands::get_macros,
+            commands::save_macros,
+            commands::read_macro_file,
             commands::get_recent_connections,
             commands::save_recent_connections,
             commands::get_settings,

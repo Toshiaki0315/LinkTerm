@@ -15,6 +15,7 @@ use crate::approvals::{ApprovalBook, HostKeyRequest};
 use crate::fonts::{FontError, FontFamily};
 use crate::highlights::{HighlightError, HighlightRule, HighlightStore};
 use crate::keybindings::{KeyBinding, KeybindingError, KeybindingStore};
+use crate::macros::{Macro, MacroError, MacroStore};
 use crate::manager::{DisplayMode, EventSink, ManagerError, SessionManager};
 use crate::profiles::{Placement, Profile, ProfileError, ProfileStore};
 use crate::recent::{RecentConnection, RecentError, RecentStore};
@@ -80,6 +81,8 @@ pub enum CommandError {
     Recent(#[from] RecentError),
     #[error(transparent)]
     Snippet(#[from] SnippetError),
+    #[error(transparent)]
+    Macro(#[from] MacroError),
     #[error(transparent)]
     Sftp(#[from] crate::sftp::SftpError),
     #[error(transparent)]
@@ -196,6 +199,7 @@ pub struct AppState {
     session_state: SessionStateStore,
     recent: RecentStore,
     snippets: SnippetStore,
+    macros: MacroStore,
     highlights: HighlightStore,
     keybindings: KeybindingStore,
 }
@@ -219,6 +223,7 @@ impl AppState {
             session_state: SessionStateStore::new(dir.join("session_state.json")),
             recent: RecentStore::new(dir.join("recent.json")),
             snippets: SnippetStore::new(dir.join("snippets.json")),
+            macros: MacroStore::new(dir.join("macros.json")),
             highlights: HighlightStore::new(dir.join("highlights.json")),
             keybindings: KeybindingStore::new(dir.join("keybindings.json")),
         })
@@ -715,6 +720,26 @@ pub fn save_snippets(
     snippets: Vec<Snippet>,
 ) -> CommandResult<Vec<Snippet>> {
     Ok(state.snippets.save(snippets)?)
+}
+
+/// 保存済みのマクロ。
+#[tauri::command]
+pub fn get_macros(state: State<'_, AppState>) -> CommandResult<Vec<Macro>> {
+    Ok(state.macros.load()?)
+}
+
+/// マクロを検証して保存し、保存した内容を返す。
+#[tauri::command]
+pub fn save_macros(state: State<'_, AppState>, macros: Vec<Macro>) -> CommandResult<Vec<Macro>> {
+    Ok(state.macros.save(macros)?)
+}
+
+/// ユーザーが選んだ `.ttl` ファイルを読む（UTF-8 または Shift_JIS）。
+#[tauri::command]
+pub fn read_macro_file(path: String) -> CommandResult<String> {
+    Ok(crate::macros::read_script_file(std::path::Path::new(
+        &path,
+    ))?)
 }
 
 /// 最近使った接続先（新しい順）。

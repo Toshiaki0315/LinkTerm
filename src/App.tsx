@@ -15,6 +15,7 @@ import { ProfilesDialog } from "./components/ProfilesDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { CommandPalette } from "./components/CommandPalette";
 import { HighlightsDialog } from "./components/HighlightsDialog";
+import { MacrosDialog } from "./components/MacrosDialog";
 import { SnippetsDialog } from "./components/SnippetsDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
 import { TabBar } from "./components/TabBar";
@@ -56,6 +57,7 @@ import {
   type Bindings,
 } from "./lib/shortcuts";
 import { cn } from "./lib/utils";
+import type { Macro } from "./lib/macros";
 import { runSnippet, type Snippet } from "./lib/snippets";
 import type { SplitDir } from "./lib/layout";
 import { readSplit, serializeTab } from "./lib/session-layout";
@@ -80,8 +82,10 @@ import {
   getHighlightRules,
   getKeybindings,
   saveKeybindings,
+  getMacros,
   getSnippets,
   saveHighlightRules,
+  saveMacros,
   saveSnippets,
   saveProfile,
   saveRecentConnections,
@@ -257,6 +261,27 @@ function App() {
 
   const onSaveSnippets = useCallback(async (next: Snippet[]) => {
     setSnippets(await saveSnippets(next));
+  }, []);
+
+  const [macros, setMacros] = useState<Macro[]>([]);
+  const [macrosOpen, setMacrosOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMacros()
+      .then((list) => {
+        if (!cancelled) setMacros(list);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setNotice(`マクロを読み込めません: ${describe(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSaveMacros = useCallback(async (next: Macro[]) => {
+    setMacros(await saveMacros(next));
   }, []);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -582,6 +607,7 @@ function App() {
     dialogOpen ||
     settingsOpen ||
     snippetsOpen ||
+    macrosOpen ||
     highlightsOpen ||
     paletteOpen ||
     shortcutsOpen ||
@@ -882,6 +908,7 @@ function App() {
           setBroadcast,
           runSnippet: onRunSnippet,
           manageSnippets: () => setSnippetsOpen(true),
+          manageMacros: () => setMacrosOpen(true),
           manageHighlights: () => setHighlightsOpen(true),
           openRecent: onOpenRecent,
           clearRecents: onClearRecents,
@@ -951,6 +978,7 @@ function App() {
         snippets={snippets}
         onRunSnippet={onRunSnippet}
         onManageSnippets={() => setSnippetsOpen(true)}
+        onManageMacros={() => setMacrosOpen(true)}
         onManageHighlights={() => setHighlightsOpen(true)}
         broadcast={broadcast}
         paneMenu={paneMenu}
@@ -1064,6 +1092,12 @@ function App() {
         onOpenChange={setSnippetsOpen}
         snippets={snippets}
         onSave={onSaveSnippets}
+      />
+      <MacrosDialog
+        open={macrosOpen}
+        onOpenChange={setMacrosOpen}
+        macros={macros}
+        onSave={onSaveMacros}
       />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
     </div>

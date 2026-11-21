@@ -32,7 +32,10 @@ import {
   getKeybindings,
   saveKeybindings,
   saveHighlightRules,
+  getMacros,
   getSnippets,
+  readMacroFile,
+  saveMacros,
   saveSnippets,
   listProfiles,
   saveRecentConnections,
@@ -251,6 +254,21 @@ describe("スニペット", () => {
     invoke.mockResolvedValueOnce([s]);
     await expect(saveSnippets([s])).resolves.toEqual([s]);
     expect(invoke).toHaveBeenCalledWith("save_snippets", { snippets: [s] });
+  });
+
+  it("マクロの取得・保存・.ttl ファイルの読み込み", async () => {
+    const m = { id: "m1", name: "ログイン", text: "sendln 'a'" };
+    invoke.mockResolvedValueOnce([m]);
+    await expect(getMacros()).resolves.toEqual([m]);
+    expect(invoke).toHaveBeenCalledWith("get_macros");
+    invoke.mockResolvedValueOnce([m]);
+    await expect(saveMacros([m])).resolves.toEqual([m]);
+    expect(invoke).toHaveBeenCalledWith("save_macros", { macros: [m] });
+    invoke.mockResolvedValueOnce("sendln 'x'");
+    await expect(readMacroFile("/a/b.ttl")).resolves.toBe("sendln 'x'");
+    expect(invoke).toHaveBeenCalledWith("read_macro_file", {
+      path: "/a/b.ttl",
+    });
   });
 });
 

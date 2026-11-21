@@ -25,6 +25,7 @@ export interface PaletteActions {
   setBroadcast(mode: BroadcastMode): void;
   runSnippet(snippet: Snippet): void;
   manageSnippets(): void;
+  manageMacros(): void;
   manageHighlights(): void;
   openRecent(entry: RecentEntry): void;
   clearRecents(): void;
@@ -159,6 +160,9 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
     keywords: "shortcut keybinding キー",
   });
   add("スニペット", "snippets", "スニペットを管理…", a.manageSnippets);
+  add("マクロ", "macros", "マクロを管理…", a.manageMacros, {
+    keywords: "macro ttl teraterm スクリプト",
+  });
   add(
     "アプリ",
     "highlights",

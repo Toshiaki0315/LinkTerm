@@ -438,6 +438,26 @@ describe("TabBar", () => {
       expect(onManageSnippets).toHaveBeenCalled();
     });
 
+    it("「マクロを管理…」は、渡されたときだけ、スニペットの管理の下に出る", async () => {
+      const user = userEvent.setup();
+      const onManageMacros = vi.fn();
+      renderBar({ onManageSnippets: () => {}, onManageMacros });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      const labels = screen.getAllByRole("menuitem").map((i) => i.textContent);
+      expect(labels.slice(-2)).toEqual(["スニペットを管理…", "マクロを管理…"]);
+      await user.click(screen.getByRole("menuitem", { name: "マクロを管理…" }));
+      expect(onManageMacros).toHaveBeenCalled();
+    });
+
+    it("onManageMacros がなければ、「マクロを管理…」を出さない", async () => {
+      const user = userEvent.setup();
+      renderBar({ onManageSnippets: () => {} });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      expect(
+        screen.queryByRole("menuitem", { name: "マクロを管理…" }),
+      ).toBeNull();
+    });
+
     it("タブがないときは送れない（項目は無効）", async () => {
       const user = userEvent.setup();
       renderBar({ tabs: [], activeId: null });

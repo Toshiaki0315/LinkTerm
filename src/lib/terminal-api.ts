@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { HighlightRule } from "./highlight";
+import type { Macro } from "./macros";
 import type { Snippet } from "./snippets";
 import type { Settings } from "./settings";
 
@@ -229,6 +230,17 @@ export const getSnippets = () => invoke<Snippet[]>("get_snippets");
 /** スニペットを保存する。検証後の内容が返る。 */
 export const saveSnippets = (snippets: Snippet[]) =>
   invoke<Snippet[]>("save_snippets", { snippets });
+
+/** 保存済みのマクロ。 */
+export const getMacros = () => invoke<Macro[]>("get_macros");
+
+/** マクロを保存する。検証後の内容が返る。 */
+export const saveMacros = (macros: Macro[]) =>
+  invoke<Macro[]>("save_macros", { macros });
+
+/** ユーザーが選んだ `.ttl` ファイルの内容（UTF-8 または Shift_JIS）。 */
+export const readMacroFile = (path: string) =>
+  invoke<string>("read_macro_file", { path });
 
 /** 最近使った接続先（新しい順）。 */
 export const getRecentConnections = () =>

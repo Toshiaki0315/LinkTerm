@@ -43,6 +43,8 @@ interface Props {
   onRunSnippet?: (snippet: Snippet) => void;
   /** 「スニペットを管理…」。 */
   onManageSnippets?: () => void;
+  /** マクロの管理を開く。渡さなければ、メニューに出さない。 */
+  onManageMacros?: () => void;
   /** キーワードの強調・通知の設定を開く。渡さなければボタンを出さない。 */
   onManageHighlights?: () => void;
   /** 同時入力の範囲と、その変更。`onBroadcastChange` を渡さなければボタンを出さない。 */
@@ -137,6 +139,7 @@ export function TabBar({
   snippets = [],
   onRunSnippet,
   onManageSnippets,
+  onManageMacros,
   onManageHighlights,
   broadcast = "off",
   onBroadcastChange,
@@ -432,6 +435,9 @@ export function TabBar({
               separatorBefore: snippets.length > 0,
               onSelect: onManageSnippets,
             },
+            ...(onManageMacros
+              ? [{ label: "マクロを管理…", onSelect: onManageMacros }]
+              : []),
           ]}
           onClose={() => setSnippetMenu(null)}
         />

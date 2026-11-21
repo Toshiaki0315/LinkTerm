@@ -33,6 +33,7 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     runSnippet: vi.fn(),
     manageSnippets: vi.fn(),
     manageHighlights: vi.fn(),
+    manageMacros: vi.fn(),
     openRecent: vi.fn(),
     clearRecents: vi.fn(),
     openProfile: vi.fn(),
@@ -139,6 +140,13 @@ describe("buildPaletteCommands", () => {
     expect(a.setColor).toHaveBeenNthCalledWith(2, undefined);
     expect(a.manageSnippets).toHaveBeenCalled();
     expect(a.manageHighlights).toHaveBeenCalled();
+  });
+
+  it("「マクロを管理…」を出し、選ぶとマクロの管理を開く", () => {
+    const { byId, a } = build();
+    expect(byId("macros").title).toBe("マクロを管理…");
+    byId("macros").run();
+    expect(a.manageMacros).toHaveBeenCalled();
   });
 
   it("同時入力は、範囲ごとの項目を出し、現在の範囲に印を付ける", () => {
