@@ -621,3 +621,35 @@ test.describe("マクロの実行", () => {
     ).toBeDisabled();
   });
 });
+
+test.describe("接続後のマクロ", () => {
+  test("接続設定で選んだマクロが、接続できたら実行される", async ({ page }) => {
+    await openApp(page, {
+      macros: [macro("m1", "root", "sendln 'sudo -i'")],
+    });
+    await page.getByRole("button", { name: "新しい接続" }).click();
+    await page
+      .getByLabel("接続後に実行するマクロ")
+      .selectOption({ label: "root" });
+    await page.getByRole("button", { name: "接続", exact: true }).click();
+    await expect.poll(() => written(page)).toBe("sudo -i\r");
+  });
+
+  test("指定のマクロが無いときは、理由を表示する", async ({ page }) => {
+    await openApp(page, {
+      profiles: [
+        {
+          id: "p1",
+          name: "ローカル",
+          values: { type: "local", connectMacro: "消えた" },
+        },
+      ],
+    });
+    await page.getByRole("button", { name: "新しい接続" }).click();
+    await page.getByLabel("保存済みの接続").selectOption({ label: "ローカル" });
+    await page.getByRole("button", { name: "接続", exact: true }).click();
+    await expect(
+      page.getByText("接続後のマクロ「消えた」が見つかりません"),
+    ).toBeVisible();
+  });
+});

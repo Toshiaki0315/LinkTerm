@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { connectionSchema } from "../lib/connection-schema";
@@ -770,6 +770,61 @@ describe("ConnectionDialog", () => {
     await user.click(screen.getByRole("button", { name: "接続" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0][0].tabColor).toBeUndefined();
+  });
+
+  describe("接続後に実行するマクロ", () => {
+    const macros = [
+      { id: "a", name: "sudo", text: "sendln 'sudo -i'" },
+      { id: "b", name: "ログ確認", text: "sendln 'tail -f log'" },
+    ];
+    const renderWith = (list = macros) => {
+      const onSubmit = vi.fn();
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={() => {}}
+          onSubmit={onSubmit}
+          macros={list}
+        />,
+      );
+      return { user: userEvent.setup(), onSubmit };
+    };
+
+    it("保存済みのマクロから選んで接続でき、選ばなければ指定なし", async () => {
+      const { user, onSubmit } = renderWith();
+      const select = screen.getByLabelText("接続後に実行するマクロ");
+      expect(
+        within(select)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ).toEqual(["なし", "sudo", "ログ確認"]);
+      await user.selectOptions(select, "ログ確認");
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].connectMacro).toBe("ログ確認");
+    });
+
+    it("「なし」のままなら、指定なし", async () => {
+      const { user, onSubmit } = renderWith();
+      await user.click(screen.getByRole("button", { name: "接続" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+      expect(onSubmit.mock.calls[0][0].connectMacro).toBeUndefined();
+    });
+
+    it("保存した指定のマクロが無くなっていても、その名前を残して知らせる", () => {
+      render(
+        <ConnectionDialog
+          open
+          onOpenChange={() => {}}
+          onSubmit={() => {}}
+          initialValues={{ connectMacro: "消えた" }}
+          macros={macros}
+        />,
+      );
+      expect(
+        screen.getByRole("option", { name: "消えた（見つかりません）" }),
+      ).toBeInTheDocument();
+    });
   });
 
   describe("最近使った接続", () => {

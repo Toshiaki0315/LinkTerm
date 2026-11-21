@@ -6,6 +6,7 @@ import type { Appearance, AutoReconnect } from "../lib/settings";
 import type { HighlightRule } from "../lib/highlight";
 import { backgroundFor } from "../lib/themes";
 import { cn } from "../lib/utils";
+import type { Macro } from "../lib/macros";
 import { TerminalTab } from "./TerminalTab";
 
 interface Props {
@@ -25,6 +26,8 @@ interface Props {
   onBroadcast?: (paneId: string, data: string) => void;
   /** マクロの `sendbroadcast`: すべてのペインへ送る。 */
   onBroadcastAll?: (data: string) => void;
+  /** 保存しているマクロ（接続後に実行するマクロの検索用）。 */
+  macros?: Macro[];
   /** マクロの `settitle`: タブの名前を変える。 */
   onRenameTab?: (tabId: string, title: string) => void;
   /** キーワードのハイライト規則。 */
@@ -59,6 +62,7 @@ export function TerminalWorkspace({
   onAttention,
   onBroadcast,
   onBroadcastAll,
+  macros,
   onRenameTab,
   onActivatePane,
   onResizeSplit,
@@ -175,6 +179,7 @@ export function TerminalWorkspace({
                       }
                       onAttention={onAttention && (() => onAttention(tab.id))}
                       onBroadcastAll={onBroadcastAll}
+                      macros={macros}
                       onSetTitle={
                         onRenameTab && ((title) => onRenameTab(tab.id, title))
                       }

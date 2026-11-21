@@ -27,6 +27,7 @@ import type { Appearance, AutoReconnect } from "../lib/settings";
 import { copyText, pasteText } from "../lib/clipboard";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { SearchBar } from "./SearchBar";
+import type { Macro } from "../lib/macros";
 import { SftpDialog } from "./SftpDialog";
 import { LogDialog } from "./LogDialog";
 import { Button } from "./ui/button";
@@ -68,6 +69,8 @@ interface Props {
   onSetTitle?: (title: string) => void;
   /** マクロの `sendbroadcast`: すべてのペインへ送る。 */
   onBroadcastAll?: (data: string) => void;
+  /** 保存しているマクロ。接続設定の「接続後に実行するマクロ」を名前で探すのに使う。 */
+  macros?: Macro[];
   /** 通知する規則に一致した（このペインが見えていないとき）。タブの注目表示に使う。 */
   onAttention?: () => void;
   /** 画面を分割する（右クリックメニュー）。省略すると項目を出さない。 */
@@ -96,6 +99,7 @@ export function TerminalTab({
   onBroadcast,
   onSetTitle,
   onBroadcastAll,
+  macros,
   onSplit,
   onClosePane,
 }: Props) {
@@ -114,6 +118,13 @@ export function TerminalTab({
   const macroCounter = useRef(0);
   /** マクロの `enablekeyb 0` の間は false（ユーザーのキー入力を送らない）。 */
   const keyboardEnabled = useRef(true);
+  /** 接続後のマクロの実行待ち。接続の状態が画面に反映されてから実行する。 */
+  const connectMacroPending = useRef(false);
+  const [connectKick, setConnectKick] = useState(0);
+  const requestConnectMacro = useCallback(() => {
+    connectMacroPending.current = true;
+    setConnectKick((k) => k + 1);
+  }, []);
 
   /** 通知する規則の照合（規則が変わったら作り直す）。 */
   const matcherRef = useRef<OutputMatcher | null>(null);
@@ -308,7 +319,10 @@ export function TerminalTab({
             write(data).catch((e: unknown) =>
               console.error("自動ログインの送信に失敗しました:", e),
             ),
-          onDone: () => note("自動ログインを完了しました"),
+          onDone: () => {
+            note("自動ログインを完了しました");
+            requestConnectMacro();
+          },
           onTimeout: (waiting) =>
             note(`自動ログイン: 「${waiting}」が表示されないため中断しました`),
         });
@@ -316,10 +330,14 @@ export function TerminalTab({
       }
     }
     const connected = await start(request);
-    if (!runner || loginRef.current !== runner) return;
+    if (!runner) {
+      if (connected) requestConnectMacro();
+      return;
+    }
+    if (loginRef.current !== runner) return;
     if (connected) runner.begin();
     else runner.stop();
-  }, [values, start, write, note]);
+  }, [values, start, write, note, requestConnectMacro]);
 
   useEffect(() => {
     // 切断・エラーになったら、自動ログインは続けない。
@@ -533,6 +551,35 @@ export function TerminalTab({
   useEffect(() => {
     macroActionRef.current = { runMacro, stopMacro };
   });
+
+  /** 接続設定で指定されたマクロを、名前で探して実行する。 */
+  const runConnectMacro = useCallback(
+    (name: string, list: Macro[] | undefined) => {
+      const macro = list?.find((m) => m.name === name);
+      if (macro) {
+        runMacro(macro);
+      } else {
+        setMacroNotice({
+          error: true,
+          text: `接続後のマクロ「${name}」が見つかりません`,
+        });
+      }
+    },
+    [runMacro],
+  );
+
+  // 接続できた（自動ログインがあれば、その完了後の）ら、指定のマクロを実行する。
+  // 状態の更新はタイマーの中で行う（StrictMode の疑似アンマウントで取りこぼさないよう、
+  // 実行待ちの印はタイマーの中で消す）。
+  useEffect(() => {
+    if (!connectMacroPending.current || status !== "connected") return;
+    const timer = setTimeout(() => {
+      if (!connectMacroPending.current) return;
+      connectMacroPending.current = false;
+      if (values.connectMacro) runConnectMacro(values.connectMacro, macros);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [connectKick, status, values.connectMacro, macros, runConnectMacro]);
 
   /** このペインへ送る（ローカルエコーを含む）。同時入力は含まない。 */
   const sendDirect = useCallback(

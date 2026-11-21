@@ -816,3 +816,42 @@ describe("自動ログイン（Telnet / シリアル）", () => {
     );
   });
 });
+
+describe("接続後に実行するマクロ", () => {
+  it("未指定・空は指定なし（実行しない）。名前は前後の空白を除いて受け付ける", () => {
+    expect(
+      connectionSchema.parse({ type: "local" }).connectMacro,
+    ).toBeUndefined();
+    expect(
+      connectionSchema.parse({ type: "local", connectMacro: "  " })
+        .connectMacro,
+    ).toBeUndefined();
+    expect(
+      connectionSchema.parse({ type: "local", connectMacro: "  sudo  " })
+        .connectMacro,
+    ).toBe("sudo");
+    const telnet = connectionSchema.parse({
+      type: "telnet",
+      host: "h",
+      port: 23,
+      connectMacro: "m",
+    });
+    expect(telnet.connectMacro).toBe("m");
+  });
+
+  it("長すぎる名前は拒否する（マクロ名の上限と同じ）", () => {
+    expect(
+      connectionSchema.safeParse({
+        type: "local",
+        connectMacro: "あ".repeat(61),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("保存済みの値（指定のない古いデータ）も読み込め、指定は保たれる", () => {
+    expect(parseSavedValues({ type: "local" })?.connectMacro).toBeUndefined();
+    expect(
+      parseSavedValues({ type: "local", connectMacro: "m" })?.connectMacro,
+    ).toBe("m");
+  });
+});

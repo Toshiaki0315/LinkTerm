@@ -1272,6 +1272,87 @@ describe("TerminalTab", () => {
     });
   });
 
+  describe("接続後のマクロ", () => {
+    const macros = [
+      { id: "a", name: "sudo", text: "sendln 'sudo -i'" },
+      { id: "b", name: "bad", text: "if" },
+    ];
+    const connected = () => {
+      session.state = {
+        status: "connected",
+        sessionId: "s1",
+        error: null,
+        remoteEcho: false,
+      };
+    };
+    const withMacro = (name: string) =>
+      ({ ...telnet, connectMacro: name }) as ConnectionValues;
+    const written = () =>
+      session.write.mock.calls.map((c) => String(c[0])).join("");
+    const render1 = (values: ConnectionValues) =>
+      render(
+        <TerminalTab
+          tabId="t1"
+          title="title"
+          values={values}
+          active
+          macros={macros}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+
+    it("接続できたら、指定した名前のマクロを実行する", async () => {
+      connected();
+      render1(withMacro("sudo"));
+      await waitFor(() => expect(written()).toBe("sudo -i\r"));
+    });
+
+    it("指定がなければ、何も実行しない", async () => {
+      connected();
+      render1(telnet);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      expect(written()).toBe("");
+    });
+
+    it("接続に失敗したときは実行しない", async () => {
+      session.start.mockResolvedValue(false);
+      render1(withMacro("sudo"));
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      expect(written()).toBe("");
+    });
+
+    it("名前のマクロがなければ、理由を表示する", async () => {
+      connected();
+      render1(withMacro("nothing"));
+      expect(
+        await screen.findByText(/接続後のマクロ「nothing」が見つかりません/),
+      ).toBeInTheDocument();
+      expect(written()).toBe("");
+    });
+
+    it("文法の誤りがあるマクロは、実行せず理由を表示する", async () => {
+      connected();
+      render1(withMacro("bad"));
+      expect(await screen.findByText(/マクロ「bad」/)).toBeInTheDocument();
+      expect(written()).toBe("");
+    });
+
+    it("自動ログインがあるときは、ログインの完了後に実行する", async () => {
+      connected();
+      render1({
+        ...telnet,
+        loginScript: "login: => admin",
+        connectMacro: "sudo",
+      } as ConnectionValues);
+      await waitFor(() => expect(session.start).toHaveBeenCalled());
+      expect(written()).toBe("");
+      act(() => session.onData(new TextEncoder().encode("login: ")));
+      await waitFor(() => expect(written()).toBe("admin\rsudo -i\r"));
+    });
+  });
+
   describe("自動ログイン", () => {
     const withScript = (script: string, password = ""): ConnectionValues =>
       ({

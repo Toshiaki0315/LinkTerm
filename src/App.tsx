@@ -1073,6 +1073,7 @@ function App() {
         onAttention={onAttention}
         onBroadcast={onBroadcast}
         onBroadcastAll={onBroadcastAll}
+        macros={macros}
         onRenameTab={onRenameTab}
         onActivatePane={(tabId, paneId) =>
           dispatch({ type: "activatePane", tabId, paneId })
@@ -1091,6 +1092,7 @@ function App() {
         onOpenChange={(open) => !open && setDialog(null)}
         onSubmit={addTab}
         profiles={profiles}
+        macros={macros}
         onDeleteProfile={onDeleteProfile}
         onManageProfiles={() => setProfilesOpen(true)}
         recents={recent.list}

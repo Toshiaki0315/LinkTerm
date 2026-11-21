@@ -38,6 +38,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./ui/dialog";
+import type { Macro } from "../lib/macros";
 import { Input, Select } from "./ui/input";
 import { Label } from "./ui/label";
 
@@ -57,6 +58,8 @@ interface FormValues {
   termType: (typeof TERM_TYPES)[number];
   /** タブの色。空は色なし。 */
   tabColor?: string;
+  /** 接続後に実行するマクロの名前。空は実行しない。 */
+  connectMacro: string;
   localEcho: "auto" | "on" | "off";
   host: string;
   port: number;
@@ -98,6 +101,8 @@ interface Props {
   /** ~/.ssh/config の Host の別名（ホスト名の候補）。 */
   loadSshHosts?: () => Promise<string[]>;
   profiles?: SavedProfile[];
+  /** 保存しているマクロ（「接続後に実行するマクロ」の選択肢）。 */
+  macros?: Macro[];
   /** 「管理…」（保存済みの接続の一覧・整理）。渡さなければボタンを出さない。 */
   onManageProfiles?: () => void;
   onDeleteProfile?: (id: string) => void;
@@ -166,6 +171,7 @@ export function ConnectionDialog({
   loadSerialPorts = listSerialPorts,
   loadSshHosts = listSshHosts,
   profiles = [],
+  macros = [],
   onManageProfiles,
   onDeleteProfile,
   recents = [],
@@ -190,6 +196,7 @@ export function ConnectionDialog({
   const type = useWatch({ control, name: "type" });
   const authKind = useWatch({ control, name: "authKind" });
   const loginScript = useWatch({ control, name: "loginScript" });
+  const connectMacro = useWatch({ control, name: "connectMacro" }) ?? "";
   const [portList, setPortList] = useState<{
     ports: string[];
     error: string | null;
@@ -441,6 +448,25 @@ export function ConnectionDialog({
               )}
             </Field>
           )}
+
+          <Field label="接続後に実行するマクロ">
+            {(id) => (
+              <Select id={id} {...register("connectMacro")}>
+                <option value="">なし</option>
+                {macros.map((m) => (
+                  <option key={m.id} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+                {connectMacro !== "" &&
+                  !macros.some((m) => m.name === connectMacro) && (
+                    <option value={connectMacro}>
+                      {connectMacro}（見つかりません）
+                    </option>
+                  )}
+              </Select>
+            )}
+          </Field>
 
           <Field label="タブの色">
             {(id) => (

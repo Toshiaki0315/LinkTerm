@@ -45,6 +45,7 @@ export const defaultConnectionValues = {
   agentForwarding: false,
   loginScript: "",
   loginPassword: "",
+  connectMacro: "",
   authKind: "password",
   password: "",
   remember: false,
@@ -76,8 +77,26 @@ const tabColor = z.preprocess(
   z.enum(TAB_COLOR_IDS).optional(),
 );
 const localEcho = z.enum(["auto", "on", "off"]).default("auto");
+/** 接続できたあとに実行するマクロの名前（空は実行しない）。名前の上限はマクロ側と同じ。 */
+export const MAX_CONNECT_MACRO_CHARS = 60;
+const connectMacro = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+  z
+    .string()
+    .trim()
+    .refine(
+      (v) => [...v].length <= MAX_CONNECT_MACRO_CHARS,
+      `マクロ名は${MAX_CONNECT_MACRO_CHARS}文字以内です`,
+    )
+    .optional(),
+);
 
-const local = z.object({ type: z.literal("local"), encoding, tabColor });
+const local = z.object({
+  type: z.literal("local"),
+  encoding,
+  tabColor,
+  connectMacro,
+});
 
 /** `-L` 形式のポートフォワード1件。 */
 export interface ForwardSpec {
@@ -199,6 +218,7 @@ const ssh = z
     encoding,
     termType,
     tabColor,
+    connectMacro,
     host: required("ホスト"),
     port,
     // ~/.ssh/config を使うなら、空でもよい（設定ファイルの User を使う）。
@@ -299,6 +319,7 @@ const telnet = z
     encoding,
     termType,
     tabColor,
+    connectMacro,
     localEcho,
     host: required("ホスト"),
     port,
@@ -314,6 +335,7 @@ const serial = z
     type: z.literal("serial"),
     encoding,
     tabColor,
+    connectMacro,
     localEcho,
     serialPort: required("ポート").refine(
       (v) => v.startsWith("/dev/") && v.length > 5 && !v.includes(".."),
