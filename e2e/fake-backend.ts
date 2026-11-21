@@ -27,15 +27,15 @@ interface E2E {
   written: Array<{ id: string; data: string }>;
   /** 偽のリモートのフォルダー（パス → 中身）。SFTP の画面試験用。 */
   remote: Record<string, Array<{ name: string; isDir: boolean; size: number }>>;
-  /** `read_macro_file` が返す内容（.ttl ファイルの読み込み）。 */
+  /** `pick_macro_file` が返す内容（.ttl ファイルの読み込み）。 */
   macroFileText: string;
   /** 出した通知（Tauri の通知プラグインは `window.Notification` を置き換える）。 */
   notifications: Array<{ title: string; options: unknown }>;
   /** ファイル選択ダイアログが返すパス。 */
   pickedFiles: string[];
-  /** `import_profiles` が読むファイルの中身（接続の一覧）。 */
+  /** `import_profiles_dialog` が読むファイルの中身（接続の一覧）。 */
   importFile: Array<{ name: string; values: unknown }> | null;
-  /** `export_profiles` が書いた先と件数。 */
+  /** `export_profiles_dialog` が書いた先と件数。 */
   exportedProfiles: { path: unknown; count: number } | null;
   /** 保存ダイアログが返すパス（null ならキャンセル）。 */
   savePath: string | null;
@@ -175,8 +175,16 @@ function handle(cmd: string, args: Args): unknown {
     case "save_macros":
       e2e.macros = args.macros as Array<Record<string, unknown>>;
       return e2e.macros;
-    case "read_macro_file":
-      return e2e.macroFileText;
+    case "pick_macro_file": {
+      const picked = e2e.pickedFiles[0];
+      if (!picked) return null;
+      const base = picked.split("/").pop() ?? "";
+      const dot = base.lastIndexOf(".");
+      return {
+        name: dot > 0 ? base.slice(0, dot) : base,
+        text: e2e.macroFileText,
+      };
+    }
     case "get_highlight_rules":
       return e2e.highlights;
     case "save_highlight_rules":
@@ -214,10 +222,16 @@ function handle(cmd: string, args: Args): unknown {
       found.tags = args.tags;
       return found;
     }
-    case "export_profiles":
-      e2e.exportedProfiles = { path: args.path, count: e2e.profiles.length };
-      return e2e.profiles.length;
-    case "import_profiles": {
+    case "export_profiles_dialog": {
+      if (e2e.savePath === null) return null;
+      e2e.exportedProfiles = {
+        path: e2e.savePath,
+        count: e2e.profiles.length,
+      };
+      return e2e.exportedProfiles;
+    }
+    case "import_profiles_dialog": {
+      if (e2e.pickedFiles.length === 0) return null;
       const incoming = e2e.importFile ?? [];
       let added = 0;
       for (const p of incoming) {
@@ -261,8 +275,9 @@ function handle(cmd: string, args: Args): unknown {
       return null;
     case "default_log_path":
       return "/tmp/linkterm.log";
-    case "save_text_file":
-      return null;
+    case "save_screen_text":
+      // 保存先はバックエンドのダイアログが決める（画面はパスを渡さない）。
+      return e2e.savePath;
     case "sftp_list": {
       const path = (args.path as string | null) ?? "/home/alice";
       const entries = e2e.remote[path];

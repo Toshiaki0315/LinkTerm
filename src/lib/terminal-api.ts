@@ -238,9 +238,19 @@ export const getMacros = () => invoke<Macro[]>("get_macros");
 export const saveMacros = (macros: Macro[]) =>
   invoke<Macro[]>("save_macros", { macros });
 
-/** ユーザーが選んだ `.ttl` ファイルの内容（UTF-8 または Shift_JIS）。 */
-export const readMacroFile = (path: string) =>
-  invoke<string>("read_macro_file", { path });
+/**
+ * `.ttl` ファイルを、バックエンドが開くファイルダイアログで選んで読む（UTF-8 または Shift_JIS）。
+ * 名前はファイル名から拡張子を除いたもの。キャンセルなら `null`。画面はパスを渡さない。
+ */
+export const pickMacroFile = () =>
+  invoke<{ name: string; text: string } | null>("pick_macro_file");
+
+/**
+ * 画面のテキストを、保存ダイアログで選んだ場所へ保存する。保存したパスを返す（キャンセルなら `null`）。
+ * `defaultName` は、ダイアログの初期のファイル名にだけ使う。
+ */
+export const saveScreenText = (content: string, defaultName: string) =>
+  invoke<string | null>("save_screen_text", { content, defaultName });
 
 /** 最近使った接続先（新しい順）。 */
 export const getRecentConnections = () =>
@@ -343,16 +353,19 @@ export const sendBreak = (id: string) =>
 export const setDisplayMode = (id: string, mode: DisplayMode) =>
   invoke<void>("set_display_mode", { id, mode });
 
-/** 保存済みの接続をすべて、ファイルへ書き出す（パスワード類は含めない）。書き出した件数を返す。 */
-export const exportProfiles = (path: string) =>
-  invoke<number>("export_profiles", { path });
-
 /** 取り込みの結果。 */
 export interface ImportReport {
   added: number;
   skipped: number;
 }
 
-/** 書き出したファイルから、保存済みの接続を取り込む。 */
-export const importProfiles = (path: string) =>
-  invoke<ImportReport>("import_profiles", { path });
+/**
+ * 保存済みの接続をすべて、保存ダイアログで選んだファイルへ書き出す（パスワード類は含めない）。
+ * キャンセルなら `null`。
+ */
+export const exportProfilesDialog = () =>
+  invoke<{ path: string; count: number } | null>("export_profiles_dialog");
+
+/** 書き出したファイルを、ファイルダイアログで選んで取り込む。キャンセルなら `null`。 */
+export const importProfilesDialog = () =>
+  invoke<ImportReport | null>("import_profiles_dialog");

@@ -668,15 +668,6 @@ pub fn get_session_state(state: State<'_, AppState>) -> CommandResult<SessionSta
     Ok(state.session_state.load()?)
 }
 
-/// 画面の内容を、保存ダイアログで選んだ場所へテキストとして保存する（所有者のみ読み書き可）。
-#[tauri::command]
-pub fn save_text_file(path: String, content: String) -> CommandResult<()> {
-    Ok(crate::export::save_text(
-        std::path::Path::new(&path),
-        &content,
-    )?)
-}
-
 /// 保存済みのショートカット（初期値から変えたものだけ）。
 #[tauri::command]
 pub fn get_keybindings(state: State<'_, AppState>) -> CommandResult<Vec<KeyBinding>> {
@@ -732,14 +723,6 @@ pub fn get_macros(state: State<'_, AppState>) -> CommandResult<Vec<Macro>> {
 #[tauri::command]
 pub fn save_macros(state: State<'_, AppState>, macros: Vec<Macro>) -> CommandResult<Vec<Macro>> {
     Ok(state.macros.save(macros)?)
-}
-
-/// ユーザーが選んだ `.ttl` ファイルを読む（UTF-8 または Shift_JIS）。
-#[tauri::command]
-pub fn read_macro_file(path: String) -> CommandResult<String> {
-    Ok(crate::macros::read_script_file(std::path::Path::new(
-        &path,
-    ))?)
 }
 
 /// 最近使った接続先（新しい順）。
@@ -814,23 +797,95 @@ pub fn update_profile(
     Ok(state.profiles.update_meta(&id, &name, placement)?)
 }
 
-/// 保存済みの接続をすべて、保存ダイアログで選んだファイルへ書き出す（パスワード類は含めない）。
-/// 書き出した件数を返す。
-#[tauri::command]
-pub fn export_profiles(state: State<'_, AppState>, path: String) -> CommandResult<usize> {
-    let profiles = state.profiles.list()?;
-    let text = crate::profiles::export_text(&profiles)?;
-    crate::export::save_text(std::path::Path::new(&path), &text)?;
-    Ok(profiles.len())
+/// バックエンドが開くファイルダイアログ。読み書きするパスは、ここで利用者が選んだものだけにする
+/// （画面からはパスを渡せない）。ダイアログが閉じるまで待つので、専用のスレッドで実行する。
+async fn run_dialog<T, F>(app: &tauri::AppHandle, show: F) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(tauri_plugin_dialog::FileDialogBuilder<tauri::Wry>) -> T + Send + 'static,
+{
+    use tauri_plugin_dialog::DialogExt;
+    let builder = app.dialog().file();
+    tauri::async_runtime::spawn_blocking(move || show(builder))
+        .await
+        .map_err(|e| CommandError::Invalid(format!("ダイアログの処理が中断されました: {e}")))
 }
 
-/// 書き出したファイルから、保存済みの接続を取り込む。同じ内容のものは加えない。
+/// 選ばれたパスを取り出す（パスにできない場所は選べなかったものとして扱う）。
+fn chosen(path: Option<tauri_plugin_dialog::FilePath>) -> Option<PathBuf> {
+    path.and_then(|p| p.into_path().ok())
+}
+
+/// 画面の内容を、保存ダイアログで選んだ場所へテキストとして保存する（所有者のみ読み書き可）。
+/// 保存したパスを返す（キャンセルなら `None`）。`default_name` は、ダイアログの初期のファイル名にだけ使う。
 #[tauri::command]
-pub fn import_profiles(
+pub async fn save_screen_text(
+    app: tauri::AppHandle,
+    content: String,
+    default_name: String,
+) -> CommandResult<Option<String>> {
+    let name = crate::file_dialogs::safe_default_name(&default_name);
+    let path = run_dialog(&app, move |d| {
+        chosen(
+            d.add_filter("テキスト", &["txt"])
+                .set_file_name(name)
+                .blocking_save_file(),
+        )
+    })
+    .await?;
+    crate::file_dialogs::save_text(&content, || path)
+}
+
+/// `.ttl` ファイルを、ファイルダイアログで選んで読む（UTF-8 または Shift_JIS）。キャンセルなら `None`。
+#[tauri::command]
+pub async fn pick_macro_file(
+    app: tauri::AppHandle,
+) -> CommandResult<Option<crate::file_dialogs::PickedMacro>> {
+    let path = run_dialog(&app, |d| {
+        chosen(
+            d.add_filter("Tera Term マクロ", &["ttl"])
+                .add_filter("すべてのファイル", &["*"])
+                .blocking_pick_file(),
+        )
+    })
+    .await?;
+    crate::file_dialogs::read_macro(|| path)
+}
+
+/// 保存済みの接続をすべて、保存ダイアログで選んだファイルへ書き出す（パスワード類は含めない）。
+/// キャンセルなら `None`。
+#[tauri::command]
+pub async fn export_profiles_dialog(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
-) -> CommandResult<crate::profiles::ImportReport> {
-    Ok(state.profiles.import_file(std::path::Path::new(&path))?)
+) -> CommandResult<Option<crate::file_dialogs::ExportDone>> {
+    let path = run_dialog(&app, |d| {
+        chosen(
+            d.add_filter("LinkTerm の接続", &["json"])
+                .set_file_name("linkterm-profiles.json")
+                .blocking_save_file(),
+        )
+    })
+    .await?;
+    crate::file_dialogs::export_profiles(&state.profiles, || path)
+}
+
+/// 書き出したファイルを、ファイルダイアログで選んで、保存済みの接続を取り込む。同じ内容のものは加えない。
+/// キャンセルなら `None`。
+#[tauri::command]
+pub async fn import_profiles_dialog(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<crate::profiles::ImportReport>> {
+    let path = run_dialog(&app, |d| {
+        chosen(
+            d.add_filter("LinkTerm の接続", &["json"])
+                .add_filter("すべてのファイル", &["*"])
+                .blocking_pick_file(),
+        )
+    })
+    .await?;
+    crate::file_dialogs::import_profiles(&state.profiles, || path)
 }
 
 #[tauri::command]

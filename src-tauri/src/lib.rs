@@ -2,6 +2,7 @@ pub mod approvals;
 pub mod atomic_file;
 pub mod commands;
 pub mod export;
+pub mod file_dialogs;
 pub mod fonts;
 pub mod highlights;
 pub mod keybindings;
@@ -57,8 +58,8 @@ pub fn run() {
             commands::pending_host_key_requests,
             commands::list_profiles,
             commands::save_profile,
-            commands::export_profiles,
-            commands::import_profiles,
+            commands::export_profiles_dialog,
+            commands::import_profiles_dialog,
             commands::delete_profile,
             commands::list_fonts,
             commands::get_session_state,
@@ -69,7 +70,7 @@ pub fn run() {
             sftp_commands::sftp_mkdir,
             sftp_commands::sftp_remove,
             sftp_commands::sftp_cancel,
-            commands::save_text_file,
+            commands::save_screen_text,
             commands::update_profile,
             commands::get_keybindings,
             commands::save_keybindings,
@@ -79,7 +80,7 @@ pub fn run() {
             commands::save_snippets,
             commands::get_macros,
             commands::save_macros,
-            commands::read_macro_file,
+            commands::pick_macro_file,
             commands::get_recent_connections,
             commands::save_recent_connections,
             commands::get_settings,
@@ -131,6 +132,17 @@ mod tests {
         // 画像などの余計なクリップボード権限は付けない。
         assert!(!permissions.iter().any(|p| p.contains("image")));
         assert!(!permissions.iter().any(|p| p == "clipboard-manager:default"));
+    }
+
+    /// ファイルを読み書きするダイアログは、バックエンドが開く。画面（WebView）が保存ダイアログを
+    /// 直接使える権限は付けない（選ばれたパスを、そのまま任意のコマンドへ渡せてしまうため）。
+    #[test]
+    fn webview_cannot_open_the_save_dialog_directly() {
+        let text = include_str!("../capabilities/default.json");
+        let json: serde_json::Value = serde_json::from_str(text).unwrap();
+        let permissions = identifiers(&json);
+        assert!(!permissions.iter().any(|p| p == "dialog:allow-save"));
+        assert!(!permissions.iter().any(|p| p == "dialog:default"));
     }
 
     /// 外部で開けるのは http / https の URL だけ。`opener:default` は、`mailto:`・`tel:` や

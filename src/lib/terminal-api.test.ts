@@ -34,7 +34,7 @@ import {
   saveHighlightRules,
   getMacros,
   getSnippets,
-  readMacroFile,
+  pickMacroFile,
   saveMacros,
   saveSnippets,
   listProfiles,
@@ -264,11 +264,13 @@ describe("スニペット", () => {
     invoke.mockResolvedValueOnce([m]);
     await expect(saveMacros([m])).resolves.toEqual([m]);
     expect(invoke).toHaveBeenCalledWith("save_macros", { macros: [m] });
-    invoke.mockResolvedValueOnce("sendln 'x'");
-    await expect(readMacroFile("/a/b.ttl")).resolves.toBe("sendln 'x'");
-    expect(invoke).toHaveBeenCalledWith("read_macro_file", {
-      path: "/a/b.ttl",
+    invoke.mockResolvedValueOnce({ name: "b", text: "sendln 'x'" });
+    await expect(pickMacroFile()).resolves.toEqual({
+      name: "b",
+      text: "sendln 'x'",
     });
+    // パスは渡さない（ファイルはバックエンドのダイアログで選ぶ）。
+    expect(invoke).toHaveBeenCalledWith("pick_macro_file");
   });
 });
 

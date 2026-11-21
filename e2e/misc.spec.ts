@@ -103,15 +103,16 @@ test.describe("画面をテキストで保存", () => {
     await page.locator(".xterm").first().click({ button: "right" });
     await page.getByRole("menuitem", { name: "画面をテキストで保存…" }).click();
     await expect
-      .poll(async () => (await calls(page, "save_text_file")).length)
+      .poll(async () => (await calls(page, "save_screen_text")).length)
       .toBe(1);
-    const [req] = (await calls(page, "save_text_file")) as Array<{
-      path: string;
-      content: string;
-    }>;
-    expect(req.path).toBe("/Users/me/screen.txt");
-    expect(req.content).toContain("line one");
-    expect(req.content).toContain("line two");
+    const [req] = (await calls(page, "save_screen_text")) as Array<
+      Record<string, unknown>
+    >;
+    // 画面は保存先のパスを渡さない（内容と、初期のファイル名だけ）。
+    expect(Object.keys(req).sort()).toEqual(["content", "defaultName"]);
+    expect(req.defaultName).toMatch(/^terminal-\d{8}-\d{6}\.txt$/);
+    expect(String(req.content)).toContain("line one");
+    expect(String(req.content)).toContain("line two");
     await expect(page.getByRole("status")).toContainText(
       "/Users/me/screen.txt",
     );
@@ -126,7 +127,10 @@ test.describe("画面をテキストで保存", () => {
     await page.locator(".xterm").first().click({ button: "right" });
     await page.getByRole("menuitem", { name: "画面をテキストで保存…" }).click();
     await page.waitForTimeout(300);
-    expect(await calls(page, "save_text_file")).toHaveLength(0);
+    // ダイアログはバックエンドが開く。キャンセルなら何も保存せず、知らせも出さない。
+    expect(await calls(page, "save_screen_text")).toHaveLength(1);
+    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 });
 

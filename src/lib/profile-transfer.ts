@@ -1,40 +1,21 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
 import {
-  exportProfiles,
-  importProfiles,
+  exportProfilesDialog,
+  importProfilesDialog,
   type ImportReport,
 } from "./terminal-api";
 
-const JSON_FILTER = { name: "LinkTerm の接続", extensions: ["json"] };
-
 /**
- * 保存ダイアログで選んだ場所へ、保存済みの接続を書き出す（パスワード類は含めない）。
- * キャンセルなら `null`。
+ * 保存済みの接続を、保存ダイアログで選んだ場所へ書き出す（パスワード類は含めない）。
+ * ダイアログはバックエンドが開く（画面は保存先のパスを指定できない）。キャンセルなら `null`。
  */
-export async function exportProfilesToFile(): Promise<{
+export const exportProfilesToFile = (): Promise<{
   path: string;
   count: number;
-} | null> {
-  const path = await save({
-    defaultPath: "linkterm-profiles.json",
-    filters: [JSON_FILTER],
-  });
-  if (path === null) return null;
-  const count = await exportProfiles(path);
-  return { path, count };
-}
+} | null> => exportProfilesDialog();
 
 /** ファイルを選んで、保存済みの接続を取り込む。キャンセルなら `null`。 */
-export async function importProfilesFromFile(): Promise<ImportReport | null> {
-  const picked = await open({
-    multiple: false,
-    directory: false,
-    filters: [JSON_FILTER, { name: "すべてのファイル", extensions: ["*"] }],
-  });
-  if (picked === null) return null;
-  const path = Array.isArray(picked) ? picked[0] : picked;
-  return importProfiles(path);
-}
+export const importProfilesFromFile = (): Promise<ImportReport | null> =>
+  importProfilesDialog();
 
 /** 取り込みの結果を、利用者向けの文にする。 */
 export function describeImport({ added, skipped }: ImportReport): string {
