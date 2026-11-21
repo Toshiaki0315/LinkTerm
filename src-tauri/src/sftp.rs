@@ -76,6 +76,8 @@ pub trait RemoteFs: Send + Sync {
     async fn open_read(&self, path: &str) -> Result<RemoteReader, SftpError>;
     /// 作成（既存なら切り詰め）して書き込む。
     async fn open_write(&self, path: &str) -> Result<RemoteWriter, SftpError>;
+    /// 新しく作って書き込む。同名のものがすでにあれば失敗する（排他的な作成。一時ファイル用）。
+    async fn create_new(&self, path: &str) -> Result<RemoteWriter, SftpError>;
     async fn mkdir(&self, path: &str) -> Result<(), SftpError>;
     async fn remove_file(&self, path: &str) -> Result<(), SftpError>;
     /// 名前を変える。移動先がすでにあれば失敗する（OpenSSH の sftp-server と同じ）。
@@ -349,13 +351,11 @@ pub async fn upload(
     Ok(remote_path)
 }
 
-static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// 上書き用の一時ファイルのパス（同じフォルダー。名前は短く、重ならないものにする）。
+/// 上書き用の一時ファイルのパス（同じフォルダー。推測されにくいランダムな名前にする）。
+/// 作るときは `create_new`（排他的）を使うので、同名のものがあっても内容を壊さない。
 fn temp_remote_path(remote_path: &str) -> String {
     let dir = remote_path.rsplit_once('/').map_or("", |(d, _)| d);
-    let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{dir}/.linkterm-{}-{n}.part", std::process::id())
+    format!("{dir}/.linkterm-{:016x}.part", rand::random::<u64>())
 }
 
 /// 一時ファイルを `target` の位置へ移す。移動先があると名前の変更が失敗するサーバーでは、
@@ -404,7 +404,11 @@ async fn put_remote(
     } else {
         remote_path.to_owned()
     };
-    let mut writer = fs.open_write(&write_path).await?;
+    let mut writer = if existed {
+        fs.create_new(&write_path).await?
+    } else {
+        fs.open_write(&write_path).await?
+    };
     let result = copy_with_progress(
         &mut reader,
         &mut writer,
@@ -892,6 +896,18 @@ mod adapter {
             Ok(Box::new(file))
         }
 
+        async fn create_new(&self, path: &str) -> Result<RemoteWriter, SftpError> {
+            let file = self
+                .0
+                .open_with_flags(
+                    path,
+                    OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                )
+                .await
+                .map_err(|e| remote(&format!("{path} を作成"), e))?;
+            Ok(Box::new(file))
+        }
+
         async fn mkdir(&self, path: &str) -> Result<(), SftpError> {
             self.0
                 .create_dir(path)
@@ -1091,6 +1107,15 @@ mod tests {
                 written: 0,
                 fail_after: self.fail_write_after,
             }))
+        }
+        async fn create_new(&self, path: &str) -> Result<RemoteWriter, SftpError> {
+            if self.files.lock().unwrap().contains_key(path) {
+                return Err(SftpError::Remote {
+                    context: format!("{path} を作成"),
+                    message: "already exists".into(),
+                });
+            }
+            self.open_write(path).await
         }
         async fn mkdir(&self, path: &str) -> Result<(), SftpError> {
             self.dirs.lock().unwrap().insert(path.to_owned());
@@ -1441,6 +1466,32 @@ mod tests {
         assert_eq!(fs.file("/h/t/a.bin").unwrap(), b"precious");
         assert_eq!(fs.file_count(), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn overwrite_never_truncates_an_existing_file_that_happens_to_have_the_temp_name() {
+        // 一時ファイルは排他的に作る。同名のファイルがあれば、その内容に触れず失敗する。
+        let fs = MemFs::default()
+            .with_dir("/h")
+            .with_file("/h/.x.part", b"keep");
+        assert!(fs.create_new("/h/.x.part").await.is_err());
+        assert_eq!(fs.file("/h/.x.part").unwrap(), b"keep");
+        assert!(fs.create_new("/h/.y.part").await.is_ok());
+    }
+
+    #[test]
+    fn temp_names_are_random_hidden_and_in_the_same_folder() {
+        let a = temp_remote_path("/h/dir/a.txt");
+        let b = temp_remote_path("/h/dir/a.txt");
+        assert_ne!(a, b);
+        for p in [&a, &b] {
+            assert!(
+                p.starts_with("/h/dir/.linkterm-") && p.ends_with(".part"),
+                "{p}"
+            );
+            assert!(!p.contains("a.txt"), "元の名前を含めない: {p}");
+        }
+        assert!(temp_remote_path("/a.txt").starts_with("/.linkterm-"));
     }
 
     #[tokio::test]

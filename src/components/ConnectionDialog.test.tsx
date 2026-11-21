@@ -772,6 +772,25 @@ describe("ConnectionDialog", () => {
     expect(onSubmit.mock.calls[0][0].tabColor).toBeUndefined();
   });
 
+  describe("Telnet の平文通信の警告", () => {
+    const warning = () => screen.queryByRole("note", { name: "Telnet の注意" });
+
+    it("Telnet を選んだときだけ、盗聴されることを知らせ、SSH を勧める", async () => {
+      const user = userEvent.setup();
+      render(
+        <ConnectionDialog open onOpenChange={() => {}} onSubmit={() => {}} />,
+      );
+      expect(warning()).toBeNull();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "telnet");
+      expect(warning()).toHaveTextContent("暗号化されません");
+      expect(warning()).toHaveTextContent("SSH");
+      await user.selectOptions(screen.getByLabelText("接続種別"), "ssh");
+      expect(warning()).toBeNull();
+      await user.selectOptions(screen.getByLabelText("接続種別"), "serial");
+      expect(warning()).toBeNull();
+    });
+  });
+
   describe("接続後に実行するマクロ", () => {
     const macros = [
       { id: "a", name: "sudo", text: "sendln 'sudo -i'" },

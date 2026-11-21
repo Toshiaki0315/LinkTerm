@@ -2,6 +2,7 @@
 // 先に偽のバックエンドを入れてから、通常の入口（main.tsx）と同じように描画する。
 // 製品版（ビルド後）には React の StrictMode の二重実行が無いので、ここでも使わない。
 // （StrictMode での動作は、`strict-mode.spec.ts` が別に確かめる。）
+import "../src/lib/zod-config";
 import "./fake-backend";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";

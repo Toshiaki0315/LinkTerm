@@ -481,6 +481,18 @@ export function ConnectionDialog({
             )}
           </Field>
 
+          {type === "telnet" && (
+            <p
+              role="note"
+              aria-label="Telnet の注意"
+              className="rounded border border-amber-500/40 px-3 py-2 text-xs text-amber-300"
+            >
+              Telnet
+              の通信は暗号化されません。ユーザー名・パスワード・入力した内容が、途中の経路で盗み見られたり、書き換えられたりするおそれがあります。信頼できるネットワークの中だけで使い、可能なら
+              SSH を使ってください。
+            </p>
+          )}
+
           {(type === "ssh" || type === "telnet") && (
             <div className="grid grid-cols-[1fr_6rem] gap-2">
               <Field label="ホスト" error={message(errors, "host")}>

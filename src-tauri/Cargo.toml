@@ -37,6 +37,7 @@ tauri-plugin-clipboard-manager = "2.5.0"
 russh-sftp = "3.0.1"
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-notification = "2.8.0"
+rand = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -46,9 +47,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
-
-[dev-dependencies]
-rand = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"

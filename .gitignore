@@ -15,3 +15,4 @@ src-tauri/target/
 .idea/
 test-results
 playwright-report
+dist-e2e

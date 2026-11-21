@@ -99,27 +99,63 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// 権限の識別子（文字列、またはスコープつきのオブジェクト）を取り出す。
+    fn identifiers(json: &serde_json::Value) -> Vec<String> {
+        json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .or_else(|| p["identifier"].as_str())
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+
     /// フロントエンドが使う権限が capability に宣言されていること（宣言漏れは実行時にだけ失敗する）。
     #[test]
     fn capability_grants_exactly_the_clipboard_and_opener_permissions_the_ui_needs() {
         let text = include_str!("../capabilities/default.json");
         let json: serde_json::Value = serde_json::from_str(text).unwrap();
-        let permissions: Vec<&str> = json["permissions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p.as_str().unwrap())
-            .collect();
+        let permissions = identifiers(&json);
         for needed in [
             "core:default",
-            "opener:default",
+            "opener:allow-open-url",
             "clipboard-manager:allow-read-text",
             "clipboard-manager:allow-write-text",
         ] {
-            assert!(permissions.contains(&needed), "{needed} が未宣言");
+            assert!(permissions.iter().any(|p| p == needed), "{needed} が未宣言");
         }
         // 画像などの余計なクリップボード権限は付けない。
         assert!(!permissions.iter().any(|p| p.contains("image")));
-        assert!(!permissions.contains(&"clipboard-manager:default"));
+        assert!(!permissions.iter().any(|p| p == "clipboard-manager:default"));
+    }
+
+    /// 外部で開けるのは http / https の URL だけ。`opener:default` は、`mailto:`・`tel:` や
+    /// Finder での項目表示、パスを開く権限まで含むので使わない。
+    #[test]
+    fn opener_is_limited_to_http_and_https_urls() {
+        let text = include_str!("../capabilities/default.json");
+        let json: serde_json::Value = serde_json::from_str(text).unwrap();
+        let permissions = identifiers(&json);
+        assert!(!permissions.iter().any(|p| p == "opener:default"));
+        assert!(!permissions.iter().any(|p| p.contains("reveal-item")));
+        assert!(!permissions.iter().any(|p| p.contains("open-path")));
+        assert!(!permissions.iter().any(|p| p == "opener:allow-default-urls"));
+        let scoped = json["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .expect("opener:allow-open-url にはスコープを付ける");
+        let urls: Vec<&str> = scoped["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(urls, ["https://*", "http://*"]);
     }
 }
