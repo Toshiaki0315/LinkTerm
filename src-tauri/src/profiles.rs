@@ -15,6 +15,13 @@ pub const MAX_NAME_CHARS: usize = 100;
 pub const MAX_FOLDER_CHARS: usize = 60;
 pub const MAX_TAGS: usize = 10;
 pub const MAX_TAG_CHARS: usize = 30;
+/// 書き出しファイルの形式名と版。
+pub const EXPORT_FORMAT: &str = "linkterm-profiles";
+pub const EXPORT_VERSION: u32 = 1;
+/// 1回の取り込みで受け付ける件数の上限。
+pub const MAX_IMPORT_PROFILES: usize = 1000;
+/// 取り込むファイルの大きさの上限（バイト）。
+pub const MAX_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
 /// 保存してはならないキー。
 pub const SECRET_KEYS: &[&str] = &["password", "passphrase", "loginPassword"];
 
@@ -112,6 +119,74 @@ pub struct ProfileStore {
     /// 読み込み→更新→書き込みを直列化する（同一プロセス内）。
     lock: Mutex<()>,
     counter: AtomicU64,
+}
+
+/// 書き出しファイルの1件。ID は含めない（取り込み先で新しく付ける）。
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportEntry {
+    name: String,
+    values: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportDoc {
+    format: String,
+    version: u32,
+    profiles: Vec<ExportEntry>,
+}
+
+/// 取り込みの結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ImportReport {
+    /// 新しく加えた件数。
+    pub added: usize,
+    /// 同じ内容がすでにあるため、加えなかった件数。
+    pub skipped: usize,
+}
+
+/// 保存済みの接続を、書き出し用の JSON にする。パスワード類は含めない。
+pub fn export_text(profiles: &[Profile]) -> Result<String, ProfileError> {
+    let doc = ExportDoc {
+        format: EXPORT_FORMAT.into(),
+        version: EXPORT_VERSION,
+        profiles: profiles
+            .iter()
+            .map(|p| {
+                let mut values = p.values.clone();
+                strip_secrets(&mut values);
+                ExportEntry {
+                    name: p.name.clone(),
+                    values,
+                    folder: p.folder.clone(),
+                    tags: p.tags.clone(),
+                }
+            })
+            .collect(),
+    };
+    serde_json::to_string_pretty(&doc)
+        .map_err(|e| ProfileError::Invalid(format!("書き出し用の形式にできません: {e}")))
+}
+
+/// `existing` が `name` そのもの、または取り込みで付いた `name (2)` などの番号付きか。
+fn is_same_or_numbered(existing: &str, name: &str) -> bool {
+    existing == name
+        || existing
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix(" ("))
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// 名前が重複しないよう、`名前 (2)` のように番号を付ける。
+fn unique_name(base: &str, taken: &[String]) -> String {
+    (2..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|candidate| !taken.contains(candidate))
+        .unwrap_or_else(|| base.to_owned())
 }
 
 fn io_error(context: impl Into<String>, source: std::io::Error) -> ProfileError {
@@ -270,6 +345,113 @@ impl ProfileStore {
         let updated = all[index].clone();
         self.write(&all)?;
         Ok(Some(updated))
+    }
+
+    /// 書き出しファイルの内容を取り込む。内容が不正なら、何も加えずに失敗する。
+    /// 名前と内容がすでにあるものは加えない。名前だけ重なるものは、番号を付けて別の接続として加える。
+    /// ファイルに紛れたパスワード類は捨てる。
+    pub fn import_text(&self, text: &str) -> Result<ImportReport, ProfileError> {
+        let invalid = |m: String| ProfileError::Invalid(m);
+        let doc: ExportDoc = serde_json::from_str(text)
+            .map_err(|e| invalid(format!("接続の書き出しファイルとして読めません: {e}")))?;
+        if doc.format != EXPORT_FORMAT {
+            return Err(invalid(
+                "LinkTerm の接続の書き出しファイルではありません".into(),
+            ));
+        }
+        if doc.version != EXPORT_VERSION {
+            return Err(invalid(format!(
+                "対応していない版です（版 {}）。新しい LinkTerm で開いてください",
+                doc.version
+            )));
+        }
+        if doc.profiles.len() > MAX_IMPORT_PROFILES {
+            return Err(invalid(format!(
+                "一度に取り込めるのは{MAX_IMPORT_PROFILES}件までです"
+            )));
+        }
+        let mut incoming = Vec::with_capacity(doc.profiles.len());
+        for (index, entry) in doc.profiles.into_iter().enumerate() {
+            let number = index + 1;
+            let mut values = entry.values;
+            let name = validate(&entry.name, &values)
+                .map_err(|e| invalid(format!("{number}件目: {e}")))?;
+            let placement = Placement::normalized(entry.folder.as_deref(), &entry.tags)
+                .map_err(|e| invalid(format!("{number}件目: {e}")))?;
+            strip_secrets(&mut values);
+            incoming.push((name, values, placement));
+        }
+        let _guard = self.guard();
+        let mut all = self.read()?;
+        let mut report = ImportReport {
+            added: 0,
+            skipped: 0,
+        };
+        for (name, values, placement) in incoming {
+            if all
+                .iter()
+                .any(|p| p.values == values && is_same_or_numbered(&p.name, &name))
+            {
+                report.skipped += 1;
+                continue;
+            }
+            let taken: Vec<String> = all.iter().map(|p| p.name.clone()).collect();
+            let name = if taken.contains(&name) {
+                unique_name(&name, &taken)
+            } else {
+                name
+            };
+            if name.chars().count() > MAX_NAME_CHARS {
+                return Err(invalid(format!(
+                    "名前が長すぎます（{MAX_NAME_CHARS}文字まで）: {name}"
+                )));
+            }
+            all.push(Profile {
+                id: self.new_id(),
+                name,
+                values,
+                folder: placement.folder,
+                tags: placement.tags,
+            });
+            report.added += 1;
+        }
+        if report.added > 0 {
+            self.write(&all)?;
+        }
+        Ok(report)
+    }
+
+    /// ファイルから取り込む（大きさの上限と、通常のファイルかどうかを調べる）。
+    pub fn import_file(&self, path: &std::path::Path) -> Result<ImportReport, ProfileError> {
+        use std::io::Read;
+        let meta = std::fs::metadata(path)
+            .map_err(|e| io_error(format!("{} の確認", path.display()), e))?;
+        if !meta.is_file() {
+            return Err(ProfileError::Invalid(
+                "通常のファイルを選んでください".into(),
+            ));
+        }
+        let too_big = || {
+            ProfileError::Invalid(format!(
+                "ファイルが大きすぎます（{}MB まで）",
+                MAX_IMPORT_BYTES / 1024 / 1024
+            ))
+        };
+        if meta.len() > MAX_IMPORT_BYTES {
+            return Err(too_big());
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .map_err(|e| io_error(format!("{} を開く", path.display()), e))?
+            .take(MAX_IMPORT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| io_error(format!("{} の読み込み", path.display()), e))?;
+        if bytes.len() as u64 > MAX_IMPORT_BYTES {
+            return Err(too_big());
+        }
+        let text = String::from_utf8(bytes)
+            .map_err(|_| ProfileError::Invalid("UTF-8 のテキストファイルではありません".into()))?;
+        self.import_text(text.trim_start_matches('\u{feff}'))
     }
 
     /// 削除する。存在しなければ `false`。
@@ -545,6 +727,172 @@ mod tests {
             s.update_meta(&a.id, "  ", Placement::default()),
             Err(ProfileError::Invalid(_))
         ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 書き出し・取り込み ----
+
+    fn sample_doc(entries: serde_json::Value) -> String {
+        json!({"format": "linkterm-profiles", "version": 1, "profiles": entries}).to_string()
+    }
+
+    #[test]
+    fn export_has_format_header_and_no_ids_or_secrets() {
+        let (s, dir) = store("export");
+        let mut v = ssh("h");
+        v["password"] = json!("hunter2");
+        s.save_with(
+            None,
+            "本番",
+            v,
+            Some(Placement::normalized(Some("仕事"), &["prod".into()]).unwrap()),
+        )
+        .unwrap();
+        let text = export_text(&s.list().unwrap()).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(doc["format"], "linkterm-profiles");
+        assert_eq!(doc["version"], 1);
+        let entry = &doc["profiles"][0];
+        assert_eq!(entry["name"], "本番");
+        assert_eq!(entry["folder"], "仕事");
+        assert_eq!(entry["tags"], json!(["prod"]));
+        assert_eq!(entry["values"]["host"], "h");
+        assert!(entry.get("id").is_none());
+        assert!(!text.contains("hunter2"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_then_import_restores_profiles_in_another_store() {
+        let (a, dir_a) = store("rt-a");
+        let (b, dir_b) = store("rt-b");
+        a.save_with(
+            None,
+            "x",
+            ssh("x"),
+            Some(Placement::normalized(Some("f"), &["t1".into(), "t2".into()]).unwrap()),
+        )
+        .unwrap();
+        a.save(None, "y", ssh("y")).unwrap();
+        let text = export_text(&a.list().unwrap()).unwrap();
+        let report = b.import_text(&text).unwrap();
+        assert_eq!(
+            report,
+            ImportReport {
+                added: 2,
+                skipped: 0
+            }
+        );
+        let got = b.list().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "x");
+        assert_eq!(got[0].folder.as_deref(), Some("f"));
+        assert_eq!(got[0].tags, vec!["t1", "t2"]);
+        assert_eq!(got[1].values["host"], "y");
+        let _ = std::fs::remove_dir_all(dir_a);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    #[test]
+    fn import_skips_identical_and_renames_conflicting_names() {
+        let (s, dir) = store("import-dup");
+        s.save(None, "a", ssh("a")).unwrap();
+        let text = sample_doc(json!([
+            {"name": "a", "values": ssh("a")},
+            {"name": "a", "values": ssh("other")},
+            {"name": "a", "values": ssh("third")},
+        ]));
+        let report = s.import_text(&text).unwrap();
+        assert_eq!(
+            report,
+            ImportReport {
+                added: 2,
+                skipped: 1
+            }
+        );
+        let names: Vec<String> = s.list().unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["a", "a (2)", "a (3)"]);
+        // もう一度取り込んでも、増えない。
+        let again = s.import_text(&text).unwrap();
+        assert_eq!(
+            again,
+            ImportReport {
+                added: 0,
+                skipped: 3
+            }
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_strips_secrets_found_in_the_file() {
+        let (s, dir) = store("import-secrets");
+        let mut v = ssh("h");
+        v["password"] = json!("leaked");
+        v["loginPassword"] = json!("leaked2");
+        let text = sample_doc(json!([{"name": "n", "values": v}]));
+        s.import_text(&text).unwrap();
+        let raw = std::fs::read_to_string(dir.join("nested").join("profiles.json")).unwrap();
+        assert!(!raw.contains("leaked"), "{raw}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_rejects_bad_documents_without_changing_anything() {
+        let (s, dir) = store("import-bad");
+        s.save(None, "keep", ssh("k")).unwrap();
+        let bad = [
+            "not json".to_string(),
+            json!({"format": "other", "version": 1, "profiles": []}).to_string(),
+            json!({"format": "linkterm-profiles", "version": 2, "profiles": []}).to_string(),
+            json!({"format": "linkterm-profiles", "version": 1}).to_string(),
+            sample_doc(
+                json!([{"name": "ok", "values": ssh("ok")}, {"name": "  ", "values": ssh("x")}]),
+            ),
+            sample_doc(json!([{"name": "n", "values": "str"}])),
+            sample_doc(json!([{"name": "n", "values": ssh("x"), "folder": "x".repeat(61)}])),
+        ];
+        for text in bad {
+            assert!(
+                matches!(s.import_text(&text), Err(ProfileError::Invalid(_))),
+                "{text}"
+            );
+        }
+        assert_eq!(s.list().unwrap().len(), 1, "失敗した取り込みは何も残さない");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_rejects_too_many_profiles() {
+        let (s, dir) = store("import-many");
+        let entries: Vec<serde_json::Value> = (0..=MAX_IMPORT_PROFILES)
+            .map(|i| json!({"name": format!("n{i}"), "values": ssh("h")}))
+            .collect();
+        let err = s.import_text(&sample_doc(json!(entries))).unwrap_err();
+        assert!(matches!(err, ProfileError::Invalid(_)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_file_reads_a_file_and_rejects_non_files_and_huge_files() {
+        let (s, dir) = store("import-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("p.json");
+        let text = sample_doc(json!([{"name": "n", "values": ssh("h")}]));
+        std::fs::write(&file, format!("\u{feff}{text}")).unwrap();
+        assert_eq!(s.import_file(&file).unwrap().added, 1);
+        // フォルダー・存在しないパス・大きすぎるファイル・UTF-8 でないファイル
+        assert!(matches!(s.import_file(&dir), Err(ProfileError::Invalid(_))));
+        assert!(matches!(
+            s.import_file(&dir.join("none.json")),
+            Err(ProfileError::Io { .. })
+        ));
+        let big = dir.join("big.json");
+        std::fs::write(&big, vec![b' '; MAX_IMPORT_BYTES as usize + 1]).unwrap();
+        assert!(matches!(s.import_file(&big), Err(ProfileError::Invalid(_))));
+        let bin = dir.join("bin.json");
+        std::fs::write(&bin, [0xff, 0xfe, 0x00]).unwrap();
+        assert!(matches!(s.import_file(&bin), Err(ProfileError::Invalid(_))));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

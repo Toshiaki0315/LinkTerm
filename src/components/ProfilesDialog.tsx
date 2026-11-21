@@ -32,6 +32,10 @@ interface Props {
     tags: string[];
   }) => Promise<void>;
   onDelete: (id: string) => void;
+  /** 書き出す。結果の文を返す（キャンセルなら null）。渡さなければボタンを出さない。 */
+  onExport?: () => Promise<string | null>;
+  /** 読み込む。結果の文を返す（キャンセルなら null）。渡さなければボタンを出さない。 */
+  onImport?: () => Promise<string | null>;
 }
 
 interface Draft {
@@ -51,11 +55,27 @@ export function ProfilesDialog({
   onOpenProfile,
   onUpdate,
   onDelete,
+  onExport,
+  onImport,
 }: Props) {
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const transfer = async (
+    action: () => Promise<string | null>,
+    failure: string,
+  ) => {
+    setError(null);
+    setNotice(null);
+    try {
+      setNotice(await action());
+    } catch (e) {
+      setError(`${failure}: ${describe(e)}`);
+    }
+  };
 
   const visible = profiles.filter((p) => profileMatches(p, query));
   const groups = groupProfiles(visible);
@@ -88,6 +108,7 @@ export function ProfilesDialog({
           setDraft(null);
           setConfirmId(null);
           setError(null);
+          setNotice(null);
           setQuery("");
         }
         onOpenChange(o);
@@ -102,6 +123,12 @@ export function ProfilesDialog({
         {error && (
           <p role="alert" className="mt-3 text-sm text-red-400">
             {error}
+          </p>
+        )}
+
+        {notice && (
+          <p role="status" className="mt-3 text-sm text-emerald-400">
+            {notice}
           </p>
         )}
 
@@ -265,7 +292,25 @@ export function ProfilesDialog({
                 ))
               )}
             </div>
-            <div className="flex justify-end">
+            <div className="flex justify-between gap-2">
+              <span className="flex gap-2">
+                {onImport && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void transfer(onImport, "読み込めません")}
+                  >
+                    読み込み…
+                  </Button>
+                )}
+                {onExport && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void transfer(onExport, "書き出せません")}
+                  >
+                    書き出し…
+                  </Button>
+                )}
+              </span>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 閉じる
               </Button>

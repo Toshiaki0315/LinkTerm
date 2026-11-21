@@ -814,6 +814,25 @@ pub fn update_profile(
     Ok(state.profiles.update_meta(&id, &name, placement)?)
 }
 
+/// 保存済みの接続をすべて、保存ダイアログで選んだファイルへ書き出す（パスワード類は含めない）。
+/// 書き出した件数を返す。
+#[tauri::command]
+pub fn export_profiles(state: State<'_, AppState>, path: String) -> CommandResult<usize> {
+    let profiles = state.profiles.list()?;
+    let text = crate::profiles::export_text(&profiles)?;
+    crate::export::save_text(std::path::Path::new(&path), &text)?;
+    Ok(profiles.len())
+}
+
+/// 書き出したファイルから、保存済みの接続を取り込む。同じ内容のものは加えない。
+#[tauri::command]
+pub fn import_profiles(
+    state: State<'_, AppState>,
+    path: String,
+) -> CommandResult<crate::profiles::ImportReport> {
+    Ok(state.profiles.import_file(std::path::Path::new(&path))?)
+}
+
 #[tauri::command]
 pub fn delete_profile(state: State<'_, AppState>, id: String) -> CommandResult<bool> {
     Ok(state.profiles.delete(&id)?)

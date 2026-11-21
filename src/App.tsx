@@ -11,6 +11,11 @@ import {
   ConnectionDialog,
   type SubmitOptions,
 } from "./components/ConnectionDialog";
+import {
+  describeImport,
+  exportProfilesToFile,
+  importProfilesFromFile,
+} from "./lib/profile-transfer";
 import { ProfilesDialog } from "./components/ProfilesDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { CommandPalette } from "./components/CommandPalette";
@@ -794,6 +799,18 @@ function App() {
     [],
   );
 
+  const onExportProfiles = useCallback(async () => {
+    const done = await exportProfilesToFile();
+    return done
+      ? `${done.count}件を書き出しました（パスワードは含まれません）`
+      : null;
+  }, []);
+  const onImportProfiles = useCallback(async () => {
+    const report = await importProfilesFromFile();
+    if (report === null) return null;
+    setProfiles(await listProfiles());
+    return describeImport(report);
+  }, []);
   const onUpdateProfile = useCallback(
     async (p: { id: string; name: string; folder: string; tags: string[] }) => {
       await updateProfile(p);
@@ -1115,6 +1132,8 @@ function App() {
         onOpenProfile={onOpenProfile}
         onUpdate={onUpdateProfile}
         onDelete={onDeleteProfile}
+        onExport={onExportProfiles}
+        onImport={onImportProfiles}
       />
       <ShortcutsDialog
         open={shortcutsOpen}

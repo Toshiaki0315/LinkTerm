@@ -57,6 +57,8 @@ pub fn run() {
             commands::pending_host_key_requests,
             commands::list_profiles,
             commands::save_profile,
+            commands::export_profiles,
+            commands::import_profiles,
             commands::delete_profile,
             commands::list_fonts,
             commands::get_session_state,

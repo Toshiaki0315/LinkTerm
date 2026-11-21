@@ -33,6 +33,10 @@ interface E2E {
   notifications: Array<{ title: string; options: unknown }>;
   /** ファイル選択ダイアログが返すパス。 */
   pickedFiles: string[];
+  /** `import_profiles` が読むファイルの中身（接続の一覧）。 */
+  importFile: Array<{ name: string; values: unknown }> | null;
+  /** `export_profiles` が書いた先と件数。 */
+  exportedProfiles: { path: unknown; count: number } | null;
   /** 保存ダイアログが返すパス（null ならキャンセル）。 */
   savePath: string | null;
   /** `sftp_upload` が「既に存在する」を返す名前。 */
@@ -78,6 +82,8 @@ const e2e: E2E = {
   macroFileText: "sendln 'from file'",
   pickedFiles: ["/Users/me/up.txt"],
   savePath: "/Users/me/screen.txt",
+  importFile: null,
+  exportedProfiles: null,
   existing: [],
   written: [],
   echo: true,
@@ -207,6 +213,22 @@ function handle(cmd: string, args: Args): unknown {
       found.folder = args.folder ?? undefined;
       found.tags = args.tags;
       return found;
+    }
+    case "export_profiles":
+      e2e.exportedProfiles = { path: args.path, count: e2e.profiles.length };
+      return e2e.profiles.length;
+    case "import_profiles": {
+      const incoming = e2e.importFile ?? [];
+      let added = 0;
+      for (const p of incoming) {
+        if (e2e.profiles.some((q) => q.name === p.name)) continue;
+        e2e.profiles = [
+          ...e2e.profiles,
+          { ...p, id: `i${e2e.profiles.length + 1}` },
+        ];
+        added += 1;
+      }
+      return { added, skipped: incoming.length - added };
     }
     case "delete_profile":
       e2e.profiles = e2e.profiles.filter((p) => p.id !== args.id);

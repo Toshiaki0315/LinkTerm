@@ -237,3 +237,30 @@ test.describe("見た目・コピー", () => {
     expect(bg.wrap).toBe(bg.term);
   });
 });
+
+test.describe("接続の書き出し・読み込み", () => {
+  test("書き出すと件数を知らせ、読み込むと一覧に増える", async ({ page }) => {
+    await openApp(page, {
+      profiles: [{ id: "p1", name: "本番", values: { type: "local" } }],
+    });
+    await openPalette(page, "保存済みの接続を管理");
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "書き出し…" }).click();
+    await expect(page.getByRole("status")).toContainText("1件を書き出しました");
+    expect(await page.evaluate(() => window.__e2e.exportedProfiles)).toEqual({
+      path: "/Users/me/screen.txt",
+      count: 1,
+    });
+
+    await page.evaluate(() => {
+      window.__e2e.pickedFiles = ["/Users/me/profiles.json"];
+      window.__e2e.importFile = [
+        { name: "本番", values: { type: "local" } },
+        { name: "検証", values: { type: "local" } },
+      ];
+    });
+    await page.getByRole("button", { name: "読み込み…" }).click();
+    await expect(page.getByRole("status")).toContainText("1件を取り込みました");
+    await expect(page.getByText("検証")).toBeVisible();
+  });
+});

@@ -342,3 +342,17 @@ export const sendBreak = (id: string) =>
 /** 受信データの表示方法（テキスト／16進ダンプ）。 */
 export const setDisplayMode = (id: string, mode: DisplayMode) =>
   invoke<void>("set_display_mode", { id, mode });
+
+/** 保存済みの接続をすべて、ファイルへ書き出す（パスワード類は含めない）。書き出した件数を返す。 */
+export const exportProfiles = (path: string) =>
+  invoke<number>("export_profiles", { path });
+
+/** 取り込みの結果。 */
+export interface ImportReport {
+  added: number;
+  skipped: number;
+}
+
+/** 書き出したファイルから、保存済みの接続を取り込む。 */
+export const importProfiles = (path: string) =>
+  invoke<ImportReport>("import_profiles", { path });

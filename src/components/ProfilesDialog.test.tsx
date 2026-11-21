@@ -114,4 +114,45 @@ describe("ProfilesDialog", () => {
     await user.click(screen.getByRole("button", { name: "削除する" }));
     expect(onDelete).toHaveBeenCalledWith("4");
   });
+
+  describe("書き出し・読み込み", () => {
+    it("コールバックを渡さなければ、ボタンを出さない", () => {
+      setup();
+      expect(screen.queryByRole("button", { name: "書き出し…" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "読み込み…" })).toBeNull();
+    });
+
+    it("書き出すと、その結果を知らせる。キャンセルなら何も出さない", async () => {
+      const onExport = vi
+        .fn()
+        .mockResolvedValueOnce("4件を書き出しました")
+        .mockResolvedValueOnce(null);
+      const { user } = setup({ onExport });
+      await user.click(screen.getByRole("button", { name: "書き出し…" }));
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "4件を書き出しました",
+      );
+      await user.click(screen.getByRole("button", { name: "書き出し…" }));
+      await waitFor(() => expect(onExport).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("読み込むと、その結果を知らせる", async () => {
+      const onImport = vi.fn().mockResolvedValue("2件を取り込みました");
+      const { user } = setup({ onImport });
+      await user.click(screen.getByRole("button", { name: "読み込み…" }));
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        "2件を取り込みました",
+      );
+    });
+
+    it("失敗したら、理由を表示する", async () => {
+      const onImport = vi.fn().mockRejectedValue(new Error("版が違います"));
+      const { user } = setup({ onImport });
+      await user.click(screen.getByRole("button", { name: "読み込み…" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "読み込めません: 版が違います",
+      );
+    });
+  });
 });
