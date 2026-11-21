@@ -155,6 +155,9 @@ fn sanitize_panes(tab: &mut SavedTab) -> Result<(), SessionStateError> {
         }
         crate::profiles::strip_secrets(&mut pane.values);
     }
+    if let Some(layout) = &mut tab.layout {
+        crate::profiles::strip_secrets(layout);
+    }
     match &tab.layout {
         Some(layout) if layout.is_object() => {
             let size = serde_json::to_string(layout)
@@ -438,6 +441,25 @@ mod tests {
         )
         .unwrap();
         assert!(old.tabs[0].panes.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn nested_secrets_in_tabs_panes_and_layout_are_never_stored() {
+        let (s, path, dir) = store("nested-secrets");
+        let mut t = split_tab();
+        t.values["auth"] = json!({"password": "nested-1"});
+        t.panes[1].values["auth"] = json!({"deep": [{"passphrase": "nested-2"}]});
+        t.layout = Some(json!({"kind": "split", "meta": {"loginPassword": "nested-3"}}));
+        s.save(SessionState {
+            tabs: vec![t],
+            active: Some(0),
+        })
+        .unwrap();
+        let raw = std::fs::read_to_string(path).unwrap();
+        for leaked in ["nested-1", "nested-2", "nested-3"] {
+            assert!(!raw.contains(leaked), "{leaked}: {raw}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

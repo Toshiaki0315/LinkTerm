@@ -224,6 +224,21 @@ impl russh_sftp::server::Handler for DirServer {
         Ok(status(id))
     }
 
+    async fn rename(
+        &mut self,
+        id: u32,
+        oldpath: String,
+        newpath: String,
+    ) -> Result<Status, Self::Error> {
+        // OpenSSH の sftp-server と同じく、移動先があれば失敗する。
+        let to = self.real(&newpath);
+        if to.exists() {
+            return Err(StatusCode::Failure);
+        }
+        std::fs::rename(self.real(&oldpath), to).map_err(code)?;
+        Ok(status(id))
+    }
+
     async fn mkdir(
         &mut self,
         id: u32,
@@ -717,4 +732,52 @@ async fn reading_a_missing_remote_file_is_an_error_naming_it() {
     .unwrap_err();
     assert!(err.to_string().contains("ghost.txt"), "{err}");
     assert_eq!(std::fs::read_dir(f.local.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn overwrite_over_a_real_sftp_server_replaces_atomically_enough_and_leaves_no_temp() {
+    // 移動先があると名前の変更が失敗するサーバー（OpenSSH 相当）でも、上書きできる。
+    let f = fixture().await;
+    write_file(&f.remote.path().join("t.txt"), b"0123456789");
+    let src = f.local.path().join("t.txt");
+    write_file(&src, b"ab");
+    upload(
+        &f.fs,
+        &src,
+        "/",
+        true,
+        &CancelToken::default(),
+        &mut no_progress(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(f.remote.path().join("t.txt")).unwrap(), b"ab");
+    let names: Vec<_> = std::fs::read_dir(f.remote.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["t.txt"], "一時ファイルが残っている");
+}
+
+#[tokio::test]
+async fn cancelled_overwrite_over_a_real_sftp_server_keeps_the_old_file() {
+    let f = fixture().await;
+    write_file(&f.remote.path().join("big.bin"), b"precious");
+    let src = f.local.path().join("big.bin");
+    write_file(&src, &pattern(4 * 1024 * 1024));
+    let cancel = CancelToken::default();
+    let c = cancel.clone();
+    let err = upload(&f.fs, &src, "/", true, &cancel, &mut move |done, _| {
+        if done > 0 {
+            c.cancel();
+        }
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(err, SftpError::Cancelled), "{err}");
+    assert_eq!(
+        std::fs::read(f.remote.path().join("big.bin")).unwrap(),
+        b"precious"
+    );
+    assert_eq!(std::fs::read_dir(f.remote.path()).unwrap().count(), 1);
 }

@@ -78,6 +78,8 @@ pub trait RemoteFs: Send + Sync {
     async fn open_write(&self, path: &str) -> Result<RemoteWriter, SftpError>;
     async fn mkdir(&self, path: &str) -> Result<(), SftpError>;
     async fn remove_file(&self, path: &str) -> Result<(), SftpError>;
+    /// 名前を変える。移動先がすでにあれば失敗する（OpenSSH の sftp-server と同じ）。
+    async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError>;
     async fn remove_dir(&self, path: &str) -> Result<(), SftpError>;
 }
 
@@ -333,14 +335,80 @@ pub async fn upload(
         Some(_) if !overwrite => return Err(SftpError::Exists(remote_path)),
         _ => {}
     }
+    let existed = fs.stat(&remote_path).await?.is_some();
+    put_remote(
+        fs,
+        local_path,
+        meta.len(),
+        &remote_path,
+        existed,
+        cancel,
+        on_progress,
+    )
+    .await?;
+    Ok(remote_path)
+}
+
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 上書き用の一時ファイルのパス（同じフォルダー。名前は短く、重ならないものにする）。
+fn temp_remote_path(remote_path: &str) -> String {
+    let dir = remote_path.rsplit_once('/').map_or("", |(d, _)| d);
+    let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{dir}/.linkterm-{}-{n}.part", std::process::id())
+}
+
+/// 一時ファイルを `target` の位置へ移す。移動先があると名前の変更が失敗するサーバーでは、
+/// 元のファイルをいったん別名に退避してから移し、成功してから退避分を消す。
+/// どこかで失敗しても、元のファイルは戻す。新しい内容は一時ファイルに残し、場所を知らせる。
+async fn replace_remote(fs: &dyn RemoteFs, temp: &str, target: &str) -> Result<(), SftpError> {
+    if fs.rename(temp, target).await.is_ok() {
+        return Ok(());
+    }
+    let kept = |e: SftpError| SftpError::Remote {
+        context: format!("{target} の置き換え（アップロードした内容は {temp} に残しています）"),
+        message: e.to_string(),
+    };
+    let backup = temp_remote_path(target);
+    fs.rename(target, &backup).await.map_err(kept)?;
+    match fs.rename(temp, target).await {
+        Ok(()) => {
+            let _ = fs.remove_file(&backup).await;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = fs.rename(&backup, target).await;
+            Err(kept(e))
+        }
+    }
+}
+
+/// ローカルのファイルを `remote_path` へ書く。
+///
+/// すでにあるファイル（`existed`）は、同じフォルダーの一時ファイルへ書いてから置き換える。
+/// 書き込みが失敗・中止しても、もとの内容は壊れない。新しいファイルは、失敗したら書きかけを消す。
+async fn put_remote(
+    fs: &dyn RemoteFs,
+    local_path: &Path,
+    size: u64,
+    remote_path: &str,
+    existed: bool,
+    cancel: &CancelToken,
+    on_progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<u64, SftpError> {
     let mut reader = tokio::fs::File::open(local_path)
         .await
         .map_err(local(format!("{} の読み込み", local_path.display())))?;
-    let mut writer = fs.open_write(&remote_path).await?;
+    let write_path = if existed {
+        temp_remote_path(remote_path)
+    } else {
+        remote_path.to_owned()
+    };
+    let mut writer = fs.open_write(&write_path).await?;
     let result = copy_with_progress(
         &mut reader,
         &mut writer,
-        meta.len(),
+        size,
         cancel,
         on_progress,
         (
@@ -351,10 +419,14 @@ pub async fn upload(
     .await;
     drop(writer);
     match result {
-        Ok(_) => Ok(remote_path),
+        Ok(n) if existed => {
+            replace_remote(fs, &write_path, remote_path).await?;
+            Ok(n)
+        }
+        Ok(n) => Ok(n),
         Err(e) => {
             // 失敗・中止したら、書きかけのファイルを消す（できなくてもエラーは元のものを返す）。
-            let _ = fs.remove_file(&remote_path).await;
+            let _ = fs.remove_file(&write_path).await;
             Err(e)
         }
     }
@@ -651,33 +723,29 @@ pub async fn upload_dir(
                 .rel
                 .iter()
                 .fold(local_dir.to_path_buf(), |p, n| p.join(n));
-            match fs.stat(&remote_path).await? {
+            let existed = match fs.stat(&remote_path).await? {
                 Some(s) if s.is_dir => {
                     return Err(SftpError::Invalid(format!(
                         "{remote_path} はフォルダーのため上書きできません"
                     )));
                 }
-                Some(_) => {}
-                None => created_files.push(remote_path.clone()),
-            }
-            let mut reader = tokio::fs::File::open(&local_path)
-                .await
-                .map_err(local(format!("{} の読み込み", local_path.display())))?;
-            let mut writer = fs.open_write(&remote_path).await?;
+                Some(_) => true,
+                None => {
+                    created_files.push(remote_path.clone());
+                    false
+                }
+            };
             let base = done;
-            let n = copy_with_progress(
-                &mut reader,
-                &mut writer,
+            let n = put_remote(
+                fs,
+                &local_path,
                 item.size,
+                &remote_path,
+                existed,
                 cancel,
                 &mut |d, _| on_progress(base + d, total.max(base + d)),
-                (
-                    &Side::local(format!("{} の読み込み", local_path.display())),
-                    &Side::remote(format!("{remote_path} の書き込み")),
-                ),
             )
             .await?;
-            drop(writer);
             done += n;
             files += 1;
         }
@@ -838,6 +906,13 @@ mod adapter {
                 .map_err(|e| remote(&format!("{path} の削除"), e))
         }
 
+        async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
+            self.0
+                .rename(from, to)
+                .await
+                .map_err(|e| remote(&format!("{from} の名前の変更"), e))
+        }
+
         async fn remove_dir(&self, path: &str) -> Result<(), SftpError> {
             self.0
                 .remove_dir(path)
@@ -866,6 +941,8 @@ mod tests {
         dirs: Arc<Mutex<BTreeSet<String>>>,
         /// この文字数を書いたところで書き込みを失敗させる。
         fail_write_after: Option<usize>,
+        /// 名前の変更をすべて失敗させる。
+        reject_rename: bool,
         /// 一覧にシンボリックリンクとして出すパス。
         symlinks: Vec<String>,
         /// 一覧に（実体のない）ファイルとして出すパス。不正な名前の試験用。
@@ -883,6 +960,9 @@ mod tests {
         fn with_dir(self, path: &str) -> Self {
             self.dirs.lock().unwrap().insert(path.to_owned());
             self
+        }
+        fn file_count(&self) -> usize {
+            self.files.lock().unwrap().len()
         }
         fn file(&self, path: &str) -> Option<Vec<u8>> {
             self.files.lock().unwrap().get(path).cloned()
@@ -1018,6 +1098,21 @@ mod tests {
         }
         async fn remove_file(&self, path: &str) -> Result<(), SftpError> {
             self.files.lock().unwrap().remove(path);
+            Ok(())
+        }
+        async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
+            let mut files = self.files.lock().unwrap();
+            if files.contains_key(to) || self.reject_rename {
+                return Err(SftpError::Remote {
+                    context: format!("{from} の名前の変更"),
+                    message: "failure".into(),
+                });
+            }
+            let data = files.remove(from).ok_or_else(|| SftpError::Remote {
+                context: format!("{from} の名前の変更"),
+                message: "no such file".into(),
+            })?;
+            files.insert(to.to_owned(), data);
             Ok(())
         }
         async fn remove_dir(&self, path: &str) -> Result<(), SftpError> {
@@ -1245,6 +1340,106 @@ mod tests {
         .await;
         assert!(matches!(r, Err(SftpError::Cancelled)));
         assert!(fs.file("/h/big.bin").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn failed_or_cancelled_overwrite_keeps_the_existing_remote_file() {
+        let dir = temp_dir("ul-overwrite-fail");
+        let local = dir.join("big.bin");
+        std::fs::write(&local, vec![7u8; CHUNK * 3]).unwrap();
+        let failing = MemFs {
+            fail_write_after: Some(CHUNK),
+            ..MemFs::default()
+        }
+        .with_dir("/h")
+        .with_file("/h/big.bin", b"precious");
+        let r = upload(
+            &failing,
+            &local,
+            "/h",
+            true,
+            &CancelToken::default(),
+            &mut noop(),
+        )
+        .await;
+        assert!(matches!(r, Err(SftpError::Remote { .. })));
+        assert_eq!(failing.file("/h/big.bin").unwrap(), b"precious");
+        assert_eq!(failing.file_count(), 1, "一時ファイルを残さない");
+
+        let fs = MemFs::default()
+            .with_dir("/h")
+            .with_file("/h/big.bin", b"precious");
+        let cancel = CancelToken::default();
+        let token = cancel.clone();
+        let r = upload(&fs, &local, "/h", true, &cancel, &mut |d, _| {
+            if d >= CHUNK as u64 {
+                token.cancel();
+            }
+        })
+        .await;
+        assert!(matches!(r, Err(SftpError::Cancelled)));
+        assert_eq!(fs.file("/h/big.bin").unwrap(), b"precious");
+        assert_eq!(fs.file_count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn successful_overwrite_replaces_the_file_and_leaves_no_temp_file() {
+        let dir = temp_dir("ul-overwrite-ok");
+        let local = dir.join("a.txt");
+        std::fs::write(&local, b"new").unwrap();
+        let fs = MemFs::default()
+            .with_dir("/h")
+            .with_file("/h/a.txt", b"old-and-longer");
+        let c = CancelToken::default();
+        upload(&fs, &local, "/h", true, &c, &mut noop())
+            .await
+            .unwrap();
+        assert_eq!(fs.file("/h/a.txt").unwrap(), b"new");
+        assert_eq!(fs.file_count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn overwrite_that_cannot_be_renamed_reports_where_the_new_content_is() {
+        let dir = temp_dir("ul-overwrite-norename");
+        let local = dir.join("a.txt");
+        std::fs::write(&local, b"new").unwrap();
+        let fs = MemFs {
+            reject_rename: true,
+            ..MemFs::default()
+        }
+        .with_dir("/h")
+        .with_file("/h/a.txt", b"old");
+        let c = CancelToken::default();
+        let err = upload(&fs, &local, "/h", true, &c, &mut noop())
+            .await
+            .unwrap_err()
+            .to_string();
+        // 元のファイルは消さない（置き換えに失敗したので）。新しい内容の置き場所を知らせる。
+        assert_eq!(fs.file("/h/a.txt").unwrap(), b"old");
+        assert!(err.contains(".part"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn folder_upload_overwrite_failure_keeps_the_existing_files() {
+        let dir = temp_dir("tree-overwrite-fail");
+        let src = dir.join("t");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.bin"), vec![1u8; CHUNK * 3]).unwrap();
+        let fs = MemFs {
+            fail_write_after: Some(CHUNK),
+            ..MemFs::default()
+        }
+        .with_dir("/h")
+        .with_dir("/h/t")
+        .with_file("/h/t/a.bin", b"precious");
+        let r = upload_dir(&fs, &src, "/h", true, &CancelToken::default(), &mut noop()).await;
+        assert!(r.is_err());
+        assert_eq!(fs.file("/h/t/a.bin").unwrap(), b"precious");
+        assert_eq!(fs.file_count(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 

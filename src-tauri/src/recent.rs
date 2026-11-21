@@ -170,6 +170,22 @@ mod tests {
     }
 
     #[test]
+    fn nested_secrets_are_never_stored() {
+        let (s, path, dir) = store("nested-secrets");
+        let mut e = entry("h", 1);
+        e.values["auth"] = json!({"kind": "password", "password": "nested-pw"});
+        e.values["jump"] = json!([{"passphrase": "nested-pp"}]);
+        let saved = s.save(vec![e]).unwrap();
+        assert_eq!(saved[0].values["auth"]["kind"], "password");
+        let raw = std::fs::read_to_string(path).unwrap();
+        assert!(
+            !raw.contains("nested-pw") && !raw.contains("nested-pp"),
+            "{raw}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn list_is_capped_keeping_the_newest_first_entries() {
         let (s, _, dir) = store("cap");
         let list: Vec<_> = (0..(MAX_RECENT as u64 + 5))

@@ -196,10 +196,16 @@ fn io_error(context: impl Into<String>, source: std::io::Error) -> ProfileError 
     }
 }
 
-/// 秘密情報のキーを取り除く（キー名の大文字小文字は区別しない）。
+/// 秘密情報のキーを取り除く（キー名の大文字小文字は区別しない）。入れ子のオブジェクトや配列の中も、
+/// どの深さでも取り除く（`{"auth": {"password": ...}}` のような形でも保存させない）。
 pub(crate) fn strip_secrets(values: &mut serde_json::Value) {
-    if let Some(map) = values.as_object_mut() {
-        map.retain(|key, _| !SECRET_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)));
+    match values {
+        serde_json::Value::Object(map) => {
+            map.retain(|key, _| !SECRET_KEYS.iter().any(|s| key.eq_ignore_ascii_case(s)));
+            map.values_mut().for_each(strip_secrets);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_secrets),
+        _ => {}
     }
 }
 
@@ -893,6 +899,49 @@ mod tests {
         let bin = dir.join("bin.json");
         std::fs::write(&bin, [0xff, 0xfe, 0x00]).unwrap();
         assert!(matches!(s.import_file(&bin), Err(ProfileError::Invalid(_))));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn strip_secrets_removes_nested_and_array_secrets_at_any_depth() {
+        let mut v = json!({
+            "host": "h",
+            "auth": {"kind": "password", "Password": "p1", "deep": {"passphrase": "p2"}},
+            "list": [{"loginPassword": "p3", "ok": 1}, [{"PASSWORD": "p4"}], "password"],
+            "password": "p5",
+        });
+        strip_secrets(&mut v);
+        let text = v.to_string();
+        for leaked in ["p1", "p2", "p3", "p4", "p5"] {
+            assert!(!text.contains(leaked), "{leaked} が残っている: {text}");
+        }
+        assert_eq!(v["host"], "h");
+        assert_eq!(v["auth"]["kind"], "password", "値の「password」は消さない");
+        assert_eq!(v["list"][0]["ok"], 1);
+        assert_eq!(v["list"][2], "password");
+    }
+
+    #[test]
+    fn nested_secrets_are_not_stored_exported_or_imported() {
+        let (s, dir) = store("nested-secrets");
+        let mut v = ssh("h");
+        v["auth"] = json!({"password": "nested-secret"});
+        s.save(None, "n", v.clone()).unwrap();
+        let raw = std::fs::read_to_string(dir.join("nested").join("profiles.json")).unwrap();
+        assert!(!raw.contains("nested-secret"), "{raw}");
+        // 書き出し（すでに保存されていた古いデータに紛れていても）と、取り込み。
+        let leaked = Profile {
+            id: "x".into(),
+            name: "x".into(),
+            values: v.clone(),
+            folder: None,
+            tags: vec![],
+        };
+        assert!(!export_text(&[leaked]).unwrap().contains("nested-secret"));
+        s.import_text(&sample_doc(json!([{"name": "i", "values": v}])))
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.join("nested").join("profiles.json")).unwrap();
+        assert!(!raw.contains("nested-secret"), "{raw}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
