@@ -605,6 +605,16 @@ function App() {
     [state.tabs, broadcast],
   );
 
+  /** マクロの `sendbroadcast`: すべてのペインへ送る。 */
+  const onBroadcastAll = useCallback(
+    (data: string) => {
+      for (const tab of state.tabs) {
+        for (const pane of panesOf(tab)) sendToPane(pane.id, data);
+      }
+    },
+    [state.tabs],
+  );
+
   /** スニペットを、操作中のペインへ送る。 */
   const onRunSnippet = useCallback(
     (snippet: Snippet) => {
@@ -1062,6 +1072,8 @@ function App() {
         onToggleTimestamps={toggleTimestamps}
         onAttention={onAttention}
         onBroadcast={onBroadcast}
+        onBroadcastAll={onBroadcastAll}
+        onRenameTab={onRenameTab}
         onActivatePane={(tabId, paneId) =>
           dispatch({ type: "activatePane", tabId, paneId })
         }

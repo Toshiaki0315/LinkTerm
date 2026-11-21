@@ -81,11 +81,17 @@ vi.mock("./TerminalView", async () => {
     ),
   };
 });
-const serialApi = vi.hoisted(() => ({ sendBreak: vi.fn() }));
+const serialApi = vi.hoisted(() => ({
+  sendBreak: vi.fn(),
+  setControlSignal: vi.fn(),
+}));
 vi.mock("../lib/terminal-api", async (orig) => ({
   ...(await orig<typeof import("../lib/terminal-api")>()),
   sendBreak: serialApi.sendBreak,
+  setControlSignal: serialApi.setControlSignal,
 }));
+const beepMock = vi.hoisted(() => ({ playBeep: vi.fn() }));
+vi.mock("../lib/beep", () => beepMock);
 const notify = vi.hoisted(() => ({ notifyMatch: vi.fn() }));
 vi.mock("../lib/notify", async (orig) => ({
   ...(await orig<typeof import("../lib/notify")>()),
@@ -827,6 +833,156 @@ describe("TerminalTab", () => {
       setup(telnet);
       run("sendbreak");
       expect(await screen.findByRole("alert")).toHaveTextContent("ブレーク");
+    });
+
+    it("setecho: ローカルエコーを入り切りする", async () => {
+      connect();
+      setup(telnet);
+      run("setecho 1\nwait 'never'");
+      await waitFor(() =>
+        expect(menuItem("ローカルエコー: オン").checked).toBe(true),
+      );
+      act(() => menuItem("マクロを停止").onSelect());
+      await waitFor(() => expect(stopButton()).toBeNull());
+      run("setecho 0");
+      await waitFor(() =>
+        expect(menuItem("ローカルエコー: オフ").checked).toBe(true),
+      );
+    });
+
+    it("setdtr / setrts: シリアルの制御信号を設定する。シリアル以外はエラー", async () => {
+      connect("ser1");
+      const serial = {
+        type: "serial",
+        encoding: "UTF-8",
+        localEcho: "off",
+        serialPort: "/dev/cu.x",
+        baudRate: 115200,
+        dataBits: "Eight",
+        parity: "None",
+        stopBits: "One",
+        flowControl: "None",
+      } as ConnectionValues;
+      serialApi.setControlSignal.mockResolvedValue(undefined);
+      const first = setup(serial);
+      run("setdtr 0\nsetrts 1");
+      await waitFor(() =>
+        expect(serialApi.setControlSignal.mock.calls).toEqual([
+          ["ser1", "dtr", false],
+          ["ser1", "rts", true],
+        ]),
+      );
+      first.view.unmount();
+      setup(telnet);
+      run("setdtr 1");
+      expect(await screen.findByRole("alert")).toHaveTextContent("シリアル");
+    });
+
+    it("enablekeyb: マクロの実行中だけ、ユーザーのキー入力を止められる。終わると必ず戻る", async () => {
+      connect();
+      setup(telnet);
+      run("enablekeyb 0\nwait 'go'\nsendln 'macro'");
+      await screen.findByRole("status", { name: "マクロ" });
+      await waitFor(() => {
+        act(() => viewProps.onInput("typed"));
+        expect(written()).toBe("");
+      });
+      out("go");
+      await waitFor(() => expect(written()).toBe("macro\r"));
+      await waitFor(() => expect(stopButton()).toBeNull());
+      act(() => viewProps.onInput("after"));
+      expect(written()).toBe("macro\rafter");
+    });
+
+    it("enablekeyb 0 のまま停止しても、キー入力は戻る", async () => {
+      connect();
+      setup(telnet);
+      run("enablekeyb 0\nwait 'never'");
+      await screen.findByRole("status", { name: "マクロ" });
+      await userEvent.click(
+        screen.getByRole("button", { name: "マクロを停止" }),
+      );
+      await waitFor(() => expect(stopButton()).toBeNull());
+      act(() => viewProps.onInput("typed"));
+      expect(written()).toBe("typed");
+    });
+
+    it("clearscreen: 画面を消す（1 はスクロールバックも）", async () => {
+      connect();
+      setup(telnet);
+      termWrite.mockClear();
+      termSearch.clear.mockClear();
+      run("clearscreen 0\nclearscreen 1");
+      await waitFor(() => expect(termSearch.clear).toHaveBeenCalledTimes(1));
+      const shown = termWrite.mock.calls
+        .map((c) => new TextDecoder().decode(c[0] as Uint8Array))
+        .join("");
+      expect(shown).toContain("\u001b[2J");
+    });
+
+    it("settitle / gettitle: タブの名前を変え、読む", async () => {
+      connect();
+      const onSetTitle = vi.fn();
+      const props = {
+        findSignal: 0,
+        tabId: "t1",
+        title: "元の名前",
+        values: telnet,
+        active: true,
+        onStatusChange: vi.fn(),
+        onSecretsConsumed: vi.fn(),
+        onEditAndReconnect: vi.fn(),
+        onSetTitle,
+      };
+      render(<TerminalTab {...props} />);
+      run("gettitle t\nsendln t\nsettitle '新しい名前'");
+      await waitFor(() => expect(written()).toBe("元の名前\r"));
+      expect(onSetTitle).toHaveBeenCalledWith("新しい名前");
+    });
+
+    it("beep: 音を鳴らす（種類の省略は 5）", async () => {
+      connect();
+      setup(telnet);
+      run("beep\nbeep 2");
+      await waitFor(() =>
+        expect(beepMock.playBeep.mock.calls.map((c) => c[0])).toEqual([5, 2]),
+      );
+    });
+
+    it("statusbox / closesbox: 状態の表示を出し、閉じる", async () => {
+      connect();
+      setup(telnet);
+      run("statusbox '処理中です' '状態'\nwait 'x'\nclosesbox");
+      expect(await screen.findByText(/処理中です/)).toBeInTheDocument();
+      out("x");
+      await waitFor(() => expect(screen.queryByText(/処理中です/)).toBeNull());
+    });
+
+    it("sendbroadcast: すべてのペインへ送る処理を呼ぶ", async () => {
+      connect();
+      const onBroadcastAll = vi.fn();
+      render(
+        <TerminalTab
+          findSignal={0}
+          tabId="t1"
+          title="t"
+          values={telnet}
+          active
+          onBroadcastAll={onBroadcastAll}
+          onStatusChange={vi.fn()}
+          onSecretsConsumed={vi.fn()}
+          onEditAndReconnect={vi.fn()}
+        />,
+      );
+      run("sendlnbroadcast 'hi'");
+      await waitFor(() => expect(onBroadcastAll).toHaveBeenCalledWith("hi\r"));
+    });
+
+    it("gethostname: 接続先のホスト名（ローカルは空）。uptime は整数", async () => {
+      connect();
+      setup({ ...telnet, host: "device.example.com" } as ConnectionValues);
+      run("gethostname h\nsendln h\nuptime t\nif t >= 0 then sendln 'up'");
+      await waitFor(() => expect(written()).toBe("device.example.com\rup\r"));
     });
 
     it("タブを閉じたら、マクロを止め、ダイアログも閉じる", async () => {

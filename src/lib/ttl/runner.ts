@@ -2,7 +2,16 @@ import { stripTerminalControls } from "../auto-login";
 import { TtlError } from "./errors";
 import { evalExpr, type Env, type Value } from "./expr";
 import type { Arg, Program, Stmt } from "./parser";
-import { formatStrftime, sprintf, strspecial } from "./strings";
+import {
+  checksum,
+  crc16,
+  crc32,
+  printf,
+  rotate32,
+  sprintf,
+  strftime,
+  strspecial,
+} from "./strings";
 
 /** マクロが外の世界（端末・画面・接続）とやり取りするための口。 */
 export interface TtlHost {
@@ -29,6 +38,26 @@ export interface TtlHost {
   ): Promise<number | null>;
   disconnect(): void;
   isConnected(): boolean;
+  /** ローカルエコーの入り切り。 */
+  setEcho(on: boolean): void;
+  /** シリアルの制御信号（DTR / RTS）。シリアル以外は例外にする。 */
+  setSignal(signal: "dtr" | "rts", on: boolean): Promise<void>;
+  /** ユーザーのキー入力を受け付けるか（マクロの実行中だけ止める用）。 */
+  setKeyboardEnabled(enabled: boolean): void;
+  /** 画面を消す（0: 画面、1: 画面とスクロールバック）。 */
+  clearScreen(kind: 0 | 1): void;
+  setTitle(title: string): void;
+  getTitle(): string;
+  beep(kind: number): void;
+  /** 実行中の状態の表示（閉じるまで出し続ける）。 */
+  showStatus(message: string, title: string): void;
+  closeStatus(): void;
+  /** 接続先のホスト名（なければ空）。 */
+  hostName(): string;
+  /** 起動からの時間（ミリ秒）。 */
+  uptimeMs(): number;
+  /** すべてのペインへ送る。 */
+  broadcast(data: string): void;
   now(): Date;
   /** 0 以上 max 未満の整数。 */
   random(max: number): number;
@@ -54,6 +83,58 @@ const YIELD_EVERY = 2_000;
 const MAX_REGEX_CHARS = 500;
 /** 配列の要素数の上限。 */
 const MAX_ARRAY_SIZE = 10_000;
+/** `getver` が返す、Tera Term 互換のバージョン。 */
+const RUNNING_VERSION = "4.108";
+/** `regexoption` が受け付ける指定（動きに効くのは IGNORECASE・MULTILINE・ASIS だけ）。 */
+const REGEX_TOKENS = new Set([
+  "DEFAULT",
+  "RUBY",
+  "POSIX_BASIC",
+  "POSIX_EXTENDED",
+  "EMACS",
+  "GREP",
+  "GNU_REGEX",
+  "JAVA",
+  "PERL",
+  "PERL_NG",
+  "ASCII",
+  "UTF8",
+  "UTF16_BE",
+  "UTF16_LE",
+  "UTF32_BE",
+  "UTF32_LE",
+  "EUC_JP",
+  "EUC_TW",
+  "EUC_KR",
+  "EUC_CN",
+  "SJIS",
+  "KOI8_R",
+  "CP1251",
+  "BIG5",
+  "GB18030",
+  "SINGLELINE",
+  "EXTEND",
+  "FIND_LONGEST",
+  "FIND_NOT_EMPTY",
+  "NEGATE_SINGLELINE",
+  "DONT_CAPTURE_GROUP",
+  "CAPTURE_GROUP",
+  "OPTION_NONE",
+  "NONE",
+]);
+
+/** バージョン（`4.108` のような点区切り）を比べる。a が古ければ -1、同じなら 0、新しければ 1、読めなければ -2。 */
+function compareVersion(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  if (pb.some((n) => !Number.isFinite(n))) return -2;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
 
 class StopSignal extends Error {}
 
@@ -67,6 +148,8 @@ const NO_OP_COMMANDS = new Set([
 
 export class TtlRunner {
   private readonly vars = new Map<string, Value>();
+  /** `regexoption` で決めた、正規表現の設定。 */
+  private regexOptions = { ignoreCase: false, dotAll: false, asis: false };
   /** 配列（intdim / strdim で作る）。添字は 0 から。 */
   private readonly arrays = new Map<
     string,
@@ -505,6 +588,7 @@ export class TtlRunner {
         return;
       }
       case "wait":
+      case "wait4all":
       case "waitln": {
         const patterns = v.map((_, i) => str(i));
         const found = await this.waitFor(
@@ -515,12 +599,57 @@ export class TtlRunner {
         return;
       }
       case "waitregex": {
-        const re = this.regex(name, str(0));
+        const res = v.map((_, i) => this.regex(name, str(i)));
         const found = await this.waitFor(
-          () => this.findRegex(re),
+          () => this.findRegexes(res),
           this.timeoutMs(),
         );
         if (!found) setResult(0);
+        return;
+      }
+      case "waitn": {
+        const count = num(0);
+        if (count < 1) throw new TtlError("waitn: 文字数は 1 以上が必要です");
+        const found = await this.waitFor(() => {
+          if (this.buf.length < count) return false;
+          this.vars.set("inputstr", this.buf.slice(0, 511));
+          this.buf = "";
+          this.vars.set("result", 1);
+          return true;
+        }, this.timeoutMs());
+        if (!found) setResult(0);
+        return;
+      }
+      case "waitrecv": {
+        const sub = str(0);
+        const len = num(1);
+        const pos = num(2);
+        if (len < 1 || pos < 1 || pos - 1 + sub.length > len) {
+          throw new TtlError("waitrecv: 文字数と位置が正しくありません");
+        }
+        const matches = (block: string) =>
+          block.slice(pos - 1, pos - 1 + sub.length) === sub;
+        const found = await this.waitFor(() => {
+          while (this.buf.length >= len) {
+            const block = this.buf.slice(0, len);
+            this.buf = this.buf.slice(len);
+            if (matches(block)) {
+              this.vars.set("inputstr", block);
+              this.vars.set("result", 1);
+              return true;
+            }
+          }
+          return false;
+        }, this.timeoutMs());
+        if (!found) {
+          if (this.buf.length > 0 && matches(this.buf)) {
+            this.vars.set("inputstr", this.buf);
+            this.buf = "";
+            setResult(-1);
+          } else {
+            setResult(0);
+          }
+        }
         return;
       }
       case "recvln": {
@@ -544,26 +673,40 @@ export class TtlRunner {
         await this.sleep(num(0));
         return;
       case "messagebox":
-        await this.guard(this.host.messagebox(str(0), str(1)));
+        await this.guard(
+          this.host.messagebox(this.special(str(0), v, 2), str(1)),
+        );
         return;
       case "yesnobox":
         setResult(
-          (await this.guard(this.host.yesnobox(str(0), str(1)))) ? 1 : 0,
+          (await this.guard(
+            this.host.yesnobox(this.special(str(0), v, 2), str(1)),
+          ))
+            ? 1
+            : 0,
         );
         return;
       case "inputbox": {
         const initial = v.length > 2 ? str(2) : "";
         const got = await this.guard(
-          this.host.inputbox(str(0), str(1), initial),
+          this.host.inputbox(this.special(str(0), v, 3), str(1), initial),
         );
         this.vars.set("inputstr", got ?? "");
         return;
       }
       case "passwordbox": {
-        const got = await this.guard(this.host.passwordbox(str(0), str(1)));
+        const got = await this.guard(
+          this.host.passwordbox(this.special(str(0), v, 2), str(1)),
+        );
         this.vars.set("inputstr", got ?? "");
         return;
       }
+      case "statusbox":
+        this.host.showStatus(this.special(str(0), v, 2), str(1));
+        return;
+      case "closesbox":
+        this.host.closeStatus();
+        return;
       case "testlink":
         setResult(this.host.isConnected() ? 2 : 0);
         return;
@@ -578,21 +721,32 @@ export class TtlRunner {
       case "random": {
         const max = num(1);
         if (max < 1) throw new TtlError("random: 上限は 1 以上が必要です");
-        store(target(0), this.host.random(max));
+        // 0 以上 max 以下（max を含む）。
+        store(target(0), this.host.random(max + 1));
         return;
       }
       case "getdate":
-        store(
-          target(0),
-          formatStrftime(v.length > 1 ? str(1) : "%Y-%m-%d", this.host.now()),
-        );
+      case "gettime": {
+        const given = v.length > 1;
+        const format = given
+          ? str(1)
+          : name === "getdate"
+            ? "%Y-%m-%d"
+            : "%H:%M:%S";
+        const zone = v.length > 2 ? str(2) : undefined;
+        const text = strftime(format, this.host.now(), zone);
+        if (text === null) {
+          setResult(2);
+          return;
+        }
+        if (text.length > 511) {
+          setResult(1);
+          return;
+        }
+        store(target(0), text);
+        if (given) setResult(0);
         return;
-      case "gettime":
-        store(
-          target(0),
-          formatStrftime(v.length > 1 ? str(1) : "%H:%M:%S", this.host.now()),
-        );
-        return;
+      }
       case "strlen":
         setResult(str(0).length);
         return;
@@ -638,18 +792,32 @@ export class TtlRunner {
         const index = num(1);
         if (index < 1)
           throw new TtlError("strreplace: 位置は 1 以上が必要です");
-        const re = this.regex(name, str(2));
+        const re = this.tryRegex(str(2));
+        for (let i = 1; i <= 9; i++) this.vars.set(`groupmatchstr${i}`, "");
+        if (!re) {
+          setResult(-1);
+          return;
+        }
         const head = cur.slice(0, index - 1);
         const tail = cur.slice(index - 1);
         const replacement = str(3);
-        const replaced = tail.replace(re, (...m) => {
-          const groups = m.slice(0, -2) as string[];
-          return replacement.replace(
-            /\\([0-9])/g,
-            (_, d: string) => groups[Number(d)] ?? "",
-          );
-        });
-        store(target(0), head + replaced);
+        const m = re.exec(tail);
+        if (!m) {
+          setResult(0);
+          return;
+        }
+        const replaced = replacement.replace(/\\([0-9])/g, (_, d: string) =>
+          d === "0" ? m[0] : (m[Number(d)] ?? ""),
+        );
+        store(
+          target(0),
+          head +
+            tail.slice(0, m.index) +
+            replaced +
+            tail.slice(m.index + m[0].length),
+        );
+        this.vars.set("matchstr", m[0]);
+        setResult(1);
         return;
       }
       case "strscan":
@@ -657,6 +825,11 @@ export class TtlRunner {
         return;
       case "strmatch": {
         const m = this.regex(name, str(1)).exec(str(0));
+        if (m) {
+          this.vars.set("matchstr", m[0]);
+          for (let i = 1; i <= 9; i++)
+            this.vars.set(`groupmatchstr${i}`, m[i] ?? "");
+        }
         setResult(m ? m.index + 1 : 0);
         return;
       }
@@ -672,13 +845,19 @@ export class TtlRunner {
         return;
       }
       case "strspecial":
-        store(target(0), strspecial(strVar(0)));
+        store(target(0), strspecial(v.length > 1 ? str(1) : strVar(0)));
         return;
       case "str2int": {
-        const s = str(1).trim();
-        const n = /^-?\d+$/.test(s) ? Number(s) : NaN;
-        if (Number.isInteger(n) && n >= -2147483648 && n <= 2147483647) {
-          store(target(0), n);
+        const m = /^[-+]?(?:0x[0-9a-f]+|\$[0-9a-f]+|\d+)/i.exec(str(1).trim());
+        if (m) {
+          const text = m[0].replace(/^[-+]/, "");
+          const sign = m[0].startsWith("-") ? -1 : 1;
+          const magnitude = /^0x/i.test(text)
+            ? parseInt(text.slice(2), 16)
+            : text.startsWith("$")
+              ? parseInt(text.slice(1), 16)
+              : parseInt(text, 10);
+          store(target(0), (sign * magnitude) | 0);
           setResult(1);
         } else {
           setResult(0);
@@ -705,6 +884,12 @@ export class TtlRunner {
       case "sprintf":
         this.vars.set("inputstr", sprintf(str(0), v.slice(1) as Value[], name));
         return;
+      case "sprintf2": {
+        const r = printf(str(1), v.slice(2) as Value[]);
+        if (r.code === 0) store(target(0), r.text);
+        setResult(r.code);
+        return;
+      }
       case "intdim":
       case "strdim": {
         const arrName = nameOf(0);
@@ -725,36 +910,45 @@ export class TtlRunner {
         return;
       }
       case "strsplit": {
-        const arr = this.strArray(name, nameOf(0));
-        const text = str(1);
-        const delimiter = str(2);
-        if (delimiter === "")
-          throw new TtlError("strsplit: 区切りは1文字以上にしてください");
-        const max = Math.max(
-          1,
-          Math.min(v.length > 3 ? num(3) : arr.data.length, arr.data.length),
-        );
-        const parts: string[] = [];
-        let rest = text;
-        while (parts.length < max - 1) {
-          const at = rest.indexOf(delimiter);
-          if (at < 0) break;
-          parts.push(rest.slice(0, at));
-          rest = rest.slice(at + delimiter.length);
+        const text = str(0);
+        const delimiter = str(1);
+        if (delimiter.length !== 1)
+          throw new TtlError("strsplit: 区切りは1文字にしてください");
+        const given = v.length > 2;
+        const max = given ? num(2) : 9;
+        if (max < 1 || max > 9)
+          throw new TtlError("strsplit: 個数は 1〜9 にしてください");
+        const parts = text.split(delimiter);
+        let used: string[];
+        if (given && parts.length > max) {
+          used = [
+            ...parts.slice(0, max - 1),
+            parts.slice(max - 1).join(delimiter),
+          ];
+        } else {
+          used = parts;
         }
-        parts.push(rest);
-        for (let i = 0; i < arr.data.length; i++) arr.data[i] = parts[i] ?? "";
-        setResult(parts.length);
+        for (let i = 1; i <= 9; i++) {
+          // 個数を指定しないで10個以上に分かれたときは、9番目だけに値を入れる。
+          const piece = i < 9 || used.length <= 9 ? used[i - 1] : used[8];
+          this.vars.set(`groupmatchstr${i}`, piece ?? "");
+        }
+        setResult(!given && parts.length > 9 ? 10 : used.length);
         return;
       }
       case "strjoin": {
-        const arr = this.strArray(name, nameOf(0));
-        const count = Math.max(
-          0,
-          Math.min(v.length > 2 ? num(2) : arr.data.length, arr.data.length),
-        );
-        this.vars.set("inputstr", arr.data.slice(0, count).join(str(1)));
-        setResult(count);
+        const delimiter = str(1);
+        const max = v.length > 2 ? num(2) : 9;
+        if (max < 1 || max > 9)
+          throw new TtlError("strjoin: 個数は 1〜9 にしてください");
+        const pieces: string[] = [];
+        for (let i = 1; i <= max; i++) {
+          pieces.push(String(this.vars.get(`groupmatchstr${i}`) ?? ""));
+        }
+        // 後ろの空の groupmatchstr は、つなげない。
+        while (pieces.length > 1 && pieces[pieces.length - 1] === "")
+          pieces.pop();
+        store(target(0), pieces.join(delimiter));
         return;
       }
       case "listbox": {
@@ -766,6 +960,99 @@ export class TtlRunner {
         setResult(picked === null ? -1 : picked);
         return;
       }
+      case "gethostname":
+        store(target(0), this.host.hostName());
+        return;
+      case "gettitle":
+        store(target(0), this.host.getTitle());
+        return;
+      case "settitle":
+        this.host.setTitle(str(0));
+        return;
+      case "setecho":
+        this.host.setEcho(num(0) !== 0);
+        return;
+      case "setdtr":
+      case "setrts":
+        await this.guard(
+          this.host.setSignal(name === "setdtr" ? "dtr" : "rts", num(0) !== 0),
+        );
+        return;
+      case "enablekeyb":
+        this.host.setKeyboardEnabled(num(0) !== 0);
+        return;
+      case "clearscreen": {
+        const kind = num(0);
+        if (kind < 0 || kind > 2)
+          throw new TtlError("clearscreen: 0〜2 を指定してください");
+        if (kind <= 1) this.host.clearScreen(kind as 0 | 1);
+        return;
+      }
+      case "beep":
+        this.host.beep(v.length > 0 ? num(0) : 5);
+        return;
+      case "show":
+        num(0);
+        return;
+      case "sendbroadcast":
+      case "sendlnbroadcast": {
+        let text = "";
+        for (const x of v) {
+          if (typeof x === "string") text += x;
+          else if (typeof x === "number") text += this.charOf(name, x);
+        }
+        if (name === "sendlnbroadcast") text += "\r";
+        this.host.broadcast(text);
+        return;
+      }
+      case "getver": {
+        store(target(0), RUNNING_VERSION);
+        if (v.length > 1) setResult(compareVersion(RUNNING_VERSION, str(1)));
+        return;
+      }
+      case "ifdefined": {
+        const n = nameOf(0);
+        const arr = this.arrays.get(n);
+        const value = this.vars.get(n);
+        setResult(
+          arr
+            ? arr.type === "int"
+              ? 5
+              : 6
+            : typeof value === "number"
+              ? 1
+              : typeof value === "string"
+                ? 3
+                : this.program.labels.has(n)
+                  ? 4
+                  : 0,
+        );
+        return;
+      }
+      case "uptime":
+        store(target(0), this.host.uptimeMs() | 0);
+        return;
+      case "checksum8":
+      case "checksum16":
+      case "checksum32":
+        store(
+          target(0),
+          checksum(str(1), Number(name.slice(8)) as 8 | 16 | 32),
+        );
+        return;
+      case "crc16":
+        store(target(0), crc16(str(1)));
+        return;
+      case "crc32":
+        store(target(0), crc32(str(1)));
+        return;
+      case "rotateleft":
+      case "rotateright":
+        store(target(0), rotate32(num(1), num(2), name === "rotateleft"));
+        return;
+      case "regexoption":
+        this.setRegexOptions(v.map((_, i) => str(i)));
+        return;
       default:
         throw new TtlError(`未対応の命令です: ${name}`);
     }
@@ -798,12 +1085,57 @@ export class TtlRunner {
       );
     }
     try {
-      return new RegExp(pattern);
+      return this.compile(pattern);
     } catch (e) {
       throw new TtlError(
         `${name}: 正規表現が正しくありません: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+
+  /** 不正・長すぎる正規表現は、例外にせず `null`（`strreplace` の result -1 用）。 */
+  private tryRegex(pattern: string): RegExp | null {
+    if (pattern.length > MAX_REGEX_CHARS) return null;
+    try {
+      return this.compile(pattern);
+    } catch {
+      return null;
+    }
+  }
+
+  private compile(pattern: string): RegExp {
+    const { ignoreCase, dotAll, asis } = this.regexOptions;
+    const source = asis
+      ? pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      : pattern;
+    return new RegExp(source, `${ignoreCase ? "i" : ""}${dotAll ? "s" : ""}`);
+  }
+
+  /** `regexoption`: 文法・文字コード・オプションを決める（指定のたびに、初期値から決め直す）。 */
+  private setRegexOptions(tokens: string[]): void {
+    const next = { ignoreCase: false, dotAll: false, asis: false };
+    for (const raw of tokens) {
+      const t = raw.toUpperCase();
+      if (t === "IGNORECASE") next.ignoreCase = true;
+      else if (t === "MULTILINE") next.dotAll = true;
+      else if (t === "ASIS") next.asis = true;
+      else if (!REGEX_TOKENS.has(t) && !/^ISO_8859_(?:[1-9]|1[0-6])$/.test(t)) {
+        throw new TtlError(`regexoption: 知らない指定です: ${raw}`);
+      }
+    }
+    this.regexOptions = next;
+  }
+
+  /** `special`（省略可の引数）が 0 以外なら、メッセージの \\n \\t を文字にする。 */
+  private special(
+    message: string,
+    v: Array<Value | { name: string; index?: number }>,
+    at: number,
+  ): string {
+    const flag = v[at];
+    return typeof flag === "number" && flag !== 0
+      ? strspecial(message)
+      : message;
   }
 
   // ---- 待つ ----
@@ -817,27 +1149,36 @@ export class TtlRunner {
     return Math.max(0, t) * 1000 + Math.max(0, m);
   }
 
-  /** 受信した文字から探す。見つかれば、一致した所までを捨てて `result` などを設定し、`true`。 */
+  /**
+   * 受信した文字から探す。見つかれば、一致した所までを捨てて `result` などを設定し、`true`。
+   * `waitln` は、改行までそろった行の中だけで照合し、その行を `inputstr` に入れる。
+   * 空の文字列は、`wait` ではどの1文字にも、`waitln` ではどの行にも一致する。
+   */
   private findPatterns(patterns: string[], perLine: boolean): boolean {
+    if (perLine) {
+      let start = 0;
+      for (;;) {
+        const nl = this.buf.indexOf("\n", start);
+        if (nl < 0) return false;
+        const line = this.buf.slice(start, nl);
+        const index = patterns.findIndex((p) => p === "" || line.includes(p));
+        if (index >= 0) {
+          this.vars.set("inputstr", line);
+          this.vars.set("result", index + 1);
+          this.buf = this.buf.slice(nl + 1);
+          return true;
+        }
+        start = nl + 1;
+      }
+    }
     let best: { end: number; index: number } | null = null;
     patterns.forEach((p, i) => {
       let end = -1;
-      if (!perLine) {
+      if (p === "") {
+        if (this.buf.length > 0) end = 1;
+      } else {
         const at = this.buf.indexOf(p);
         if (at >= 0) end = at + p.length;
-      } else {
-        let lineStart = 0;
-        while (lineStart <= this.buf.length) {
-          const nl = this.buf.indexOf("\n", lineStart);
-          const lineEnd = nl < 0 ? this.buf.length : nl;
-          const at = this.buf.slice(lineStart, lineEnd).indexOf(p);
-          if (at >= 0) {
-            end = lineStart + at + p.length;
-            break;
-          }
-          if (nl < 0) break;
-          lineStart = nl + 1;
-        }
       }
       if (end >= 0 && (best === null || end < best.end))
         best = { end, index: i };
@@ -849,14 +1190,26 @@ export class TtlRunner {
     return true;
   }
 
-  private findRegex(re: RegExp): boolean {
-    const m = re.exec(this.buf);
-    if (!m) return false;
-    this.vars.set("matchstr", m[0]);
-    for (let i = 1; i <= 9; i++) this.vars.set(`groupmatchstr${i}`, m[i] ?? "");
-    this.vars.set("result", 1);
-    this.buf = this.buf.slice(m.index + m[0].length);
-    return true;
+  /** 改行までそろった行を1行ずつ、正規表現のどれかで照合する（`waitregex`）。 */
+  private findRegexes(res: RegExp[]): boolean {
+    let start = 0;
+    for (;;) {
+      const nl = this.buf.indexOf("\n", start);
+      if (nl < 0) return false;
+      const line = this.buf.slice(start, nl);
+      for (let i = 0; i < res.length; i++) {
+        const m = res[i].exec(line.slice(0, 511));
+        if (!m) continue;
+        this.vars.set("inputstr", line);
+        this.vars.set("matchstr", m[0]);
+        for (let g = 1; g <= 9; g++)
+          this.vars.set(`groupmatchstr${g}`, m[g] ?? "");
+        this.vars.set("result", i + 1);
+        this.buf = this.buf.slice(nl + 1);
+        return true;
+      }
+      start = nl + 1;
+    }
   }
 
   private readLine(): boolean {

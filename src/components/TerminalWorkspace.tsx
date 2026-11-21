@@ -23,6 +23,10 @@ interface Props {
   onToggleTimestamps?: (paneId: string) => void;
   /** キー入力・貼り付けの同時入力（ペインの ID と入力）。 */
   onBroadcast?: (paneId: string, data: string) => void;
+  /** マクロの `sendbroadcast`: すべてのペインへ送る。 */
+  onBroadcastAll?: (data: string) => void;
+  /** マクロの `settitle`: タブの名前を変える。 */
+  onRenameTab?: (tabId: string, title: string) => void;
   /** キーワードのハイライト規則。 */
   highlightRules?: HighlightRule[];
   /** 通知する規則に一致したが、見えていないタブ（タブの注目表示用）。 */
@@ -54,6 +58,8 @@ export function TerminalWorkspace({
   onToggleTimestamps,
   onAttention,
   onBroadcast,
+  onBroadcastAll,
+  onRenameTab,
   onActivatePane,
   onResizeSplit,
   onSplit,
@@ -168,6 +174,10 @@ export function TerminalWorkspace({
                         onBroadcast && ((data) => onBroadcast(pane.id, data))
                       }
                       onAttention={onAttention && (() => onAttention(tab.id))}
+                      onBroadcastAll={onBroadcastAll}
+                      onSetTitle={
+                        onRenameTab && ((title) => onRenameTab(tab.id, title))
+                      }
                       onSplit={onSplit && ((dir) => onSplit(tab.id, dir))}
                       onClosePane={
                         multi && onClosePane

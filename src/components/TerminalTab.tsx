@@ -16,7 +16,8 @@ import { cancelMacroDialogs, showMacroDialog } from "../lib/macro-dialog";
 import { parseProgram } from "../lib/ttl/parser";
 import { TtlError } from "../lib/ttl/errors";
 import { TtlRunner } from "../lib/ttl/runner";
-import { sendBreak } from "../lib/terminal-api";
+import { playBeep } from "../lib/beep";
+import { sendBreak, setControlSignal } from "../lib/terminal-api";
 import { registerPaneActions } from "../lib/pane-actions";
 import { registerPaneInput } from "../lib/pane-input";
 import { buildPaneMenuItems } from "../lib/pane-menu-items";
@@ -63,6 +64,10 @@ interface Props {
   onBroadcast?: (data: string) => void;
   /** キーワードのハイライト規則（色付けと、見つけたときの通知）。 */
   highlightRules?: HighlightRule[];
+  /** マクロの `settitle`: このタブの名前を変える。 */
+  onSetTitle?: (title: string) => void;
+  /** マクロの `sendbroadcast`: すべてのペインへ送る。 */
+  onBroadcastAll?: (data: string) => void;
   /** 通知する規則に一致した（このペインが見えていないとき）。タブの注目表示に使う。 */
   onAttention?: () => void;
   /** 画面を分割する（右クリックメニュー）。省略すると項目を出さない。 */
@@ -89,6 +94,8 @@ export function TerminalTab({
   onToggleTimestamps,
   onAttention,
   onBroadcast,
+  onSetTitle,
+  onBroadcastAll,
   onSplit,
   onClosePane,
 }: Props) {
@@ -105,6 +112,8 @@ export function TerminalTab({
     owner: string;
   } | null>(null);
   const macroCounter = useRef(0);
+  /** マクロの `enablekeyb 0` の間は false（ユーザーのキー入力を送らない）。 */
+  const keyboardEnabled = useRef(true);
 
   /** 通知する規則の照合（規則が変わったら作り直す）。 */
   const matcherRef = useRef<OutputMatcher | null>(null);
@@ -353,6 +362,8 @@ export function TerminalTab({
   const [macroView, setMacroView] = useState<{
     name: string;
     line: number;
+    /** `statusbox` で出した、実行中の状態の表示。 */
+    status?: { message: string; title: string };
   } | null>(null);
   /** マクロの結果の知らせ（エラーは赤、それ以外は通常）。 */
   const [macroNotice, setMacroNotice] = useState<{
@@ -361,6 +372,10 @@ export function TerminalTab({
   } | null>(null);
   /** マクロの命令から読む、最新の状態。 */
   const macroLive = useRef({
+    onSetTitle,
+    onBroadcastAll,
+    title,
+    host: values.type === "ssh" || values.type === "telnet" ? values.host : "",
     status,
     sessionId,
     write,
@@ -368,7 +383,18 @@ export function TerminalTab({
     type: values.type,
   });
   useEffect(() => {
-    macroLive.current = { status, sessionId, write, close, type: values.type };
+    macroLive.current = {
+      onSetTitle,
+      onBroadcastAll,
+      title,
+      host:
+        values.type === "ssh" || values.type === "telnet" ? values.host : "",
+      status,
+      sessionId,
+      write,
+      close,
+      type: values.type,
+    };
   });
 
   const stopMacro = useCallback(() => {
@@ -438,6 +464,37 @@ export function TerminalTab({
           }),
         disconnect: () => macroLive.current.close(),
         isConnected: () => macroLive.current.status === "connected",
+        setEcho: (on) => setEchoMode(on ? "on" : "off"),
+        setSignal: async (signal, on) => {
+          connected();
+          const { type, sessionId: id } = macroLive.current;
+          if (type !== "serial" || !id) {
+            throw new TtlError(
+              "DTR・RTS を変えられるのは、シリアル接続だけです",
+            );
+          }
+          await setControlSignal(id, signal, on);
+        },
+        setKeyboardEnabled: (enabled) => {
+          keyboardEnabled.current = enabled;
+        },
+        clearScreen: (kind) => {
+          if (kind === 1) termRef.current?.clear();
+          else
+            termRef.current?.write(
+              new TextEncoder().encode("\u001b[2J\u001b[H"),
+            );
+        },
+        setTitle: (t) => macroLive.current.onSetTitle?.(t),
+        getTitle: () => macroLive.current.title,
+        beep: (kind) => playBeep(kind),
+        showStatus: (message, title) =>
+          setMacroView((v) => (v ? { ...v, status: { message, title } } : v)),
+        closeStatus: () =>
+          setMacroView((v) => (v ? { ...v, status: undefined } : v)),
+        hostName: () => macroLive.current.host,
+        uptimeMs: () => Math.floor(performance.now()),
+        broadcast: (data) => macroLive.current.onBroadcastAll?.(data),
         now: () => new Date(),
         random: (max) => Math.floor(Math.random() * max),
       });
@@ -449,6 +506,7 @@ export function TerminalTab({
           onLine: (line) => setMacroView((v) => (v ? { ...v, line } : v)),
         })
         .then((result) => {
+          keyboardEnabled.current = true;
           cancelMacroDialogs(owner);
           if (macroRef.current?.owner === owner) macroRef.current = null;
           if (!mountedRef.current) return;
@@ -491,6 +549,8 @@ export function TerminalTab({
   /** キー入力・貼り付け。同時入力がオンなら、ほかのペインにも送る。 */
   const onInput = useCallback(
     (data: string) => {
+      // マクロが `enablekeyb 0` で、ユーザーのキー入力を止めている間は、送らない。
+      if (!keyboardEnabled.current) return;
       sendDirect(data);
       onBroadcast?.(data);
     },
@@ -662,6 +722,8 @@ export function TerminalTab({
           <span className="break-all">
             マクロ実行中: {macroView.name}
             {macroView.line > 0 ? `（${macroView.line}行目）` : ""}
+            {macroView.status &&
+              ` — ${macroView.status.title ? `${macroView.status.title}: ` : ""}${macroView.status.message}`}
           </span>
           <button
             className="shrink-0 rounded border border-sky-400/60 px-2 py-0.5 hover:bg-sky-900"

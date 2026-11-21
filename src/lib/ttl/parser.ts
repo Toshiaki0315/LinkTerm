@@ -191,7 +191,7 @@ function parseSimple(tokens: Token[], line: number): Stmt {
   const name = first.lower;
   if (UNSUPPORTED_COMMANDS.has(name)) {
     throw new TtlError(
-      `${first.v} は、このアプリでは使えません（安全のため、ファイルや外部コマンドは扱いません）`,
+      `${first.v} は、このアプリでは使えません（ファイル・外部コマンド・転送プロトコル・端末の設定変更などは扱いません）`,
     );
   }
   const spec = COMMANDS[name];

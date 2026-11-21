@@ -1,84 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseProgram } from "./parser";
-import { TtlRunner, type TtlHost, type RunResult } from "./runner";
-
-interface Fake {
-  host: TtlHost;
-  sent: string[];
-  displayed: string[];
-  messages: Array<{ message: string; title: string }>;
-  yesno: boolean[];
-  inputs: Array<string | null>;
-  passwords: Array<string | null>;
-  inputPrompts: Array<{ message: string; title: string; def: string }>;
-  lists: Array<{
-    message: string;
-    title: string;
-    items: string[];
-    selected: number;
-  }>;
-  picks: Array<number | null>;
-  breaks: number;
-  disconnected: number;
-  connected: boolean;
-}
-
-function fake(over: Partial<TtlHost> = {}): Fake {
-  const f: Fake = {
-    sent: [],
-    displayed: [],
-    messages: [],
-    yesno: [],
-    inputs: [],
-    passwords: [],
-    inputPrompts: [],
-    lists: [],
-    picks: [],
-    breaks: 0,
-    disconnected: 0,
-    connected: true,
-    host: undefined as unknown as TtlHost,
-  };
-  f.host = {
-    send: (d) => void f.sent.push(d),
-    sendBreak: async () => void (f.breaks += 1),
-    display: (t) => void f.displayed.push(t),
-    messagebox: async (message, title) =>
-      void f.messages.push({ message, title }),
-    yesnobox: async () => f.yesno.shift() ?? false,
-    inputbox: async (message, title, def) => {
-      f.inputPrompts.push({ message, title, def });
-      return f.inputs.shift() ?? null;
-    },
-    passwordbox: async () => f.passwords.shift() ?? null,
-    listbox: async (message, title, items, selected) => {
-      f.lists.push({ message, title, items, selected });
-      return f.picks.shift() ?? null;
-    },
-    disconnect: () => void (f.disconnected += 1),
-    isConnected: () => f.connected,
-    now: () => new Date(2024, 0, 2, 3, 4, 5),
-    random: (max) => Math.min(3, max - 1),
-    ...over,
-  };
-  return f;
-}
-
-function make(src: string, f = fake()) {
-  const parsed = parseProgram(src);
-  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
-  const runner = new TtlRunner(parsed.program, f.host);
-  return { runner, f };
-}
-
-async function run(
-  src: string,
-  f = fake(),
-): Promise<{ result: RunResult; f: Fake }> {
-  const { runner } = make(src, f);
-  const result = await runner.run();
-  return { result, f };
-}
+import { fake, make, run } from "./test-support";
 
 describe("TtlRunner: 基本", () => {
   it("send は引数を順に送る（整数は文字コード）。sendln は最後に改行（Enter）を付ける", async () => {
@@ -260,8 +181,8 @@ describe("TtlRunner: 文字列と数値の命令", () => {
     expect(await out("str2int n 'x'\nsend result")).toBe("\u0000");
   });
 
-  it("strspecial: \\n や \\xHH を文字にする", async () => {
-    expect(await out("s = 'a\\x41\\n'\nstrspecial s\nsend s")).toBe("aA\n");
+  it("strspecial: \\n \\t \\\\ を文字にする", async () => {
+    expect(await out("s = 'a\\tb\\n'\nstrspecial s\nsend s")).toBe("a\tb\n");
   });
 
   it("sprintf（%d %s %x %c %% と幅・0 埋め）。結果は inputstr に入る", async () => {
@@ -338,33 +259,6 @@ describe("TtlRunner: 配列", () => {
   it("strdim の配列は文字列、intdim は整数だけ入る", async () => {
     expect((await run("intdim a 1\na[0] = 'x'")).result.status).toBe("error");
     expect((await run("strdim a 1\na[0] = 1")).result.status).toBe("error");
-  });
-
-  it("strsplit: 区切りで分けて配列に入れ、個数を result に入れる。多すぎる分は最後にまとめる", async () => {
-    expect(
-      await out(
-        "strdim p 4\nstrsplit p 'a,b,c' ','\nsend result p[0] p[1] p[2] p[3]",
-      ),
-    ).toBe("\u0003abc");
-    expect(
-      await out("strdim p 2\nstrsplit p 'a,b,c' ','\nsend p[0] '|' p[1]"),
-    ).toBe("a|b,c");
-    expect(
-      await out("strdim p 4\nstrsplit p 'a,b,c' ',' 2\nsend result p[1]"),
-    ).toBe("\u0002b,c");
-  });
-
-  it("strjoin: 配列を区切りでつないで inputstr に入れる（個数は result）", async () => {
-    expect(
-      await out(
-        "strdim p 3\np[0]='x'\np[1]='y'\np[2]='z'\nstrjoin p '-'\nsend inputstr result",
-      ),
-    ).toBe("x-y-z\u0003");
-    expect(
-      await out(
-        "strdim p 3\np[0]='x'\np[1]='y'\nstrjoin p '-' 2\nsend inputstr",
-      ),
-    ).toBe("x-y");
   });
 
   it("listbox: 選んだ番号（0 から）を result に入れる。キャンセルは -1", async () => {
@@ -448,7 +342,7 @@ describe("TtlRunner: 受信を待つ", () => {
     expect(f.sent.join("")).toBe("ok");
   });
 
-  it("waitln: 1行の中で照合する（行をまたがない）", async () => {
+  it("waitln: 改行までそろった1行の中で照合し、その行を inputstr に入れる（行をまたがない）", async () => {
     const { runner, f } = make("timeout = 1\nwaitln 'ab'\nsend result");
     const done = runner.run();
     runner.feed("a\nb\n");
@@ -456,12 +350,12 @@ describe("TtlRunner: 受信を待つ", () => {
     await vi.advanceTimersByTimeAsync(1100);
     await done;
     expect(f.sent.join("")).toBe("\u0000");
-    const second = make("waitln 'ab'\nsend result");
+    const second = make("waitln 'ab'\nsend result\nsend inputstr");
     const done2 = second.runner.run();
     second.runner.feed("xx ab yy\n");
     await flush();
     await done2;
-    expect(second.f.sent.join("")).toBe("\u0001");
+    expect(second.f.sent.join("")).toBe("\u0001xx ab yy");
   });
 
   it("waitregex: 正規表現で待つ。matchstr と groupmatchstr1.. に結果が入る", async () => {
@@ -469,7 +363,7 @@ describe("TtlRunner: 受信を待つ", () => {
       "waitregex '([a-z]+)@([a-z]+)'\nsend matchstr\nsend ' '\nsend groupmatchstr1\nsend ' '\nsend groupmatchstr2\nsend result",
     );
     const done = runner.run();
-    runner.feed("mail: bob@example ok");
+    runner.feed("mail: bob@example ok\n");
     await flush();
     await done;
     expect(f.sent.join("")).toBe("bob@example bob example\u0001");

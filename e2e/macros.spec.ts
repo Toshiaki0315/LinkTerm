@@ -173,7 +173,7 @@ test.describe("マクロの実行", () => {
     await expect.poll(() => written(page)).toBe("sum=7\rHELLO\rloop\rloop\r");
   });
 
-  test("配列（intdim / strdim）と strsplit / strjoin", async ({ page }) => {
+  test("配列（intdim / strdim）", async ({ page }) => {
     const script = [
       "intdim n 3",
       "for i 0 2",
@@ -181,18 +181,123 @@ test.describe("マクロの実行", () => {
       "next",
       "sprintf '%d,%d,%d' n[0] n[1] n[2]",
       "sendln inputstr",
-      "strdim p 4",
-      "strsplit p 'a-b-c' '-'",
-      "sendln result + 48",
-      "strjoin p '+' 3",
-      "sendln inputstr",
-      "p[1] = 'X'",
+      "strdim p 2",
+      "p[0] = 'a'",
+      "p[1] = p[0] + 'b'",
       "sendln p[1]",
     ].join("\n");
     await openApp(page, { macros: [macro("m1", "配列", script)] });
     await openLocalTab(page);
     await runFromMenu(page, "配列");
-    await expect.poll(() => written(page)).toBe("10,20,30\r3\ra+b+c\rX\r");
+    await expect.poll(() => written(page)).toBe("10,20,30\rab\r");
+  });
+
+  test("strsplit / strjoin（groupmatchstr1〜9 を使う Tera Term の仕様）", async ({
+    page,
+  }) => {
+    const script = [
+      "strsplit 'a-b-c' '-'",
+      "sendln groupmatchstr2",
+      "sprintf2 n '%d' result",
+      "sendln n",
+      "strjoin s '+'",
+      "sendln s",
+    ].join("\n");
+    await openApp(page, { macros: [macro("m1", "分割", script)] });
+    await openLocalTab(page);
+    await runFromMenu(page, "分割");
+    await expect.poll(() => written(page)).toBe("b\r3\ra+b+c\r");
+  });
+
+  test("waitln は行を inputstr に入れる。sprintf2・crc32・rotateleft", async ({
+    page,
+  }) => {
+    const script = [
+      "waitln 'ready'",
+      "sendln inputstr",
+      "sprintf2 s '%02X-%s' 255 'ok'",
+      "sendln s",
+      "crc32 c '123456789'",
+      "sprintf2 h '%X' c",
+      "sendln h",
+      "rotateleft r $80000000 4",
+      "sendln r + 48",
+    ].join("\n");
+    await openApp(page, { macros: [macro("m1", "行", script)] });
+    await openLocalTab(page);
+    await runFromMenu(page, "行");
+    await output(page, "boot...\r\nsystem ready now\r\n");
+    await expect
+      .poll(() => written(page))
+      .toBe("system ready now\rFF-ok\rCBF43926\r8\r");
+  });
+
+  test("settitle でタブの名前が変わる。gettitle で読める", async ({ page }) => {
+    await openApp(page, {
+      macros: [
+        macro("m1", "名前", "gettitle t\nsendln t\nsettitle 'マクロで変更'"),
+      ],
+    });
+    await openLocalTab(page);
+    await runFromMenu(page, "名前");
+    await expect(page.getByRole("tab").first()).toContainText("マクロで変更");
+    await expect.poll(() => written(page)).toBe("Local\r");
+  });
+
+  test("clearscreen で画面が消える", async ({ page }) => {
+    await openApp(page, { macros: [macro("m1", "消す", "clearscreen 1")] });
+    await openLocalTab(page);
+    await output(page, "消える文字\r\n");
+    await expect(screenText(page)).toContainText("消える文字");
+    await runFromMenu(page, "消す");
+    await expect(screenText(page)).not.toContainText("消える文字");
+  });
+
+  test("enablekeyb 0 の間は、ユーザーのキー入力が送られない。終わると戻る", async ({
+    page,
+  }) => {
+    await openApp(page, {
+      macros: [macro("m1", "止める", "enablekeyb 0\nwait 'go'\nenablekeyb 1")],
+    });
+    await openLocalTab(page);
+    await runFromMenu(page, "止める");
+    await expect(banner(page)).toBeVisible();
+    await page.locator(".xterm").first().click();
+    await page.keyboard.type("blocked");
+    expect(await written(page)).toBe("");
+    await output(page, "go");
+    await expect(banner(page)).toHaveCount(0);
+    await page.locator(".xterm").first().click();
+    await page.keyboard.type("ok");
+    await expect.poll(() => written(page)).toBe("ok");
+  });
+
+  test("sendlnbroadcast は、すべてのタブのペインへ送る", async ({ page }) => {
+    await openApp(page, {
+      macros: [macro("m1", "全部", "sendlnbroadcast 'all'")],
+    });
+    await openLocalTab(page);
+    await page.keyboard.press("Meta+t");
+    await page.getByRole("button", { name: "接続", exact: true }).click();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await runFromMenu(page, "全部");
+    await expect.poll(() => written(page, 0)).toBe("all\r");
+    await expect.poll(() => written(page, 1)).toBe("all\r");
+  });
+
+  test("beep・show・getver・uptime は、エラーなく動く", async ({ page }) => {
+    await openApp(page, {
+      macros: [
+        macro(
+          "m1",
+          "いろいろ",
+          "beep\nshow 1\ngetver v\nuptime t\nif t >= 0 then sendln v",
+        ),
+      ],
+    });
+    await openLocalTab(page);
+    await runFromMenu(page, "いろいろ");
+    await expect.poll(() => written(page)).toBe("4.108\r");
   });
 
   test("配列の添字が範囲外なら、行番号つきのエラー", async ({ page }) => {
@@ -344,8 +449,8 @@ test.describe("マクロの実行", () => {
     await openLocalTab(page);
     await runFromMenu(page, "正規");
     await output(page, "user id=42 ok\r\nnext line\r\n");
-    // 一致した所（id=42）までを消費するので、recvln は、そのあとの行（" ok"）を読む。
-    await expect.poll(() => written(page)).toBe("42\r ok\r");
+    // waitregex は、一致した行ごと消費するので、recvln は、次の行を読む。
+    await expect.poll(() => written(page)).toBe("42\rnext line\r");
   });
 
   test("「停止」ボタンで止まる", async ({ page }) => {
