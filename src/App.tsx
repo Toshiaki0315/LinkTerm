@@ -15,6 +15,7 @@ import { ProfilesDialog } from "./components/ProfilesDialog";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { CommandPalette } from "./components/CommandPalette";
 import { HighlightsDialog } from "./components/HighlightsDialog";
+import { MacroDialogHost } from "./components/MacroDialogHost";
 import { MacrosDialog } from "./components/MacrosDialog";
 import { SnippetsDialog } from "./components/SnippetsDialog";
 import { HostKeyDialog } from "./components/HostKeyDialog";
@@ -45,7 +46,13 @@ import {
 } from "./lib/broadcast";
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
-import { pasteToPane, runPaneAction } from "./lib/pane-actions";
+import {
+  pasteToPane,
+  runMacroOnPane,
+  runPaneAction,
+  stopMacroOnPane,
+} from "./lib/pane-actions";
+import { useCurrentMacroDialog } from "./lib/macro-dialog";
 import { usePaneMenu, useRecordingPaneIds } from "./lib/pane-menu";
 import { dropText, quotePath } from "./lib/shell-quote";
 import { filesDropClaimed, onFilesDroppedAt, paneIdAt } from "./lib/file-drop";
@@ -283,6 +290,21 @@ function App() {
   const onSaveMacros = useCallback(async (next: Macro[]) => {
     setMacros(await saveMacros(next));
   }, []);
+
+  /** 操作中のペインで、マクロを実行する。 */
+  const onRunMacro = useCallback(
+    (macro: Macro) => {
+      const tab = state.tabs.find((t) => t.id === state.activeId);
+      if (!tab || !runMacroOnPane(activePaneIdOf(tab), macro)) {
+        setNotice("マクロを実行できませんでした（操作中のペインがありません）");
+      }
+    },
+    [state.tabs, state.activeId],
+  );
+  const onStopMacro = useCallback(() => {
+    const tab = state.tabs.find((t) => t.id === state.activeId);
+    if (tab) stopMacroOnPane(activePaneIdOf(tab));
+  }, [state.tabs, state.activeId]);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -603,11 +625,13 @@ function App() {
     [state.tabs, state.activeId],
   );
 
+  const macroDialogOpen = useCurrentMacroDialog() !== undefined;
   const modalOpen =
     dialogOpen ||
     settingsOpen ||
     snippetsOpen ||
     macrosOpen ||
+    macroDialogOpen ||
     highlightsOpen ||
     paletteOpen ||
     shortcutsOpen ||
@@ -864,6 +888,7 @@ function App() {
         tabs: state.tabs,
         activeId: state.activeId,
         snippets,
+        macros,
         recents: recent.list,
         profiles,
         sshHosts,
@@ -909,6 +934,8 @@ function App() {
           runSnippet: onRunSnippet,
           manageSnippets: () => setSnippetsOpen(true),
           manageMacros: () => setMacrosOpen(true),
+          runMacro: onRunMacro,
+          stopMacro: onStopMacro,
           manageHighlights: () => setHighlightsOpen(true),
           openRecent: onOpenRecent,
           clearRecents: onClearRecents,
@@ -940,6 +967,9 @@ function App() {
       state.activeId,
       activeTab,
       snippets,
+      macros,
+      onRunMacro,
+      onStopMacro,
       recent.list,
       profiles,
       broadcast,
@@ -979,6 +1009,8 @@ function App() {
         onRunSnippet={onRunSnippet}
         onManageSnippets={() => setSnippetsOpen(true)}
         onManageMacros={() => setMacrosOpen(true)}
+        macros={macros}
+        onRunMacro={onRunMacro}
         onManageHighlights={() => setHighlightsOpen(true)}
         broadcast={broadcast}
         paneMenu={paneMenu}
@@ -1098,7 +1130,12 @@ function App() {
         onOpenChange={setMacrosOpen}
         macros={macros}
         onSave={onSaveMacros}
+        onRun={(m) => {
+          setMacrosOpen(false);
+          onRunMacro(m);
+        }}
       />
+      <MacroDialogHost />
       <HostKeyDialog request={hostKeyQueue[0] ?? null} onRespond={respond} />
     </div>
   );

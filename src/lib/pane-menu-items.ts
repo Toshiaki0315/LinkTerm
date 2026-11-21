@@ -17,6 +17,9 @@ export interface PaneMenuState {
   logging: boolean;
   onLogStart: () => void;
   onLogStop: () => void;
+  /** マクロを実行中か。実行中だけ「マクロを停止」を出す。 */
+  macroRunning: boolean;
+  onMacroStop: () => void;
   /** Telnet / シリアルのときだけ使う。 */
   echo?: {
     mode: EchoMode;
@@ -119,6 +122,13 @@ export function buildPaneMenuItems(s: PaneMenuState): ContextMenuItem[] {
         onSelect: s.serial.onToggleHex,
       },
     );
+  }
+  if (s.macroRunning) {
+    items.push({
+      label: "マクロを停止",
+      separatorBefore: true,
+      onSelect: s.onMacroStop,
+    });
   }
   return items;
 }

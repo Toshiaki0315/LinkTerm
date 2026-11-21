@@ -9,6 +9,7 @@ interface E2E {
   calls: Array<{ cmd: string; args: Args }>;
   settings: Record<string, unknown>;
   snippets: unknown[];
+  macros: Array<Record<string, unknown>>;
   highlights: unknown[];
   keybindings: unknown[];
   profiles: Array<Record<string, unknown>>;
@@ -26,6 +27,8 @@ interface E2E {
   written: Array<{ id: string; data: string }>;
   /** 偽のリモートのフォルダー（パス → 中身）。SFTP の画面試験用。 */
   remote: Record<string, Array<{ name: string; isDir: boolean; size: number }>>;
+  /** `read_macro_file` が返す内容（.ttl ファイルの読み込み）。 */
+  macroFileText: string;
   /** 出した通知（Tauri の通知プラグインは `window.Notification` を置き換える）。 */
   notifications: Array<{ title: string; options: unknown }>;
   /** ファイル選択ダイアログが返すパス。 */
@@ -54,6 +57,7 @@ const e2e: E2E = {
   calls: [],
   settings: { ...DEFAULT_SETTINGS },
   snippets: [],
+  macros: [],
   highlights: [],
   keybindings: [],
   profiles: [],
@@ -71,6 +75,7 @@ const e2e: E2E = {
     "/home": [{ name: "alice", isDir: true, size: 0 }],
   },
   notifications: [],
+  macroFileText: "sendln 'from file'",
   pickedFiles: ["/Users/me/up.txt"],
   savePath: "/Users/me/screen.txt",
   existing: [],
@@ -105,6 +110,7 @@ const STORE_KEY = "linkterm-e2e-store";
 const PERSISTED = [
   "settings",
   "snippets",
+  "macros",
   "highlights",
   "keybindings",
   "profiles",
@@ -158,6 +164,13 @@ function handle(cmd: string, args: Args): unknown {
     case "save_snippets":
       e2e.snippets = args.snippets as unknown[];
       return e2e.snippets;
+    case "get_macros":
+      return e2e.macros;
+    case "save_macros":
+      e2e.macros = args.macros as Array<Record<string, unknown>>;
+      return e2e.macros;
+    case "read_macro_file":
+      return e2e.macroFileText;
     case "get_highlight_rules":
       return e2e.highlights;
     case "save_highlight_rules":

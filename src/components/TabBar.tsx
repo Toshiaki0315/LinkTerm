@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { SessionStatus } from "../hooks/useTerminalSession";
 import { BROADCAST_LABELS, type BroadcastMode } from "../lib/broadcast";
+import type { Macro } from "../lib/macros";
 import type { PaneMenu } from "../lib/pane-menu";
 import type { Snippet } from "../lib/snippets";
 import type { Tab } from "../lib/tabs";
@@ -45,6 +46,9 @@ interface Props {
   onManageSnippets?: () => void;
   /** マクロの管理を開く。渡さなければ、メニューに出さない。 */
   onManageMacros?: () => void;
+  /** 保存済みのマクロと、実行。メニューに「マクロ: 名前」を並べる。 */
+  macros?: Macro[];
+  onRunMacro?: (macro: Macro) => void;
   /** キーワードの強調・通知の設定を開く。渡さなければボタンを出さない。 */
   onManageHighlights?: () => void;
   /** 同時入力の範囲と、その変更。`onBroadcastChange` を渡さなければボタンを出さない。 */
@@ -140,6 +144,8 @@ export function TabBar({
   onRunSnippet,
   onManageSnippets,
   onManageMacros,
+  macros = [],
+  onRunMacro,
   onManageHighlights,
   broadcast = "off",
   onBroadcastChange,
@@ -430,9 +436,18 @@ export function TabBar({
               disabled: activeId === null || !onRunSnippet,
               onSelect: () => onRunSnippet?.(s),
             })),
+            ...(onRunMacro
+              ? macros.map((m, i) => ({
+                  label: `マクロ: ${m.name}`,
+                  separatorBefore: i === 0 && snippets.length > 0,
+                  disabled: activeId === null,
+                  onSelect: () => onRunMacro(m),
+                }))
+              : []),
             {
               label: "スニペットを管理…",
-              separatorBefore: snippets.length > 0,
+              separatorBefore:
+                snippets.length + (onRunMacro ? macros.length : 0) > 0,
               onSelect: onManageSnippets,
             },
             ...(onManageMacros

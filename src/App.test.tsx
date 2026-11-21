@@ -99,6 +99,11 @@ import { registerPaneInput } from "./lib/pane-input";
 import { registerPaneActions } from "./lib/pane-actions";
 import { publishPaneMenu } from "./lib/pane-menu";
 import { claimFileDrops } from "./lib/file-drop";
+import {
+  answerMacroDialog,
+  getCurrentMacroDialog,
+  showMacroDialog,
+} from "./lib/macro-dialog";
 import { DEFAULT_SETTINGS, type Settings } from "./lib/settings";
 import type { SessionState } from "./lib/terminal-api";
 
@@ -392,6 +397,114 @@ describe("App", () => {
         { id: "m0", name: "既存" },
         { name: "ログイン", text: "sendln 'admin'" },
       ]);
+    });
+
+    describe("実行", () => {
+      const macro = { id: "m1", name: "ログイン", text: "sendln 'a'" };
+      async function openTab(user: ReturnType<typeof userEvent.setup>) {
+        await user.click(screen.getByRole("button", { name: "新しい接続" }));
+        await user.click(await screen.findByRole("button", { name: "接続" }));
+        await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+        const paneId = screen
+          .getByTestId(/^term-/)
+          .getAttribute("data-testid")!
+          .slice(5);
+        const runMacro = vi.fn();
+        const stopMacro = vi.fn();
+        registerPaneActions(paneId, {
+          exportText: vi.fn(),
+          paste: vi.fn(),
+          runMacro,
+          stopMacro,
+        });
+        return { runMacro, stopMacro };
+      }
+
+      it("⚡のメニューの「マクロ: 名前」で、操作中のペインで実行する", async () => {
+        const user = userEvent.setup();
+        api.getMacros.mockResolvedValue([macro]);
+        render(<App />);
+        const { runMacro } = await openTab(user);
+        await user.click(screen.getByRole("button", { name: "スニペット" }));
+        await user.click(
+          await screen.findByRole("menuitem", { name: "マクロ: ログイン" }),
+        );
+        expect(runMacro).toHaveBeenCalledWith(macro);
+      });
+
+      it("コマンドパレットの「マクロを実行: 名前」「マクロを停止」", async () => {
+        const user = userEvent.setup();
+        api.getMacros.mockResolvedValue([macro]);
+        render(<App />);
+        const { runMacro, stopMacro } = await openTab(user);
+        await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+        const box = await screen.findByRole("combobox", {
+          name: "コマンドを検索",
+        });
+        await user.type(box, "マクロを実行");
+        await user.keyboard("{Enter}");
+        expect(runMacro).toHaveBeenCalledWith(macro);
+        await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+        await user.type(
+          await screen.findByRole("combobox", { name: "コマンドを検索" }),
+          "マクロを停止",
+        );
+        await user.keyboard("{Enter}");
+        expect(stopMacro).toHaveBeenCalled();
+      });
+
+      it("管理画面の「実行」で、画面を閉じて実行する", async () => {
+        const user = userEvent.setup();
+        api.getMacros.mockResolvedValue([macro]);
+        render(<App />);
+        const { runMacro } = await openTab(user);
+        await user.click(screen.getByRole("button", { name: "スニペット" }));
+        await user.click(
+          await screen.findByRole("menuitem", { name: "マクロを管理…" }),
+        );
+        await user.click(
+          await screen.findByRole("button", { name: "ログイン を実行" }),
+        );
+        expect(runMacro).toHaveBeenCalledWith(macro);
+        await waitFor(() =>
+          expect(screen.queryByRole("heading", { name: "マクロ" })).toBeNull(),
+        );
+      });
+
+      it("操作中のペインがなければ、お知らせを出す", async () => {
+        const user = userEvent.setup();
+        api.getMacros.mockResolvedValue([macro]);
+        render(<App />);
+        await user.click(screen.getByRole("button", { name: "新しい接続" }));
+        await user.click(await screen.findByRole("button", { name: "接続" }));
+        await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+        // ペインの操作を登録していない（実行できない）状態。
+        await user.click(screen.getByRole("button", { name: "スニペット" }));
+        await user.click(
+          await screen.findByRole("menuitem", { name: "マクロ: ログイン" }),
+        );
+        expect(
+          await screen.findByText(/マクロを実行できませんでした/),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("マクロが出したダイアログ（確認・入力）を表示し、答えを返す", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      let answer!: Promise<boolean>;
+      act(() => {
+        answer = showMacroDialog("t", {
+          kind: "yesno",
+          message: "続けますか？",
+          title: "確認",
+        });
+      });
+      expect(await screen.findByText("続けますか？")).toBeInTheDocument();
+      expect(getCurrentMacroDialog()).toBeDefined();
+      await user.click(screen.getByRole("button", { name: "はい" }));
+      await expect(answer).resolves.toBe(true);
+      void answerMacroDialog;
     });
 
     it("コマンドパレットの「マクロを管理…」でも開く", async () => {
@@ -1694,7 +1807,12 @@ describe("App", () => {
       render(<App />);
       const paneId = await openTab(user);
       const paste = vi.fn();
-      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      registerPaneActions(paneId, {
+        exportText: vi.fn(),
+        paste,
+        runMacro: vi.fn(),
+        stopMacro: vi.fn(),
+      });
       await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
       act(() =>
         drop.emit(["/Users/me/My File.txt", "/Users/me/資料"], {
@@ -1712,7 +1830,12 @@ describe("App", () => {
       render(<App />);
       const paneId = await openTab(user);
       const paste = vi.fn();
-      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      registerPaneActions(paneId, {
+        exportText: vi.fn(),
+        paste,
+        runMacro: vi.fn(),
+        stopMacro: vi.fn(),
+      });
       await user.click(screen.getByRole("button", { name: "新しい接続" }));
       await screen.findByRole("dialog");
       act(() => drop.emit(["/a"], { x: 1, y: 1 }));
@@ -1724,7 +1847,12 @@ describe("App", () => {
       render(<App />);
       const paneId = await openTab(user);
       const paste = vi.fn();
-      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      registerPaneActions(paneId, {
+        exportText: vi.fn(),
+        paste,
+        runMacro: vi.fn(),
+        stopMacro: vi.fn(),
+      });
       const release = claimFileDrops();
       act(() => drop.emit(["/a"], { x: 1, y: 1 }));
       expect(paste).not.toHaveBeenCalled();
@@ -1738,7 +1866,12 @@ describe("App", () => {
       render(<App />);
       const paneId = await openTab(user);
       const paste = vi.fn();
-      registerPaneActions(paneId, { exportText: vi.fn(), paste });
+      registerPaneActions(paneId, {
+        exportText: vi.fn(),
+        paste,
+        runMacro: vi.fn(),
+        stopMacro: vi.fn(),
+      });
       act(() => drop.emit(["/tmp/a\nrm -rf ~", "/ok"], { x: 1, y: 1 }));
       expect(paste).toHaveBeenCalledWith("/ok ");
       expect(await screen.findByText(/使えない文字/)).toBeInTheDocument();

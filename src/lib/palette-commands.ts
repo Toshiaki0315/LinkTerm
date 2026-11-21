@@ -1,6 +1,7 @@
 import { BROADCAST_LABELS, type BroadcastMode } from "./broadcast";
 import type { PaletteCommand } from "./command-search";
 import { recentLabel, type RecentEntry } from "./recent";
+import type { Macro } from "./macros";
 import type { Snippet } from "./snippets";
 import { TAB_COLORS, type TabColorId } from "./tab-colors";
 import { profileDisplayName } from "./profile-groups";
@@ -26,6 +27,10 @@ export interface PaletteActions {
   runSnippet(snippet: Snippet): void;
   manageSnippets(): void;
   manageMacros(): void;
+  /** 操作中のペインでマクロを実行する。 */
+  runMacro(macro: Macro): void;
+  /** 操作中のペインで実行中のマクロを止める。 */
+  stopMacro(): void;
   manageHighlights(): void;
   openRecent(entry: RecentEntry): void;
   clearRecents(): void;
@@ -44,6 +49,7 @@ export interface PaletteContext {
   tabs: Tab[];
   activeId: string | null;
   snippets: Snippet[];
+  macros: Macro[];
   recents: RecentEntry[];
   profiles: SavedProfile[];
   /** ~/.ssh/config の Host の別名。 */
@@ -160,6 +166,22 @@ export function buildPaletteCommands(ctx: PaletteContext): PaletteCommand[] {
     keywords: "shortcut keybinding キー",
   });
   add("スニペット", "snippets", "スニペットを管理…", a.manageSnippets);
+  if (ctx.activeId !== null) {
+    for (const m of ctx.macros) {
+      add(
+        "マクロ",
+        `macro-${m.id}`,
+        `マクロを実行: ${m.name}`,
+        () => a.runMacro(m),
+        {
+          keywords: "macro ttl",
+        },
+      );
+    }
+    add("マクロ", "macro-stop", "マクロを停止", a.stopMacro, {
+      keywords: "macro stop 中止",
+    });
+  }
   add("マクロ", "macros", "マクロを管理…", a.manageMacros, {
     keywords: "macro ttl teraterm スクリプト",
   });

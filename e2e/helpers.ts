@@ -4,6 +4,7 @@ export interface Init {
   settings?: Record<string, unknown>;
   highlights?: unknown[];
   snippets?: unknown[];
+  macros?: unknown[];
   profiles?: unknown[];
   recent?: unknown[];
 }

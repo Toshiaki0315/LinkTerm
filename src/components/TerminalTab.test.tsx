@@ -81,6 +81,11 @@ vi.mock("./TerminalView", async () => {
     ),
   };
 });
+const serialApi = vi.hoisted(() => ({ sendBreak: vi.fn() }));
+vi.mock("../lib/terminal-api", async (orig) => ({
+  ...(await orig<typeof import("../lib/terminal-api")>()),
+  sendBreak: serialApi.sendBreak,
+}));
 const notify = vi.hoisted(() => ({ notifyMatch: vi.fn() }));
 vi.mock("../lib/notify", async (orig) => ({
   ...(await orig<typeof import("../lib/notify")>()),
@@ -147,7 +152,12 @@ vi.mock("./SftpDialog", () => ({
     open ? <div data-testid="sftp-dialog">{sessionId}</div> : null,
 }));
 
-import { runPaneAction } from "../lib/pane-actions";
+import { runMacroOnPane, runPaneAction } from "../lib/pane-actions";
+import {
+  answerMacroDialog,
+  cancelMacroDialogs,
+  getCurrentMacroDialog,
+} from "../lib/macro-dialog";
 import { getPaneMenu } from "../lib/pane-menu";
 import { sendToPane } from "../lib/pane-input";
 import { TerminalTab } from "./TerminalTab";
@@ -581,6 +591,246 @@ describe("TerminalTab", () => {
       logHook.state = { ...logHook.state, error: "disk full" };
       setup(telnet);
       expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+    });
+  });
+
+  describe("マクロ", () => {
+    const connect = (id = "s1") => {
+      session.state = {
+        status: "connected",
+        sessionId: id,
+        error: null,
+        remoteEcho: false,
+      };
+    };
+    const run = (text: string, name = "m") =>
+      act(() => {
+        runMacroOnPane("t1", { name, text });
+      });
+    const out = (text: string) =>
+      act(() => session.onData(new TextEncoder().encode(text)));
+    const stopButton = () =>
+      screen.queryByRole("button", { name: "マクロを停止" });
+    const written = () =>
+      session.write.mock.calls.map((c) => String(c[0])).join("");
+
+    afterEach(() => cancelMacroDialogs("t1-1"));
+
+    it("出力を待って、送る。実行中は「マクロ実行中: 名前（N行目）」と停止ボタンを出し、終わると消える", async () => {
+      connect();
+      setup(telnet);
+      run("wait 'ok'\nsendln 'go'");
+      const banner = await screen.findByRole("status", { name: "マクロ" });
+      expect(banner).toHaveTextContent("マクロ実行中: m");
+      expect(banner).toHaveTextContent("1行目");
+      expect(stopButton()).toBeInTheDocument();
+      expect(written()).toBe("");
+      out("all ok now");
+      await waitFor(() => expect(written()).toBe("go\r"));
+      await waitFor(() => expect(stopButton()).toBeNull());
+      expect(
+        await screen.findByText("マクロ「m」を終了しました"),
+      ).toBeInTheDocument();
+    });
+
+    it("マクロの送信は、ローカルエコーに出さない（パスワードを画面に出さない）", async () => {
+      connect();
+      setup({ ...telnet, localEcho: "on" } as ConnectionValues);
+      termWrite.mockClear();
+      run("sendln 'secret-pw'");
+      await waitFor(() => expect(written()).toBe("secret-pw\r"));
+      const shown = termWrite.mock.calls
+        .map((c) => new TextDecoder().decode(c[0] as Uint8Array))
+        .join("");
+      expect(shown).not.toContain("secret-pw");
+    });
+
+    it("「停止」ボタンで止まる。止まったことを知らせる", async () => {
+      connect();
+      setup(telnet);
+      run("wait 'never'\nsendln 'x'");
+      await userEvent.click(
+        await screen.findByRole("button", { name: "マクロを停止" }),
+      );
+      await waitFor(() => expect(stopButton()).toBeNull());
+      expect(
+        await screen.findByText("マクロ「m」を停止しました"),
+      ).toBeInTheDocument();
+      expect(written()).toBe("");
+    });
+
+    it("メニューの「マクロを停止」は、実行中だけ出て、選ぶと止まる", async () => {
+      connect();
+      setup(telnet);
+      expect(menuLabels()).not.toContain("マクロを停止");
+      run("wait 'never'");
+      await waitFor(() => expect(menuLabels()).toContain("マクロを停止"));
+      act(() => menuItem("マクロを停止").onSelect());
+      await waitFor(() => expect(menuLabels()).not.toContain("マクロを停止"));
+    });
+
+    it("文法のエラーは、実行せずに、行番号つきで表示する", async () => {
+      connect();
+      setup(telnet);
+      run("send 'a'\nfrobnicate");
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("マクロ「m」");
+      expect(alert).toHaveTextContent("2行目");
+      expect(alert).toHaveTextContent("frobnicate");
+      expect(written()).toBe("");
+    });
+
+    it("実行時のエラーも、行番号つきで表示し、止まる", async () => {
+      connect();
+      setup(telnet);
+      run("send 'a'\nsend zzz");
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("2行目");
+      expect(alert).toHaveTextContent("zzz");
+      await waitFor(() => expect(stopButton()).toBeNull());
+    });
+
+    it("接続していないときは、実行しない（理由を表示する）", async () => {
+      setup(telnet);
+      run("sendln 'x'");
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "接続していない",
+      );
+      expect(written()).toBe("");
+    });
+
+    it("実行中に、別のマクロは実行できない（理由を表示する）", async () => {
+      connect();
+      setup(telnet);
+      run("wait 'never'", "first");
+      await screen.findByRole("status", { name: "マクロ" });
+      run("sendln 'x'", "second");
+      expect(await screen.findByRole("alert")).toHaveTextContent("実行中");
+      expect(written()).toBe("");
+    });
+
+    it("通知は閉じられる", async () => {
+      connect();
+      setup(telnet);
+      run("frobnicate");
+      await screen.findByRole("alert");
+      await userEvent.click(screen.getByRole("button", { name: "閉じる" }));
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("messagebox: ダイアログを出し、閉じたら続きを実行する", async () => {
+      connect();
+      setup(telnet);
+      run("messagebox 'こんにちは' 'お知らせ'\nsendln 'after'");
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeDefined());
+      expect(getCurrentMacroDialog()?.request).toMatchObject({
+        kind: "message",
+        message: "こんにちは",
+        title: "お知らせ",
+      });
+      expect(written()).toBe("");
+      act(() => answerMacroDialog(getCurrentMacroDialog()!.id, undefined));
+      await waitFor(() => expect(written()).toBe("after\r"));
+    });
+
+    it("passwordbox: 入力した値を、そのあとの送信に使う", async () => {
+      connect();
+      setup(telnet);
+      run("passwordbox 'パスワード' '認証'\nsendln inputstr");
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeDefined());
+      expect(getCurrentMacroDialog()?.request.kind).toBe("password");
+      act(() => answerMacroDialog(getCurrentMacroDialog()!.id, "s3cret"));
+      await waitFor(() => expect(written()).toBe("s3cret\r"));
+    });
+
+    it("ダイアログの待ちの途中で止めると、ダイアログも閉じる", async () => {
+      connect();
+      setup(telnet);
+      run("yesnobox 'ok?' 't'\nsendln 'x'");
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeDefined());
+      await userEvent.click(
+        screen.getByRole("button", { name: "マクロを停止" }),
+      );
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeUndefined());
+      expect(written()).toBe("");
+    });
+
+    it("受信は、文字コードの切れ目をまたいでも正しく照合する（UTF-8）", async () => {
+      connect();
+      setup(telnet);
+      run("wait 'ログイン'\nsendln 'go'");
+      const bytes = new TextEncoder().encode("ログイン:");
+      act(() => session.onData(bytes.slice(0, 4)));
+      act(() => session.onData(bytes.slice(4)));
+      await waitFor(() => expect(written()).toBe("go\r"));
+    });
+
+    it("dispstr は、端末の画面に出す（接続先へは送らない）", async () => {
+      connect();
+      setup(telnet);
+      termWrite.mockClear();
+      run("dispstr 'local only'");
+      await waitFor(() => expect(stopButton()).toBeNull());
+      const shown = termWrite.mock.calls
+        .map((c) => new TextDecoder().decode(c[0] as Uint8Array))
+        .join("");
+      expect(shown).toContain("local only");
+      expect(written()).toBe("");
+    });
+
+    it("disconnect で、接続を閉じる。testlink は接続の状態を返す", async () => {
+      connect();
+      setup(telnet);
+      run("testlink\nsendln result\ndisconnect");
+      await waitFor(() => expect(session.close).toHaveBeenCalled());
+      expect(written()).toBe("\u0002\r");
+    });
+
+    it("sendbreak: シリアルならブレークを送る。それ以外はエラー", async () => {
+      connect("ser1");
+      const serial = {
+        type: "serial",
+        encoding: "UTF-8",
+        localEcho: "off",
+        serialPort: "/dev/cu.x",
+        baudRate: 115200,
+        dataBits: "Eight",
+        parity: "None",
+        stopBits: "One",
+        flowControl: "None",
+      } as ConnectionValues;
+      const first = setup(serial);
+      serialApi.sendBreak.mockResolvedValue(undefined);
+      run("sendbreak");
+      await waitFor(() =>
+        expect(serialApi.sendBreak).toHaveBeenCalledWith("ser1"),
+      );
+      first.view.unmount();
+      setup(telnet);
+      run("sendbreak");
+      expect(await screen.findByRole("alert")).toHaveTextContent("ブレーク");
+    });
+
+    it("タブを閉じたら、マクロを止め、ダイアログも閉じる", async () => {
+      connect();
+      const { view } = setup(telnet);
+      run("yesnobox 'ok?' 't'\nsendln 'x'");
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeDefined());
+      view.unmount();
+      await waitFor(() => expect(getCurrentMacroDialog()).toBeUndefined());
+      await Promise.resolve();
+      expect(written()).toBe("");
+    });
+
+    it("接続が切れた状態で送ろうとすると、エラーにする", async () => {
+      connect();
+      const { view, ...props } = setup(telnet);
+      run("wait 'go'\nsendln 'x'");
+      await screen.findByRole("status", { name: "マクロ" });
+      session.state = { ...session.state, status: "closed" };
+      view.rerender(<TerminalTab {...props} />);
+      out("go");
+      expect(await screen.findByRole("alert")).toHaveTextContent("接続");
     });
   });
 

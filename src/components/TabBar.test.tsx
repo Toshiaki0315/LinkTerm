@@ -449,6 +449,45 @@ describe("TabBar", () => {
       expect(onManageMacros).toHaveBeenCalled();
     });
 
+    it("保存済みのマクロを「マクロ: 名前」として並べ（スニペットの下・管理の上）、選ぶと実行を通知する", async () => {
+      const user = userEvent.setup();
+      const onRunMacro = vi.fn();
+      const macros = [
+        { id: "m1", name: "ログイン", text: "end" },
+        { id: "m2", name: "再起動", text: "end" },
+      ];
+      renderBar({ macros, onRunMacro, onManageMacros: () => {} });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      const labels = screen.getAllByRole("menuitem").map((i) => i.textContent);
+      expect(labels).toEqual([
+        "ping",
+        "ping",
+        "マクロ: ログイン",
+        "マクロ: 再起動",
+        "スニペットを管理…",
+        "マクロを管理…",
+      ]);
+      const first = screen.getByRole("menuitem", { name: "マクロ: ログイン" });
+      expect(first.previousElementSibling).toHaveAttribute("role", "separator");
+      await user.click(first);
+      expect(onRunMacro).toHaveBeenCalledWith(macros[0]);
+    });
+
+    it("タブがないときは、マクロを実行できない（項目は無効）", async () => {
+      const user = userEvent.setup();
+      renderBar({
+        tabs: [],
+        activeId: null,
+        macros: [{ id: "m1", name: "x", text: "end" }],
+        onRunMacro: () => {},
+        onManageMacros: () => {},
+      });
+      await user.click(screen.getByRole("button", { name: "スニペット" }));
+      expect(
+        screen.getByRole("menuitem", { name: "マクロ: x" }),
+      ).toBeDisabled();
+    });
+
     it("onManageMacros がなければ、「マクロを管理…」を出さない", async () => {
       const user = userEvent.setup();
       renderBar({ onManageSnippets: () => {} });

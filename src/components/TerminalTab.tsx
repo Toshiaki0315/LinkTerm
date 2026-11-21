@@ -12,6 +12,11 @@ import { LoginRunner, parseLoginScript } from "../lib/auto-login";
 import { OutputMatcher, type HighlightRule } from "../lib/highlight";
 import { NOTIFY_INTERVAL_MS, Throttle, notifyMatch } from "../lib/notify";
 import { exportText } from "../lib/export-text";
+import { cancelMacroDialogs, showMacroDialog } from "../lib/macro-dialog";
+import { parseProgram } from "../lib/ttl/parser";
+import { TtlError } from "../lib/ttl/errors";
+import { TtlRunner } from "../lib/ttl/runner";
+import { sendBreak } from "../lib/terminal-api";
 import { registerPaneActions } from "../lib/pane-actions";
 import { registerPaneInput } from "../lib/pane-input";
 import { buildPaneMenuItems } from "../lib/pane-menu-items";
@@ -93,6 +98,13 @@ export function TerminalTab({
   /** 自動ログイン（Telnet / シリアルで、スクリプトがあるとき）。 */
   const loginRef = useRef<LoginRunner | null>(null);
   const decoderRef = useRef<TextDecoder | null>(null);
+  /** 実行中のマクロ（1つのペインで同時に走るのは1つだけ）。 */
+  const macroRef = useRef<{
+    runner: TtlRunner;
+    name: string;
+    owner: string;
+  } | null>(null);
+  const macroCounter = useRef(0);
 
   /** 通知する規則の照合（規則が変わったら作り直す）。 */
   const matcherRef = useRef<OutputMatcher | null>(null);
@@ -151,9 +163,11 @@ export function TerminalTab({
       const runner = loginRef.current;
       const loginActive = runner !== null && !runner.done;
       const matcher = matcherRef.current;
-      if (!loginActive && !matcher) return;
+      const macro = macroRef.current;
+      if (!loginActive && !matcher && !macro) return;
       decoderRef.current ??= new TextDecoder();
       const text = decoderRef.current.decode(data, { stream: true });
+      macro?.runner.feed(text);
       if (runner && loginActive) {
         // 出力が届いた時点で、セッションは確立している。
         runner.begin();
@@ -166,7 +180,7 @@ export function TerminalTab({
     },
     [onMatches],
   );
-  const { status, sessionId, error, remoteEcho, start, write, resize } =
+  const { status, sessionId, error, remoteEcho, start, write, resize, close } =
     useTerminalSession({ onData });
 
   /** ローカルエコー。Telnet / シリアルだけが対象で、接続設定の値で始め、実行中に切り替えられる。 */
@@ -311,7 +325,13 @@ export function TerminalTab({
     return () => {
       mountedRef.current = false;
       queueMicrotask(() => {
-        if (!mountedRef.current) loginRef.current?.stop();
+        if (mountedRef.current) return;
+        loginRef.current?.stop();
+        const macro = macroRef.current;
+        if (macro) {
+          macro.runner.stop();
+          cancelMacroDialogs(macro.owner);
+        }
       });
     };
   }, []);
@@ -327,6 +347,126 @@ export function TerminalTab({
   useEffect(() => {
     onStatusChange(tabId, status);
   }, [tabId, status, onStatusChange]);
+
+  // ---- マクロ ----
+  /** 実行中のマクロの表示（名前と、いま実行している行）。 */
+  const [macroView, setMacroView] = useState<{
+    name: string;
+    line: number;
+  } | null>(null);
+  /** マクロの結果の知らせ（エラーは赤、それ以外は通常）。 */
+  const [macroNotice, setMacroNotice] = useState<{
+    error: boolean;
+    text: string;
+  } | null>(null);
+  /** マクロの命令から読む、最新の状態。 */
+  const macroLive = useRef({
+    status,
+    sessionId,
+    write,
+    close,
+    type: values.type,
+  });
+  useEffect(() => {
+    macroLive.current = { status, sessionId, write, close, type: values.type };
+  });
+
+  const stopMacro = useCallback(() => {
+    const current = macroRef.current;
+    if (!current) return;
+    current.runner.stop();
+    cancelMacroDialogs(current.owner);
+  }, []);
+
+  const runMacro = useCallback(
+    (macro: { name: string; text: string }) => {
+      const fail = (text: string) => setMacroNotice({ error: true, text });
+      if (macroRef.current) {
+        fail(
+          `マクロ「${macroRef.current.name}」を実行中です。先に停止してください`,
+        );
+        return;
+      }
+      if (macroLive.current.status !== "connected") {
+        fail("接続していないため、マクロを実行できません");
+        return;
+      }
+      const parsed = parseProgram(macro.text);
+      if (!parsed.ok) {
+        const first = parsed.errors[0];
+        fail(`マクロ「${macro.name}」: ${first.line}行目: ${first.message}`);
+        return;
+      }
+      macroCounter.current += 1;
+      const owner = `${tabId}-${macroCounter.current}`;
+      const connected = () => {
+        if (macroLive.current.status !== "connected") {
+          throw new TtlError("接続されていないため、送れません");
+        }
+      };
+      const runner = new TtlRunner(parsed.program, {
+        send: async (data) => {
+          connected();
+          // 画面（ローカルエコー）には出さない。パスワードを送ることがあるため。
+          await macroLive.current.write(data);
+        },
+        sendBreak: async () => {
+          connected();
+          const { type, sessionId: id } = macroLive.current;
+          if (type !== "serial" || !id) {
+            throw new TtlError("ブレークを送れるのは、シリアル接続だけです");
+          }
+          await sendBreak(id);
+        },
+        display: (text) =>
+          termRef.current?.write(new TextEncoder().encode(text)),
+        messagebox: (message, title) =>
+          showMacroDialog(owner, { kind: "message", message, title }),
+        yesnobox: (message, title) =>
+          showMacroDialog(owner, { kind: "yesno", message, title }),
+        inputbox: (message, title, initial) =>
+          showMacroDialog(owner, { kind: "input", message, title, initial }),
+        passwordbox: (message, title) =>
+          showMacroDialog(owner, { kind: "password", message, title }),
+        disconnect: () => macroLive.current.close(),
+        isConnected: () => macroLive.current.status === "connected",
+        now: () => new Date(),
+        random: (max) => Math.floor(Math.random() * max),
+      });
+      macroRef.current = { runner, name: macro.name, owner };
+      setMacroNotice(null);
+      setMacroView({ name: macro.name, line: 0 });
+      void runner
+        .run({
+          onLine: (line) => setMacroView((v) => (v ? { ...v, line } : v)),
+        })
+        .then((result) => {
+          cancelMacroDialogs(owner);
+          if (macroRef.current?.owner === owner) macroRef.current = null;
+          if (!mountedRef.current) return;
+          setMacroView(null);
+          if (result.status === "error") {
+            setMacroNotice({
+              error: true,
+              text: `マクロ「${macro.name}」: ${result.line}行目: ${result.message}`,
+            });
+          } else {
+            setMacroNotice({
+              error: false,
+              text:
+                result.status === "stopped"
+                  ? `マクロ「${macro.name}」を停止しました`
+                  : `マクロ「${macro.name}」を終了しました`,
+            });
+          }
+        });
+    },
+    [tabId],
+  );
+  const macroActionRef = useRef({ runMacro, stopMacro });
+  useEffect(() => {
+    macroActionRef.current = { runMacro, stopMacro };
+  });
 
   /** このペインへ送る（ローカルエコーを含む）。同時入力は含まない。 */
   const sendDirect = useCallback(
@@ -360,6 +500,8 @@ export function TerminalTab({
       registerPaneActions(tabId, {
         exportText: () => saveScreenRef.current(),
         paste: (text) => termRef.current?.paste(text),
+        runMacro: (macro) => macroActionRef.current.runMacro(macro),
+        stopMacro: () => macroActionRef.current.stopMacro(),
       }),
     [tabId],
   );
@@ -426,6 +568,8 @@ export function TerminalTab({
     logging: log.logging,
     onLogStart: () => void log.openDialog(),
     onLogStop: () => void log.stop(),
+    macroRunning: macroView !== null,
+    onMacroStop: stopMacro,
     echo: supportsEcho
       ? { mode: echoMode, effective: localEcho, onChange: setEchoMode }
       : undefined,
@@ -496,6 +640,43 @@ export function TerminalTab({
               log.clearError();
               serial.clearError();
             }}
+          >
+            閉じる
+          </button>
+        </div>
+      )}
+      {macroView && (
+        <div
+          role="status"
+          aria-label="マクロ"
+          className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-3 bg-sky-950/95 px-3 py-1 text-xs text-sky-100"
+        >
+          <span className="break-all">
+            マクロ実行中: {macroView.name}
+            {macroView.line > 0 ? `（${macroView.line}行目）` : ""}
+          </span>
+          <button
+            className="shrink-0 rounded border border-sky-400/60 px-2 py-0.5 hover:bg-sky-900"
+            aria-label="マクロを停止"
+            onClick={stopMacro}
+          >
+            停止
+          </button>
+        </div>
+      )}
+      {macroNotice && (
+        <div
+          role={macroNotice.error ? "alert" : "status"}
+          className={`absolute inset-x-0 ${macroView ? "bottom-7" : "bottom-0"} z-20 flex items-center justify-between gap-3 px-3 py-1 text-xs ${
+            macroNotice.error
+              ? "bg-red-900/90 text-red-50"
+              : "bg-neutral-800/95 text-neutral-200"
+          }`}
+        >
+          <span className="break-all">{macroNotice.text}</span>
+          <button
+            className="shrink-0 underline"
+            onClick={() => setMacroNotice(null)}
           >
             閉じる
           </button>

@@ -12,6 +12,8 @@ const base = (over: Partial<PaneMenuState> = {}): PaneMenuState => ({
   logging: false,
   onLogStart: vi.fn(),
   onLogStop: vi.fn(),
+  macroRunning: false,
+  onMacroStop: vi.fn(),
   echo: { mode: "auto", effective: false, onChange: vi.fn() },
   serial: {
     signals: { dtr: true, rts: true },
@@ -166,5 +168,16 @@ describe("buildPaneMenuItems", () => {
       "ローカルエコー: 自動（現在 オフ）",
       "DTR",
     ]);
+  });
+
+  it("マクロを実行中だけ「マクロを停止」を出す（区切り線つき）。選ぶと停止する", () => {
+    expect(labels(base())).not.toContain("マクロを停止");
+    const stop = vi.fn();
+    const s = base({ macroRunning: true, onMacroStop: stop });
+    expect(labels(s)).toContain("マクロを停止");
+    const item = find(s, "マクロを停止");
+    expect(item.separatorBefore).toBe(true);
+    item.onSelect();
+    expect(stop).toHaveBeenCalled();
   });
 });

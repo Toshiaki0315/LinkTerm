@@ -34,6 +34,8 @@ function actions(): { [K in keyof PaletteActions]: ReturnType<typeof vi.fn> } {
     manageSnippets: vi.fn(),
     manageHighlights: vi.fn(),
     manageMacros: vi.fn(),
+    runMacro: vi.fn(),
+    stopMacro: vi.fn(),
     openRecent: vi.fn(),
     clearRecents: vi.fn(),
     openProfile: vi.fn(),
@@ -51,6 +53,7 @@ const build = (over: Partial<PaletteContext> = {}) => {
     tabs: [tab("a", "alice@h"), tab("b")],
     activeId: "a",
     snippets: [],
+    macros: [],
     recents: [],
     profiles: [],
     sshHosts: [],
@@ -140,6 +143,29 @@ describe("buildPaletteCommands", () => {
     expect(a.setColor).toHaveBeenNthCalledWith(2, undefined);
     expect(a.manageSnippets).toHaveBeenCalled();
     expect(a.manageHighlights).toHaveBeenCalled();
+  });
+
+  it("保存済みのマクロを「マクロを実行: 名前」として出し、選ぶと実行する。「マクロを停止」もある", () => {
+    const macro = { id: "m1", name: "ログイン", text: "end" };
+    const { byId, a } = build({ macros: [macro] });
+    expect(byId("macro-m1").title).toBe("マクロを実行: ログイン");
+    byId("macro-m1").run();
+    expect(a.runMacro).toHaveBeenCalledWith(macro);
+    expect(byId("macro-stop").title).toBe("マクロを停止");
+    byId("macro-stop").run();
+    expect(a.stopMacro).toHaveBeenCalled();
+  });
+
+  it("タブがなければ、マクロの実行・停止は出さない（管理は出す）", () => {
+    const { list } = build({
+      tabs: [],
+      activeId: null,
+      macros: [{ id: "m1", name: "x", text: "end" }],
+    });
+    const ids = list.map((c) => c.id);
+    expect(ids).not.toContain("macro-m1");
+    expect(ids).not.toContain("macro-stop");
+    expect(ids).toContain("macros");
   });
 
   it("「マクロを管理…」を出し、選ぶとマクロの管理を開く", () => {
