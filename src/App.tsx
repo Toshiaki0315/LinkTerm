@@ -45,7 +45,7 @@ import {
 import type { HighlightRule } from "./lib/highlight";
 import { buildPaletteCommands } from "./lib/palette-commands";
 import { pasteToPane, runPaneAction } from "./lib/pane-actions";
-import { usePaneMenu } from "./lib/pane-menu";
+import { usePaneMenu, useRecordingPaneIds } from "./lib/pane-menu";
 import { dropText, quotePath } from "./lib/shell-quote";
 import { filesDropClaimed, onFilesDroppedAt, paneIdAt } from "./lib/file-drop";
 import { sendToPane } from "./lib/pane-input";
@@ -512,6 +512,17 @@ function App() {
   const activeTab = state.tabs.find((t) => t.id === state.activeId);
   // タブバーの「⋯」に出す、操作中のペインの操作メニュー。
   const paneMenu = usePaneMenu(activeTab ? activePaneIdOf(activeTab) : null);
+  // ログを記録中のタブ（分割しているときは、いずれかのペインが記録中のタブ）。
+  const recordingPaneIds = useRecordingPaneIds();
+  const recordingTabs = useMemo(
+    () =>
+      new Set(
+        state.tabs
+          .filter((t) => panesOf(t).some((p) => recordingPaneIds.has(p.id)))
+          .map((t) => t.id),
+      ),
+    [state.tabs, recordingPaneIds],
+  );
 
   /** 操作対象のペインと同じ接続で、画面を分割する。パスワードが要る場合は入力用のダイアログを開く。 */
   const splitTab = useCallback(
@@ -943,6 +954,7 @@ function App() {
         onManageHighlights={() => setHighlightsOpen(true)}
         broadcast={broadcast}
         paneMenu={paneMenu}
+        recordingTabs={recordingTabs}
         onBroadcastChange={setBroadcast}
         attention={attention}
       />

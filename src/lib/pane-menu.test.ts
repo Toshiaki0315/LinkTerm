@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   getPaneMenu,
+  getRecordingPaneIds,
   menuSignature,
   publishPaneMenu,
   subscribePaneMenus,
@@ -77,5 +78,19 @@ describe("pane-menu", () => {
         }),
       ),
     );
+  });
+
+  it("記録中のペインの ID の集合を取り出せる。公開・解除で更新し、変わらなければ同じ参照", () => {
+    const none = getRecordingPaneIds();
+    expect(getRecordingPaneIds()).toBe(none);
+    const offA = publishPaneMenu("ra", menu({ recording: true }));
+    const offB = publishPaneMenu("rb", menu({ recording: false }));
+    const some = getRecordingPaneIds();
+    expect([...some]).toContain("ra");
+    expect([...some]).not.toContain("rb");
+    expect(getRecordingPaneIds()).toBe(some);
+    offA();
+    expect([...getRecordingPaneIds()]).not.toContain("ra");
+    offB();
   });
 });

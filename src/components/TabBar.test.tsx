@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { connectionSchema } from "../lib/connection-schema";
@@ -546,19 +546,26 @@ describe("TabBar", () => {
     });
   });
 
-  describe("ペインの操作（「⋯」）", () => {
-    const renderBar = (paneMenu?: PaneMenu) =>
+  describe("ペインの操作（タブの名前の右の「⋯」）", () => {
+    const renderBar = (
+      paneMenu?: PaneMenu,
+      recordingTabs?: ReadonlySet<string>,
+    ) =>
       render(
         <TabBar
-          tabs={[tab("a")]}
+          tabs={[tab("a"), tab("b")]}
           activeId="a"
           onActivate={() => {}}
           onClose={() => {}}
           onNew={() => {}}
-          onManageSnippets={() => {}}
           paneMenu={paneMenu}
+          recordingTabs={recordingTabs}
         />,
       );
+    const items = (recording = false): PaneMenu => ({
+      items: [{ label: "検索…（⌘F）", onSelect: () => {} }],
+      recording,
+    });
 
     it("メニューがなければ（操作中のペインがない・項目がない）、ボタンを出さない", () => {
       const { unmount } = renderBar(undefined);
@@ -568,7 +575,44 @@ describe("TabBar", () => {
       expect(screen.queryByRole("button", { name: /ペインの操作/ })).toBeNull();
     });
 
-    it("タブバーの右端（スニペットのボタンの右）にあり、押すと操作中のペインの項目が開く", async () => {
+    it("操作中のタブにだけ、名前の右（×の左）に出る。ほかのタブには出ない", () => {
+      renderBar(items());
+      expect(
+        screen.getAllByRole("button", { name: "ペインの操作" }),
+      ).toHaveLength(1);
+      const tabA = screen.getByRole("tab", { name: /title-a/ }).parentElement!;
+      const tabB = screen.getByRole("tab", { name: /title-b/ }).parentElement!;
+      const names = Array.from(tabA.querySelectorAll("button")).map(
+        (b) => b.getAttribute("aria-label") ?? b.textContent,
+      );
+      expect(names.indexOf("ペインの操作")).toBeGreaterThan(
+        names.findIndex((n) => n?.includes("title-a")),
+      );
+      expect(names.indexOf("ペインの操作")).toBeLessThan(
+        names.indexOf("title-a を閉じる"),
+      );
+      expect(
+        tabB.querySelector('button[aria-label^="ペインの操作"]'),
+      ).toBeNull();
+    });
+
+    it("右端には出さない（スニペットなどのボタンの右に、ペインの操作はない）", () => {
+      render(
+        <TabBar
+          tabs={[tab("a")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          onManageSnippets={() => {}}
+          paneMenu={items()}
+        />,
+      );
+      const buttons = screen.getAllByRole("button");
+      expect(buttons[buttons.length - 1]).toHaveAccessibleName("スニペット");
+    });
+
+    it("押すと操作中のペインの項目が開き、選ぶと実行して閉じる", async () => {
       const user = userEvent.setup();
       const onSelect = vi.fn();
       renderBar({
@@ -578,9 +622,6 @@ describe("TabBar", () => {
         ],
         recording: false,
       });
-      const buttons = screen.getAllByRole("button");
-      expect(buttons[buttons.length - 1]).toHaveAccessibleName("ペインの操作");
-      expect(buttons[buttons.length - 2]).toHaveAccessibleName("スニペット");
       await user.click(screen.getByRole("button", { name: "ペインの操作" }));
       expect(
         screen.getByRole("menuitemradio", { name: /タイムスタンプ表示/ }),
@@ -590,22 +631,77 @@ describe("TabBar", () => {
       expect(screen.queryByRole("menu")).toBeNull();
     });
 
-    it("ログを記録中は、ボタンに印を付け、名前でも分かるようにする", () => {
-      renderBar({
+    it("「⋯」を押しても、タブの切り替え・ドラッグ操作にはならない", async () => {
+      const user = userEvent.setup();
+      const onActivate = vi.fn();
+      render(
+        <TabBar
+          tabs={[tab("a"), tab("b")]}
+          activeId="a"
+          onActivate={onActivate}
+          onClose={() => {}}
+          onNew={() => {}}
+          paneMenu={items()}
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "ペインの操作" }));
+      expect(onActivate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("ログ記録中の表示（REC）", () => {
+    const renderRec = (
+      recordingTabs: ReadonlySet<string>,
+      paneMenu?: PaneMenu,
+    ) =>
+      render(
+        <TabBar
+          tabs={[tab("a"), tab("b")]}
+          activeId="a"
+          onActivate={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          recordingTabs={recordingTabs}
+          paneMenu={paneMenu}
+        />,
+      );
+
+    it("記録中のタブの名前の右に「REC」の札を出す（操作中でないタブにも）", () => {
+      renderRec(new Set(["b"]));
+      const tabB = screen.getByRole("tab", { name: /title-b/ }).parentElement!;
+      const badge = within(tabB).getByTestId("rec-badge");
+      expect(badge).toHaveTextContent("REC");
+      expect(badge).toHaveAttribute("title", "ログ記録中");
+      const tabA = screen.getByRole("tab", { name: /title-a/ }).parentElement!;
+      expect(within(tabA).queryByTestId("rec-badge")).toBeNull();
+    });
+
+    it("接続状態の丸（左の緑・赤）とは別の形・位置で、タブの説明（読み上げ）にも「ログ記録中」を含む", () => {
+      renderRec(new Set(["a"]));
+      const tabA = screen.getByRole("tab", { name: /title-a/ });
+      const badge = screen.getByTestId("rec-badge");
+      // 丸ではなく、文字入りの札（角丸の四角）。
+      expect(badge.className).not.toMatch(/rounded-full/);
+      // タブの名前ボタンの外（名前の右側）にある。
+      expect(tabA.contains(badge)).toBe(false);
+      expect(
+        document.getElementById(tabA.getAttribute("aria-describedby")!),
+      ).toHaveTextContent("ログ記録中");
+    });
+
+    it("記録中のタブがなければ、札は出ない", () => {
+      renderRec(new Set());
+      expect(screen.queryByTestId("rec-badge")).toBeNull();
+    });
+
+    it("操作中のタブが記録中なら、「⋯」の名前でも分かる。丸の印は付けない", () => {
+      renderRec(new Set(["a"]), {
         items: [{ label: "ログ記録を停止", onSelect: () => {} }],
         recording: true,
       });
       expect(
         screen.getByRole("button", { name: "ペインの操作（ログ記録中）" }),
       ).toBeInTheDocument();
-      expect(screen.getByTestId("recording-dot")).toBeInTheDocument();
-    });
-
-    it("記録中でなければ、印は出さない", () => {
-      renderBar({
-        items: [{ label: "検索…（⌘F）", onSelect: () => {} }],
-        recording: false,
-      });
       expect(screen.queryByTestId("recording-dot")).toBeNull();
     });
   });

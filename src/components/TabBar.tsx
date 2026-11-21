@@ -50,8 +50,10 @@ interface Props {
   onBroadcastChange?: (mode: BroadcastMode) => void;
   /** 通知するキーワードが見つかった、見ていないタブ（注目の印を付ける）。 */
   attention?: ReadonlySet<string>;
-  /** 操作中のペインの操作メニュー（右端の「⋯」）。なければ、ボタンを出さない。 */
+  /** 操作中のペインの操作メニュー（操作中のタブの「⋯」）。なければ、ボタンを出さない。 */
   paneMenu?: PaneMenu;
+  /** ログを記録中のタブ（名前の右に「REC」を出す）。 */
+  recordingTabs?: ReadonlySet<string>;
 }
 
 /** タブ名の編集欄。Enter / フォーカス喪失で確定、Esc で取り消す。 */
@@ -140,6 +142,7 @@ export function TabBar({
   onBroadcastChange,
   attention,
   paneMenu,
+  recordingTabs,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
@@ -286,9 +289,43 @@ export function TabBar({
                   )}
                 </button>
               )}
+              {recordingTabs?.has(tab.id) && (
+                <span
+                  data-testid="rec-badge"
+                  title="ログ記録中"
+                  className="shrink-0 rounded-sm border border-red-500/70 px-1 text-[10px] font-semibold leading-4 tracking-wide text-red-400"
+                >
+                  REC
+                </span>
+              )}
               <span id={statusId} className="sr-only">
-                {STATUS_LABEL[tab.status]}
+                {[
+                  STATUS_LABEL[tab.status],
+                  recordingTabs?.has(tab.id) ? "ログ記録中" : "",
+                ]
+                  .filter((t) => t !== "")
+                  .join("、")}
               </span>
+              {active && paneMenu && paneMenu.items.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5"
+                  aria-label={
+                    paneMenu.recording
+                      ? "ペインの操作（ログ記録中）"
+                      : "ペインの操作"
+                  }
+                  title="操作中のペインの操作"
+                  aria-haspopup="menu"
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setPaneMenuPos({ x: rect.left, y: rect.bottom });
+                  }}
+                >
+                  <Ellipsis className="h-3 w-3" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -398,31 +435,6 @@ export function TabBar({
           ]}
           onClose={() => setSnippetMenu(null)}
         />
-      )}
-      {paneMenu && paneMenu.items.length > 0 && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          aria-label={
-            paneMenu.recording ? "ペインの操作（ログ記録中）" : "ペインの操作"
-          }
-          title="操作中のペインの操作"
-          aria-haspopup="menu"
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setPaneMenuPos({ x: rect.right, y: rect.bottom });
-          }}
-        >
-          <Ellipsis className="h-4 w-4" />
-          {paneMenu.recording && (
-            <span
-              aria-hidden
-              data-testid="recording-dot"
-              className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500"
-            />
-          )}
-        </Button>
       )}
       {paneMenuPos && paneMenu && (
         <ContextMenu

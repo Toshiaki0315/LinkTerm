@@ -1580,6 +1580,36 @@ describe("App", () => {
       );
     });
 
+    it("ログを記録中のペインがあるタブに「REC」を出す（操作中でないタブにも）", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      for (let i = 0; i < 2; i++) {
+        await user.click(screen.getByRole("button", { name: "新しい接続" }));
+        await user.click(await screen.findByRole("button", { name: "接続" }));
+        await waitFor(() =>
+          expect(screen.getAllByRole("tab")).toHaveLength(i + 1),
+        );
+      }
+      const paneIds = screen
+        .getAllByTestId(/^term-/)
+        .map((el) => el.getAttribute("data-testid")!.slice(5));
+      expect(screen.queryByTestId("rec-badge")).toBeNull();
+      let off = () => {};
+      act(() => {
+        off = publishPaneMenu(paneIds[0], {
+          items: [{ label: "ログ記録を停止", onSelect: () => {} }],
+          recording: true,
+        });
+      });
+      // 2つ目のタブが操作中でも、1つ目のタブに REC が出る。
+      const badge = await screen.findByTestId("rec-badge");
+      expect(screen.getAllByRole("tab")[0].parentElement?.contains(badge)).toBe(
+        true,
+      );
+      act(() => off());
+      await waitFor(() => expect(screen.queryByTestId("rec-badge")).toBeNull());
+    });
+
     it("操作中のペイン以外が公開したメニューは出さない", async () => {
       const user = userEvent.setup();
       render(<App />);

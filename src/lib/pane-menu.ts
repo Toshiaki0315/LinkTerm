@@ -13,8 +13,17 @@ export interface PaneMenu {
 
 const menus = new Map<string, PaneMenu>();
 const listeners = new Set<() => void>();
+/** 変更のたびに増やす。記録中のペインの集合を、変わらないときは同じ参照で返すために使う。 */
+let version = 0;
+let recordingCache: { version: number; ids: ReadonlySet<string> } = {
+  version: -1,
+  ids: new Set(),
+};
 
-const notify = () => listeners.forEach((l) => l());
+const notify = () => {
+  version += 1;
+  listeners.forEach((l) => l());
+};
 
 /** 公開する。戻り値で解除する（同じ ID を別の公開が上書きしていたら解除しない）。 */
 export function publishPaneMenu(paneId: string, menu: PaneMenu): () => void {
@@ -47,6 +56,21 @@ export const menuSignature = (menu: PaneMenu): string =>
       i.separatorBefore ?? false,
     ]),
   ]);
+
+/** ログを記録中のペインの ID の集合。公開・解除がなければ、同じ参照を返す。 */
+export function getRecordingPaneIds(): ReadonlySet<string> {
+  if (recordingCache.version !== version) {
+    const ids = new Set<string>();
+    for (const [id, m] of menus) if (m.recording) ids.add(id);
+    recordingCache = { version, ids };
+  }
+  return recordingCache.ids;
+}
+
+/** ログを記録中のペイン。タブに「REC」を出すために使う。 */
+export function useRecordingPaneIds(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribePaneMenus, getRecordingPaneIds);
+}
 
 /** 操作中のペインのメニュー。ペインがなければ `undefined`。 */
 export function usePaneMenu(paneId: string | null): PaneMenu | undefined {
